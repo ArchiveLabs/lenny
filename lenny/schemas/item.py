@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 from sqlalchemy import Column, Integer, String, Boolean
-from lenny.configs.db import Base
+from lenny.models import, db, Base
 
 class Item(Base):
     __tablename__ = "items"

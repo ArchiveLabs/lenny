@@ -1,0 +1,50 @@
+services:
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: lenny_api
+    ports:
+      - "8080:80"  # Changed from 7000:7000 to avoid port conflict (nginx api)
+    depends_on:
+      - db
+      - s3
+    env_file: lenny.env
+    environment:
+    - LENNY_PORT=1337  # When in docker, run Lenny as 1337, reverse proxies from nginx
+    networks:
+      - lenny_network
+
+  db:
+    image: postgres:16
+    container_name: lenny_db
+    restart: always
+    env_file: lenny.env
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - lenny_network
+
+  s3:
+    image: minio/minio
+    container_name: lenny_bookshelf
+    env_file: lenny.env
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - bookshelf_data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - lenny_network
+
+networks:
+  lenny_network:
+    driver: bridge
+
+volumes:
+  db_data:
+  bookshelf_data:

@@ -1,8 +1,13 @@
-# No changes needed if this is already correct
+#!/usr/bin/env python3
+
+import uvicorn
 from fastapi import FastAPI
 from lenny.routes import api
+from lenny.configs import OPTIONS
 
 app = FastAPI()
 
-# Include API routes
 app.include_router(api.router, prefix="/v1/api")
+
+if __name__ == "__main__":
+    uvicorn.run("lenny.app:app", **OPTIONS)

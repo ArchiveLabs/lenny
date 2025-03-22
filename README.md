@@ -25,6 +25,18 @@ Lenny is a free, open source Lending System for Libraries.
 * `/v{1}/opds`
 * `/v{1}/stats`
 
+## Installation
+
+First, copy the file `lenny_TEMPLATE.env` to `lenny.env` (gitignored) and edit it to have the correct values (such as desired psql credentials).
+
+Second, run docker compose:
+
+```
+docker compose -p lenny up -d --build
+```
+
+Finally, navigate to localhost:8080 or whatever `$LENNY_PORT` you specified in your `lenny.env`
+
 ## Pilot
 
 We're seeking partnerships with libraries who would like to try lending digital resources to their patrons. 
@@ -32,4 +44,3 @@ We're seeking partnerships with libraries who would like to try lending digital 
 ## Open Topics
 
 * Authentication - How does your library perform authentication currently?
-
