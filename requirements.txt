@@ -6,4 +6,9 @@ psycopg2-binary==2.9.10
 pyyaml==6.0.2
 requests==2.32.3
 typing_extensions==4.12.2
-minio==7.2.9
+alembic==1.15.2
+minio==7.2.15
+python-multipart==0.0.6
+pytest==8.3.3
+python-dotenv==1.0.1
+httpx==0.27.2

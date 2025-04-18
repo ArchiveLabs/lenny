@@ -6,13 +6,15 @@ services:
       dockerfile: docker/Dockerfile
     container_name: lenny_api
     ports:
-      - "8080:80"  # Changed from 7000:7000 to avoid port conflict (nginx api)
+      - "8080:80"  # When in docker, run Lenny as 8080, reverse proxies from nginx
     depends_on:
       - db
       - s3
     env_file: lenny.env
     environment:
     - LENNY_PORT=1337  # When in docker, run Lenny as 1337, reverse proxies from nginx
+    volumes:
+      - ./lenny/migrations:/app/lenny/migrations  # Optional: Mount migrations directory
     networks:
       - lenny_network
 
@@ -29,7 +31,7 @@ services:
       - lenny_network
 
   s3:
-    image: minio/minio
+    image: minio/minio:latest
     container_name: lenny_bookshelf
     env_file: lenny.env
     ports:
