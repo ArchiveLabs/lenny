@@ -174,3 +174,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Alembic migrations (ignore's generated version files)
+lenny/migrations/versions/*
+# Keep the directory itself, but ignore's its contents
+!lenny/migrations/versions/.gitkeep

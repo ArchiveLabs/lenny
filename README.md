@@ -13,6 +13,7 @@ Lenny is a free, open source Lending System for Libraries.
 * [`yaml`](https://en.wikipedia.org/wiki/YAML/) for configuring library-level rules
 * [`postgres`](https://www.postgresql.org/) for the database
 * [`SQLAlchemy`](https://www.sqlalchemy.org/) for the database python [`ORM`](https://en.wikipedia.org/wiki/Object%E2%80%93relational_mapping)
+* [`Alembic`](https://alembic.sqlalchemy.org/en/latest/tutorial.html) for DB migrations
 * [Readium `LCP`](https://readium.org/lcp-specs/) for [DRM](https://en.wikipedia.org/wiki/Digital_rights_management); see [LCP Server](https://github.com/readium/readium-lcp-server)
 * [Readium Web SDK](https://www.edrlab.org/software/readium-web/) for a secure web reading experience
 * [`OPDS`](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System) RSS-like standard for syndicating holdings
