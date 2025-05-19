@@ -27,15 +27,25 @@ Lenny is a free, open source Lending System for Libraries.
 
 ## Installation
 
-First, copy the file `lenny_TEMPLATE.env` to `lenny.env` (gitignored) and edit it to have the correct values (such as desired psql credentials).
-
-Second, run docker compose:
-
 ```
+docker/configure.sh  # generates lenny.env
 docker compose -p lenny up -d --build
 ```
 
-Finally, navigate to localhost:8080 or whatever `$LENNY_PORT` you specified in your `lenny.env`
+Navigate to localhost:8080 or whatever `$LENNY_PORT` you specified in your `lenny.env`
+
+You may enter the API container via:
+
+```
+docker exec -it lenny_api bash
+```
+
+## Rebuilding
+
+```
+docker compose -p lenny down
+docker compose -p lenny up -d --build
+```
 
 ## Pilot
 

@@ -8,26 +8,29 @@
 """
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from lenny.configs import DB_URI, TESTING
+from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.ext.declarative import declarative_base
+from minio import Minio
+
+from lenny.configs import DB_URI, S3_CONFIG, DEBUG
 
 Base = declarative_base()
 
-if TESTING:
-    engine = create_engine("sqlite:///:memory:", connect_args={'check_same_thread': False})
-    Base.metadata.creat_all(bind=engine)
-else:
-    engine = create_engine(DB_URI)
-    
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Configure Database Connection
+engine = create_engine(DB_URI, echo=DEBUG, client_encoding='utf8')
+db = scoped_session(sessionmaker(bind=engine, autocommit=False, autoflush=False))
 
-def get_db():
-    session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        if TESTING:
-            engine.dispose()
+# Configure S3 Connection
+s3 = Minio(
+    endpoint=S3_CONFIG["endpoint"],
+    access_key=S3_CONFIG["access_key"],
+    secret_key=S3_CONFIG["secret_key"],
+    secure=S3_CONFIG["secure"],
+)
 
-__all__ = ["Base", "SessionLocal", "get_db", "engine"]
+# Instantiate s3 buckets
+for bucket_name in ["bookshelf-public", "bookshelf-encrypted"]:
+    if not s3.bucket_exists(bucket_name):
+        s3.make_bucket(bucket_name)
+
+__all__ = ["Base", "db", "s3", "engine"]

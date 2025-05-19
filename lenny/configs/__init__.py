@@ -8,12 +8,10 @@
 """
 
 import os
-from dotenv import load_dotenv
 
-# Load environment variables from .env.test file
-load_dotenv(dotenv_path=".env.test", override= True)
 
-TESTING = os.environ.get("TESTING", "False").lower() == "true"
+# Determine environment
+TESTING = os.getenv("TESTING", "false").lower() == "true"
 
 # API server configuration
 DOMAIN = os.environ.get('LENNY_DOMAIN', '127.0.0.1')
@@ -37,27 +35,26 @@ if SSL_CRT and SSL_KEY:
     OPTIONS['ssl_keyfile'] = SSL_KEY
     OPTIONS['ssl_certfile'] = SSL_CRT
 
+DB_CONFIG = {
+    'user': os.environ.get('DB_USER', 'postgres'),
+    'password': os.environ.get('DB_PASSWORD'),
+    'host': os.environ.get('DB_HOST', 'localhost'),
+    'port': int(os.environ.get('DB_PORT', '5432')),
+    'dbname': os.environ.get('DB_NAME', 'lenny'),
+}
+
 # Database configuration
-if TESTING:
-    DB_URI = "sqlite:///:memory:"
-else:
-    DB_CONFIG = {
-    'user': os.environ.get('POSTGRES_USER', 'lenny'),
-    'password': os.environ.get('POSTGRES_PASSWORD', 'lennytest'),
-    'host': os.environ.get('POSTGRES_HOST', 'postgres'),
-    'port': int(os.environ.get('POSTGRES_PORT', '5432')),
-    'dbname': os.environ.get('POSTGRES_DB', 'lending_system'),
-    }
-    DB_URI = 'postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}'.format(**DB_CONFIG) 
+DB_URI = (
+    "sqlite:///:memory:" if TESTING else
+    'postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}'.format(**DB_CONFIG)
+)            
 
 # MinIO configuration
 S3_CONFIG = {
-    'access_key': os.environ.get('S3_ACCESS_KEY', os.environ.get('MINIO_ROOT_USER')),
-    'secret_key': os.environ.get('S3_SECRET_KEY', os.environ.get('MINIO_ROOT_PASSWORD')),
-    'endpoint': f"{os.environ.get('MINIO_HOST', 'minio')}:{os.environ.get('MINIO_PORT', '9000')}",
-    'secure': False,
-    'public_bucket': os.environ.get('MINIO_BUCKET', 'lenny') + "-public",
-    'protected_bucket': os.environ.get('MINIO_BUCKET', 'lenny') + "-protected",
+    'endpoint': os.environ.get('S3_ENDPOINT'),
+    'access_key': os.environ.get('MINIO_ROOT_USER'),
+    'secret_key': os.environ.get('MINIO_ROOT_PASSWORD'),
+    'secure': os.environ.get('S3_SECURE', 'false').lower() == 'true',
 }
 
 __all__ = ['DOMAIN', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG','S3_CONFIG', 'TESTING']

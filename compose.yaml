@@ -12,7 +12,10 @@ services:
       - s3
     env_file: lenny.env
     environment:
-    - LENNY_PORT=1337  
+      - LENNY_PORT=1337  # When in docker, run Lenny as 1337, reverse proxies from nginx
+      - S3_ENDPOINT=s3:9000
+    volumes:
+      - .:/app
     networks:
       - lenny_network
 

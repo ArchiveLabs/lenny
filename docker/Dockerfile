@@ -5,18 +5,22 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Set only non-sensitive environment variables
+# Set non-sensitive environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
+# Expose ports (FastAPI, PostgreSQL, MinIO API, MinIO Console)
 EXPOSE 8080 5432 9000 9001
 
 COPY ./lenny/ /app/lenny/
 RUN chmod +x /app/lenny/app.py
 
-# Setup NGINX
-RUN apt-get update && apt-get install -y nginx
+RUN apt-get update && apt-get install -y \
+    nginx \
+    libpq-dev \
+    postgresql-client
 RUN adduser --disabled-password --gecos "" nginx
+
 COPY ./docker/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY ./docker/nginx/conf.d/lenny.conf /etc/nginx/conf.d/lenny.conf
 

@@ -1,0 +1,54 @@
+#!/bin/bash
+
+ENV_FILE="lenny.env"
+
+# Exit if the file already exists
+if [ -f "$ENV_FILE" ]; then
+  echo "$ENV_FILE already exists. No changes made."
+  exit 0
+fi
+
+# Use environment variables if they are set, otherwise provide defaults or generate secure values
+LENNY_DOMAIN="${LENNY_DOMAIN:-localhost}"
+LENNY_HOST="${LENNY_HOST:-0.0.0.0}"
+LENNY_PORT="${LENNY_PORT:-8080}"
+LENNY_WORKERS="${LENNY_WORKERS:-1}"
+LENNY_LOG_LEVEL="${LENNY_LOG_LEVEL:-\"debug\"}"
+LENNY_RELOAD="${LENNY_RELOAD:-1}"
+LENNY_SSL_CRT="${LENNY_SSL_CRT:-}"
+LENNY_SSL_KEY="${LENNY_SSL_KEY:-}"
+
+DB_USER="${POSTGRES_USER:-librarian}"
+DB_HOST="${POSTGRES_HOST:-127.0.0.1}"
+DB_PORT="${POSTGRES_PORT:-5432}"
+DB_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 32)}"
+DB_NAME="${DB_NAME:-lenny}"
+
+MINIO_ROOT_USER="${MINIO_ROOT_USER:-$(openssl rand -base64 30 | tr -dc 'A-Za-z0-9' | head -c 20)}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(openssl rand -base64 60 | tr -dc 'A-Za-z0-9' | head -c 40)}"
+MINIO_SECURE="${MINIO_SECURE:-false}"
+
+# Write to lenny.env
+cat <<EOF > "$ENV_FILE"
+# API App (FastAPI)
+LENNY_DOMAIN=$LENNY_DOMAIN
+LENNY_HOST=$LENNY_HOST
+LENNY_PORT=$LENNY_PORT
+LENNY_WORKERS=$LENNY_WORKERS
+LENNY_LOG_LEVEL=$LENNY_LOG_LEVEL
+LENNY_RELOAD=$LENNY_RELOAD
+LENNY_SSL_CRT=$LENNY_SSL_CRT
+LENNY_SSL_KEY=$LENNY_SSL_KEY
+
+# DB (PostgreSQL)
+DB_USER=$DB_USER
+DB_HOST=$DB_HOST
+DB_PORT=$DB_PORT
+DB_PASSWORD=$DB_PASSWORD
+DB_NAME=$DB_NAME
+
+# MinIO (S3)
+MINIO_ROOT_USER=$MINIO_ROOT_USER
+MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD
+MINIO_SECURE=$MINIO_SECURE
+EOF
