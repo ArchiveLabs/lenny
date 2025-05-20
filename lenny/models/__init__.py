@@ -32,5 +32,18 @@ s3 = Minio(
 for bucket_name in ["bookshelf-public", "bookshelf-encrypted"]:
     if not s3.bucket_exists(bucket_name):
         s3.make_bucket(bucket_name)
+        # Setting public read-only policy
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {"AWS": ["*"]},
+                    "Action": ["s3:GetObject"],
+                    "Resource": [f"arn:aws:s3:::{bucket_name}/*"]
+                }
+            ]
+        }
+        s3.set_bucket_policy(bucket_name, json.dumps(policy))
 
 __all__ = ["Base", "db", "s3", "engine"]
