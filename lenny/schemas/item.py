@@ -19,12 +19,8 @@ class Item(BaseModel):
         from_attributes = True
         json_schema_extra = {
             "example": {
-                "id": 1,
                 "openlibrary_edition": 1234567890,
-                "encrypted": False,
-                "s3_filepath": "s3://bookshelf-public/path/to/file",
-                "created_at": "2023-10-01T12:00:00Z",
-                "updated_at": "2023-10-01T12:00:00Z"
+                "encrypted": False
             }
         }
         

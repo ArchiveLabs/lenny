@@ -8,8 +8,7 @@
 """
 import json
 from sqlalchemy import create_engine
-from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import scoped_session, sessionmaker, declarative_base 
 from lenny.configs import DB_URI, DEBUG
 
 Base = declarative_base()
@@ -21,7 +20,10 @@ from . import items
 engine = create_engine(DB_URI, echo=DEBUG, client_encoding='utf8')
 db = scoped_session(sessionmaker(bind=engine, autocommit=False, autoflush=False))
 
-# Ensure all SQLAlchemy tables are created at startup
-Base.metadata.create_all(bind=engine)
 
-__all__ = ["Base", "db", "engine", "items"]
+def init_db(engine_to_init=engine):
+    """Initializes the database and creates tables."""
+    Base.metadata.create_all(bind=engine_to_init)
+
+
+__all__ = ["Base", "db", "engine", "items", "init_db"]
