@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from botocore.exceptions import ClientError 
 
 from lenny.models import db
-from lenny.models.items import Item  
+from lenny.models.items import Item, FormatEnum 
 from lenny.core import s3 
 
 def upload_items(openlibrary_edition: int, encrypted: bool, files: list[UploadFile], db_session: Session = db):
@@ -25,6 +25,19 @@ def upload_items(openlibrary_edition: int, encrypted: bool, files: list[UploadFi
         if not file_upload.filename:
             continue 
         file_extension = Path(file_upload.filename).suffix.lower()
+        
+        item_format: FormatEnum
+        if file_extension == ".pdf":
+            item_format = FormatEnum.PDF
+        elif file_extension == ".epub":
+            item_format = FormatEnum.EPUB
+        else:
+            
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported file format: '{file_extension}' for file '{file_upload.filename}'. Only '.pdf' and '.epub' are supported."
+            )
+
         s3_object_name = f"{openlibrary_edition}{file_extension}"
         
         try:
@@ -42,7 +55,8 @@ def upload_items(openlibrary_edition: int, encrypted: bool, files: list[UploadFi
             new_item = Item(
                 openlibrary_edition=openlibrary_edition,
                 encrypted=encrypted,
-                s3_filepath=s3_filepath
+                s3_filepath=s3_filepath,
+                formats=item_format 
             )
             db_session.add(new_item)
         

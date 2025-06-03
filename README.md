@@ -30,6 +30,7 @@ Lenny is a free, open source Lending System for Libraries.
 ```
 docker/configure.sh  # generates lenny.env
 docker compose -p lenny up -d --build
+python scripts/load_open_books.py # loads books
 ```
 
 Navigate to localhost:8080 or whatever `$LENNY_PORT` you specified in your `lenny.env`
