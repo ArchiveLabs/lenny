@@ -24,7 +24,7 @@ s3 = session.client(
 )
 
 # Define bucket names
-BUCKET_NAMES = ["bookshelf-public", "bookshelf-encrypted"]
+BUCKET_NAMES = ["bookshelf"]
 
 # Create buckets if they don't exist
 for bucket_name in BUCKET_NAMES:

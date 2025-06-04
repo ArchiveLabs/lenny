@@ -54,10 +54,8 @@ def mock_db_session_in_upload(db_session): # Renamed to avoid conflict with the 
 def create_mock_upload_file(filename: str, content: bytes = b"test content", content_type: str = "text/plain") -> UploadFile:
     """Helper function to create a mock UploadFile."""
     file_like_object = io.BytesIO(content)
-    # Pass content_type via headers argument during UploadFile instantiation
     headers = {"content-type": content_type}
-    upload_file = UploadFile(filename=filename, file=file_like_object, headers=headers)
-    return upload_file
+    return UploadFile(filename=filename, file=file_like_object, headers=headers)
 
 def test_upload_single_item_success(db_session, mock_s3_client):
     """Test successful upload of a single item."""
