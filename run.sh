@@ -15,5 +15,7 @@ else
     echo "Running in production mode..."
     export $(grep -v '^#' .env | xargs)
 
+    mkdir -p ./epubs
+    wget -O ./epubs/test_book.epub "https://standardebooks.org/ebooks/l-frank-baum/dorothy-and-the-wizard-in-oz/downloads/l-frank-baum_dorothy-and-the-wizard-in-oz.epub?source=download"
     docker-compose -p lenny up -d
 fi
