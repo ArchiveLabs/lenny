@@ -75,12 +75,14 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_ENDPOINT: ${S3_ENDPOINT}
     volumes:
-      - readium_data:/srv/publications
+      - ./epubs:/srv/publications
+      # - readium_data:/srv/publications
     command: >
       serve /srv/publications
       --s3-access-key ${S3_ACCESS_KEY}
       --s3-secret-key ${S3_SECRET_KEY}
       --s3-endpoint http://s3:9000
+      --address 0.0.0.0
     networks:
       - lenny_network
 
