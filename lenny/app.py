@@ -14,8 +14,6 @@ app = FastAPI(
     version=VERSION,
 )
 
-create_s3()
-create_db()
 
 app.include_router(api.router, prefix="/v1/api")
 
