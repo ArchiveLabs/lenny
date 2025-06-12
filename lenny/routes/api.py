@@ -8,33 +8,75 @@
     :license: see LICENSE for more details
 """
 
-from fastapi import APIRouter, status, UploadFile, File, Form
-from fastapi.responses import HTMLResponse
-from fastapi import HTTPException
+import requests
+from fastapi import (
+    APIRouter,
+    Request,
+    UploadFile,
+    File,
+    Form,
+    HTTPException,
+    status
+)
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pathlib import Path
 from lenny.core.itemsUpload import upload_items
+from lenny.core.utils import encode_book_path
 from lenny.models import db
 from lenny.models.items import Item
+from lenny.configs import PORT
+
 router = APIRouter()
 
 MAX_FILE_SIZE = 50 * 1024 * 1024
 
+def get_lenny_uri(request: Request, port=True):
+    host = f"{request.url.scheme}://{request.url.hostname}"
+    if port and PORT and PORT not in {80, 443}:
+        host += f":{PORT}"
+    return host
+
 @router.get('/', status_code=status.HTTP_200_OK)
-async def root():
-    html_content = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Lenny API</title>
-    </head>
-    <body>
-        <h1 style="text-align: center;">Lenny: A Free, Open Source Lending System for Libraries</h1>
-        <img src="/static/lenny.png" alt="Lenny Logo" style="display: block; margin: 0 auto;">
-        <p style="text-align: center;">You can download & deploy it from <a href="https://github.com/ArchiveLabs/lenny">Github</a> </p>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content, media_type="text/html")
+async def home(request: Request):
+    return request.app.templates.TemplateResponse("index.html", {"request": request})
+
+@router.get("/items")
+async def get_items(request: Request):
+    from lenny.core import s3
+    return list(s3.get_bookshelf_keys())
+    
+@router.get("/items/{book_id}/manifest.json")
+async def get_manifest(request: Request, book_id: str, format: str=".epub"):
+    # TODO: permission/auth checks go here, or decorate this route
+    def rewrite_self(manifest, manifest_uri):
+        for i in range(len(manifest['links'])):
+            if manifest['links'][i].get('rel') == 'self':
+                manifest['links'][i]['href'] = manifest_uri
+        return manifest
+
+    readium_uri = f"http://lenny_readium:15080/{encode_book_path(book_id, format=format)}/manifest.json"
+    manifest = requests.get(readium_uri).json()
+    manifest_uri = f"{get_lenny_uri(request)}/v1/api/item/{book_id}/manifest.json"
+    return rewrite_self(manifest, manifest_uri)
+
+# Proxy all other readium requests
+@router.get("/items/{book_id}/{readium_uri:path}")
+async def proxy_readium(request: Request, book_id: str, readium_uri: str, format: str=".epub"):
+    # TODO: permission/auth checks go here, or decorate this route
+    readium_url = f"http://lenny_readium:15080/{encode_book_path(book_id, format=format)}/{readium_uri}"
+    print(readium_url)
+    r = requests.get(readium_url, params=dict(request.query_params))
+    if readium_url.endswith('.json'):
+        return r.json()
+    content_type = r.headers.get("Content-Type", "application/octet-stream")
+    return Response(content=r.content, media_type=content_type)
+
+# Redirect to the Thorium Web Reader
+@router.get("/read/{book_id}")
+async def redirect_reader(request: Request, book_id: str, format: str = "epub"):
+    manifest_uri = f"{get_lenny_uri(request)}/v1/api/items/{book_id}/manifest.json"
+    reader_url = f"{get_lenny_uri(request, port=False)}:3000/read?book={manifest_uri}"
+    return RedirectResponse(url=reader_url, status_code=307)
 
 @router.post('/upload', status_code=status.HTTP_200_OK)
 async def create_items(

@@ -40,5 +40,19 @@ for bucket_name in BUCKET_NAMES:
         except Exception as create_error:
             print(f"Error creating bucket '{bucket_name}': {create_error}")
 
+def get_bookshelf_keys(prefix=''):
+    """
+    Lists all object keys (filenames) in a specified S3 bucket,
+    optionally filtered by a prefix. Handles pagination automatically.
+    """
+    paginator = s3.get_paginator('list_objects_v2')
+    pages = paginator.paginate(Bucket='bookshelf', Prefix=prefix)
+    for page in pages:
+        if 'Contents' in page:
+            for obj in page['Contents']:
+                yield obj['Key']
+
+s3.get_bookshelf_keys = get_bookshelf_keys
+                
 __all__ = ['s3']
 
