@@ -52,6 +52,7 @@ setup(
     platforms='any',
     license='LICENSE',
     install_requires=[
+        'boto3==1.34.162',
         'fastapi==0.115.4',
         'uvicorn==0.32.0',
         'pydantic==2.9.2',
