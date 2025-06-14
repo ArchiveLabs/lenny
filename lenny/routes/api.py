@@ -8,9 +8,8 @@
     :license: see LICENSE for more details
 """
 
-from pathlib import Path
 import requests
-from typing import Optional, Generator
+from typing import Optional
 from fastapi import (
     APIRouter,
     Request,
