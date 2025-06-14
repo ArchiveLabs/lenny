@@ -8,11 +8,12 @@ class OpenLibrary:
     
     SEARCH_URL = "https://openlibrary.org/search.json"
     HTTP_TIMEOUT = 5
-    DEFAULT_FIELDS = ['key', 'editions']
+    DEFAULT_FIELDS = ['key', 'title', 'editions']
+    COVER_SERVER = "https://covers.openlibrary.org"
     
     @classmethod
     def _construct_search_url(cls, query: str, fields: Optional[List[str]] = None, page: int = 1, limit: int = 100) -> str:
-        fields = cls.DEFAULT_FIELDS + (fields if fields else ['*'])
+        fields = list(set(cls.DEFAULT_FIELDS + (fields or [])))
         params = {
             'q': query,
             'fields': ','.join(fields),
@@ -66,6 +67,11 @@ class OpenLibraryRecord(dict):
         for key, value in {**data, **kwargs}.items():
             self[key] = self._wrap(value)
 
+    @property
+    def cover_url(self) -> Optional[str]:
+        if cover_i := self.edition.get('cover_i'):
+            return f"{OpenLibrary.COVER_SERVER}/b/id/{cover_i}-M.jpg"
+    
     @property
     def edition(self) -> Optional[str]:
         return self.editions['docs'][0]
