@@ -8,7 +8,9 @@
     :license: see LICENSE for more details
 """
 
+from pathlib import Path
 import requests
+from typing import Optional, Generator
 from fastapi import (
     APIRouter,
     Request,
@@ -19,9 +21,9 @@ from fastapi import (
     status
 )
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from pathlib import Path
 from lenny.core.itemsUpload import upload_items
 from lenny.core.utils import encode_book_path
+from lenny.core.openlibrary import OpenLibrary
 from lenny.models import db
 from lenny.models.items import Item
 from lenny.configs import PORT
@@ -41,9 +43,17 @@ async def home(request: Request):
     return request.app.templates.TemplateResponse("index.html", {"request": request})
 
 @router.get("/items")
-async def get_items(request: Request):
-    from lenny.core import s3
-    return list(s3.get_keys())
+async def get_items(request: Request, offset: Optional[int]=None, limit: Optional[int]=None):
+    items = db.query(Item).offset(offset).limit(limit).all()
+    imap = dict((i.openlibrary_edition, i) for i in items)
+    olids = [f"OL{i}M" for i in imap.keys()]
+    q = f"edition_key:({' OR '.join(olids)})"
+    return dict((
+        # keyed by olid as int
+        int(book.olid),
+        # openlibrary book with item added as `lenny`
+        book + {"lenny": imap[int(book.olid)]}
+    ) for book in OpenLibrary.search(query=q))
     
 @router.get("/items/{book_id}/manifest.json")
 async def get_manifest(request: Request, book_id: str, format: str=".epub"):

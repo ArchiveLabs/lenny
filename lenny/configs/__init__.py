@@ -57,4 +57,6 @@ S3_CONFIG = {
     'secure': os.environ.get('S3_SECURE', 'false').lower() == 'true',
 }
 
+USER_AGENT = {"User-Agent": "LennyImportBot/1.0"}
+
 __all__ = ['DOMAIN', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG','S3_CONFIG', 'TESTING']

@@ -43,3 +43,4 @@ starlette==0.41.3
 typing_extensions==4.12.2
 urllib3==2.4.0
 uvicorn==0.32.0
+watchfiles==1.0.5
