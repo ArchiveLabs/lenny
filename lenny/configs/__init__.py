@@ -62,4 +62,4 @@ S3_CONFIG = {
     'secure': os.environ.get('S3_SECURE', 'false').lower() == 'true',
 }
 
-__all__ = ['HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG','S3_CONFIG', 'TESTING']
+__all__ = ['SCHEME', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG','S3_CONFIG', 'TESTING']

@@ -2,6 +2,7 @@
 import requests
 from typing import List, Generator, Optional, Dict, Any
 from urllib.parse import urlencode
+
 from lenny.configs import LENNY_HTTP_HEADERS
 
 class OpenLibrary:
