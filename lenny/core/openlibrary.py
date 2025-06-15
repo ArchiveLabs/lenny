@@ -2,13 +2,16 @@
 import requests
 from typing import List, Generator, Optional, Dict, Any
 from urllib.parse import urlencode
-from lenny.configs import USER_AGENT
+from lenny.configs import LENNY_HTTP_HEADERS
 
 class OpenLibrary:
     
     SEARCH_URL = "https://openlibrary.org/search.json"
+    HTTP_HEADERS = LENNY_HTTP_HEADERS
     HTTP_TIMEOUT = 5
-    DEFAULT_FIELDS = ['key', 'title', 'editions']
+    DEFAULT_FIELDS = [
+        'key', 'title', 'author_key', 'author_name', 'editions', 'editions.*',
+    ]
     COVER_SERVER = "https://covers.openlibrary.org"
     
     @classmethod
@@ -27,32 +30,37 @@ class OpenLibrary:
         cls,
         query: str,
         fields: Optional[List[str]] = None,
-        limit_per_page: int = 100,
+        offset: int = 0,
+        limit: int = 100,
         max_results: Optional[int] = None,
     ) -> Generator["OpenLibraryRecord", None, None]:
-        page = 0
+        page = offset // limit + 1
+        start_doc = (offset % limit)
         num_yielded = 0
         
         while True:
-            page += 1
-            data = cls.search_json(query, fields, page, limit_per_page)
+            data = cls.search_json(query, fields=fields, page=page, limit=limit)
             docs = data.get("docs", []) if isinstance(data, dict) else []
+            page += 1
 
-            if not docs:
-                break
-
+            if start_doc is not None:
+                docs = docs[start_doc:]
+                start_doc = None
+            
             for doc in docs:
                 yield OpenLibraryRecord(doc)
                 num_yielded += 1
                 if max_results and num_yielded >= max_results:
                     return
 
-    
+            if not docs or len(docs) < limit:
+                break
+
     @classmethod
     def search_json(cls, query: str, fields: Optional[List[str]] = None, page: int = 1, limit: int = 100) -> Dict[str, Any]:
         url = cls._construct_search_url(query, fields, page, limit)
         try:
-            response = requests.get(url, headers=USER_AGENT, timeout=cls.HTTP_TIMEOUT)
+            response = requests.get(url, headers=cls.HTTP_HEADERS, timeout=cls.HTTP_TIMEOUT)
             response.raise_for_status()
             return response.json()
         except (requests.exceptions.RequestException, ValueError) as e:

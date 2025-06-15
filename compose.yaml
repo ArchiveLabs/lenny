@@ -67,7 +67,7 @@ services:
       dockerfile: docker/reader/Dockerfile
     container_name: lenny_reader
     ports:
-      - "3000:3000"
+      - "${READER_PORT:-3000}:${READER_PORT:-3000}"
     networks:
       - lenny_network
 
@@ -75,7 +75,7 @@ services:
     image: ghcr.io/readium/readium:0.2.1
     container_name: lenny_readium
     ports:
-      - "15080"
+      - "${READIUM_PORT:-15080}"
     depends_on:
       - s3
       - api

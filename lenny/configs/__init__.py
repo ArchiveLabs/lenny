@@ -14,15 +14,19 @@ import os
 TESTING = os.getenv("TESTING", "false").lower() == "true"
 
 # API server configuration
-DOMAIN = os.environ.get('LENNY_DOMAIN', '127.0.0.1')
+SCHEME = 'http'
 HOST = os.environ.get('LENNY_HOST', '0.0.0.0')
 PORT = int(os.environ.get('LENNY_PORT', 8080))
 WORKERS = int(os.environ.get('LENNY_WORKERS', 1))
 DEBUG = bool(int(os.environ.get('LENNY_DEBUG', 0)))
-
 LOG_LEVEL = os.environ.get('LENNY_LOG_LEVEL', 'info')
 SSL_CRT = os.environ.get('LENNY_SSL_CRT')
 SSL_KEY = os.environ.get('LENNY_SSL_KEY')
+LENNY_HTTP_HEADERS = {"User-Agent": "LennyImportBot/1.0"}
+
+READER_PORT = int(os.environ.get('READER_PORT', 3000))
+READIUM_PORT = int(os.environ.get('READIUM_PORT', 15080))
+READIUM_BASE_URL = f"http://lenny_readium:{READIUM_PORT}"
 
 OPTIONS = {
     'host': HOST,
@@ -34,6 +38,7 @@ OPTIONS = {
 if SSL_CRT and SSL_KEY:
     OPTIONS['ssl_keyfile'] = SSL_KEY
     OPTIONS['ssl_certfile'] = SSL_CRT
+    SCHEME = 'https'
 
 DB_CONFIG = {
     'user': os.environ.get('DB_USER', 'postgres'),
@@ -57,6 +62,4 @@ S3_CONFIG = {
     'secure': os.environ.get('S3_SECURE', 'false').lower() == 'true',
 }
 
-USER_AGENT = {"User-Agent": "LennyImportBot/1.0"}
-
-__all__ = ['DOMAIN', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG','S3_CONFIG', 'TESTING']
+__all__ = ['HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG','S3_CONFIG', 'TESTING']

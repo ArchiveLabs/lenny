@@ -60,4 +60,4 @@ for i in {1..15}; do
 done
 
 echo "[+] Preloading ~800 books from StandardEbooks (~5 minutes)..."
-docker exec -it lenny_api python scripts/load_open_books.py
+docker exec -it lenny_api python scripts/preload.py
