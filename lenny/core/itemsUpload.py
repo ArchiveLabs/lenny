@@ -13,9 +13,8 @@ from fastapi import UploadFile, HTTPException, status
 from sqlalchemy.orm import Session
 from botocore.exceptions import ClientError 
 
-from lenny.models import db
-from lenny.models.items import FormatEnum, Item  
-from lenny.core import s3 
+from lenny.core.models import FormatEnum, Item  
+from lenny.core import s3, db
 
 def upload_items(openlibrary_edition: int, encrypted: bool, files: list[UploadFile], db_session: Session = db):
     bucket_name = "bookshelf" 
@@ -47,12 +46,10 @@ def upload_items(openlibrary_edition: int, encrypted: bool, files: list[UploadFi
                 s3_object_name,
                 ExtraArgs=extra_args
             )
-            s3_filepath = f"{bucket_name}/{s3_object_name}"
 
             new_item = Item(
                 openlibrary_edition=openlibrary_edition,
                 encrypted=encrypted,
-                s3_filepath=s3_filepath,
                 formats=formats_value,
             )
             db_session.add(new_item)

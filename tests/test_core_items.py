@@ -12,7 +12,7 @@
 """
 
 import pytest 
-from lenny.models import Base
+from lenny.core import Base
 
 @pytest.fixture
 def db_session():
@@ -36,7 +36,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import UploadFile, HTTPException, status
 from pathlib import Path
 from lenny.core.itemsUpload import upload_items
-from lenny.models.items import Item
+from lenny.core.models import Item
 from botocore.exceptions import ClientError
 
 # Mock S3 client for tests

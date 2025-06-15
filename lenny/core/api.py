@@ -1,8 +1,8 @@
 
 from io import BytesIO
 import requests
-from lenny.models import db
-from lenny.models.items import Item
+from lenny.core import db
+from lenny.core.models import Item
 from lenny.core.openlibrary import OpenLibrary
 from lenny.core.utils import encode_book_path
 from lenny.core.opds import (

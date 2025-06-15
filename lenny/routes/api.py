@@ -25,10 +25,10 @@ from fastapi.responses import (
     RedirectResponse,
     Response
 )
+from lenny.core import db
 from lenny.core.itemsUpload import upload_items
 from lenny.core.api import LennyAPI
-from lenny.models import db
-from lenny.models.items import Item
+from lenny.core.models import Item
 
 router = APIRouter()
 

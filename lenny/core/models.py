@@ -8,9 +8,9 @@
     :license: see LICENSE for more details
 """
 
-from sqlalchemy  import Column, String, Boolean, Integer, BigInteger, DateTime, Enum as SQLAlchemyEnum
+from sqlalchemy  import Column, String, Boolean, BigInteger, DateTime, Enum as SQLAlchemyEnum
 from sqlalchemy.sql import func
-from . import Base
+from lenny.core import Base
 import enum
 
 class FormatEnum(enum.Enum):
@@ -21,10 +21,9 @@ class FormatEnum(enum.Enum):
 class Item(Base):
     __tablename__ = 'items'
     
-    id = Column(Integer, primary_key=True)
+    id = Column(BigInteger, primary_key=True)
     openlibrary_edition = Column(BigInteger, nullable=False)
     encrypted = Column(Boolean, default= False, nullable=False)
-    s3_filepath = Column(String, nullable=False)
     formats = Column(SQLAlchemyEnum(FormatEnum), nullable=False)
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
