@@ -1,9 +1,12 @@
 
+import logging
 import requests
 from typing import List, Generator, Optional, Dict, Any
 from urllib.parse import urlencode
 
 from lenny.configs import LENNY_HTTP_HEADERS
+
+logger = logging.getLogger(__name__)
 
 class OpenLibrary:
     
@@ -65,7 +68,7 @@ class OpenLibrary:
             response.raise_for_status()
             return response.json()
         except (requests.exceptions.RequestException, ValueError) as e:
-            print(f"Error searching Open Library: {e}")
+            logger.error(f"Error searching Open Library: {e}")
             return {}
 
     

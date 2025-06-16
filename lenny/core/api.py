@@ -1,5 +1,6 @@
 
 from io import BytesIO
+import logging
 import requests
 from lenny.models import db
 from lenny.models.items import Item
@@ -17,6 +18,8 @@ from lenny.configs import (
     READER_PORT, READIUM_BASE_URL,
     LENNY_HTTP_HEADERS
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LennyAPI:
@@ -152,9 +155,9 @@ class LennyClient:
                 timeout=timeout,
                 verify=False
             )
-            print(response.content)
+            logger.debug(f"Upload response: {response.content}")
             response.raise_for_status()
             return True
         except requests.exceptions.RequestException as e:
-            print(f"Error uploading to Lenny (OLID: {olid}): {e}")
+            logger.error(f"Error uploading to Lenny (OLID: {olid}): {e}")
             return False
