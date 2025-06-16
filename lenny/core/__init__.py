@@ -11,27 +11,33 @@ import boto3
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker, declarative_base 
 from lenny.configs import DB_URI, DEBUG, S3_CONFIG
+    
+class LennyDB:
+    
+    def __init__(self):
+        self.engine = create_engine(DB_URI, echo=DEBUG, client_encoding='utf8')
+        db = scoped_session(sessionmaker(
+            bind=self.engine, autocommit=False, autoflush=False))        
+        self.db = db
 
-Base = declarative_base()
+        class LennyBase:
+            @classmethod
+            def get_many(cls, offset=None, limit=None):
+                return db.query(cls).offset(offset).limit(limit).all()
+    
+        self.Base = declarative_base(cls=LennyBase)
+        self._initialize()
 
-# Import all models here to ensure they are registered with Base
-from lenny.core.models import Item
-
-# Configure Database Connection
-engine = create_engine(DB_URI, echo=DEBUG, client_encoding='utf8')
-db = scoped_session(sessionmaker(bind=engine, autocommit=False, autoflush=False))
-
-def init_db(engine_to_init=engine):
-    """Initializes the database and creates tables."""
-    Base.metadata.create_all(bind=engine_to_init)
-
-def _auto_init_db():
-    try:
-        init_db(engine)
-    except Exception as e:
-        print(f"[WARNING] Database initialization failed: {e}")
-
-_auto_init_db()
+    def __getattr__(self, name):
+        # Delegate any unknown attribute or method to the db session
+        return getattr(self.db, name)
+        
+    def _initialize(self):
+        """Initializes the database and creates tables."""
+        try:
+            self.Base.metadata.create_all(bind=self.engine)
+        except Exception as e:
+            print(f"[WARNING] Database initialization failed: {e}")
 
 class LennyS3:
 
@@ -78,6 +84,6 @@ class LennyS3:
                     yield obj['Key']
 
 s3 = LennyS3()
-                
+db = LennyDB()                
 
 __all__ = ["s3", "Base", "db", "engine", "items", "init_db"]

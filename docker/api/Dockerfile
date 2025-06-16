@@ -10,7 +10,8 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
 # Expose ports (FastAPI, PostgreSQL, MinIO API, MinIO Console)
-EXPOSE 8080 5432 9000 9001
+# XXX These ports should be variables to reflect compose.yml
+EXPOSE 8080 5432 9000 9001 3000 15080
 
 COPY ./lenny/ /app/lenny/
 RUN chmod +x /app/lenny/app.py

@@ -1,3 +1,15 @@
+"""
+Preload README
+
+1. Asks OpenLibrary.org/search.json API for info about every standardebook it knows
+2. Loops over these records, downloads and verifies the corresponding epubs
+3. Uses the LennyClient to upload each book to the LennyAPI `/upload` endpoint
+    - This creates a new Lenny Item, keyed by openlibrary_edition_id (i.e. olid) in the db
+    - Book files are stored in MinIO s3 w/ bucket `bookshelf/` + the book's `olid` as int + ext
+        - e.g. An `olid` of OL32941311M -> 32941311
+        - "/bookshelf/32941311.epub"
+"""
+
 import argparse
 import requests
 import os
@@ -5,7 +17,8 @@ from urllib.parse import urlencode
 from io import BytesIO
 from typing import List, Generator, Optional, Dict, Any
 from lenny.core.openlibrary import OpenLibrary
-from lenny.core.api import LennyAPI, LennyClient
+from lenny.core.api import LennyAPI
+from lenny.core.client import LennyClient
 
 
 class StandardEbooks:

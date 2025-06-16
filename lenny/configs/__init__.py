@@ -15,7 +15,7 @@ TESTING = os.getenv("TESTING", "false").lower() == "true"
 
 # API server configuration
 SCHEME = 'http'
-HOST = os.environ.get('LENNY_HOST', '0.0.0.0')
+HOST = os.environ.get('LENNY_HOST', 'localhost')
 PORT = int(os.environ.get('LENNY_PORT', 8080))
 WORKERS = int(os.environ.get('LENNY_WORKERS', 1))
 DEBUG = bool(int(os.environ.get('LENNY_DEBUG', 0)))

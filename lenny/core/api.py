@@ -1,10 +1,18 @@
 
-from io import BytesIO
 import requests
-from lenny.core import db
-from lenny.core.models import Item
+from pathlib import Path
+from fastapi import UploadFile
+from botocore.exceptions import ClientError
+from lenny.core import db, s3
+from lenny.core.models import Item, FormatEnum
 from lenny.core.openlibrary import OpenLibrary
-from lenny.core.utils import encode_book_path
+from lenny.core.exceptions import (
+    ItemExistsError,
+    InvalidFileError,
+    DatabaseInsertError,
+    FileTooLargeError,
+    S3UploadError,
+)
 from lenny.core.opds import (
     Author,
     OPDSFeed,
@@ -14,8 +22,7 @@ from lenny.core.opds import (
 )
 from lenny.configs import (
     SCHEME, HOST, PORT,
-    READER_PORT, READIUM_BASE_URL,
-    LENNY_HTTP_HEADERS
+    READER_PORT,
 )
 
 
@@ -23,17 +30,15 @@ class LennyAPI:
 
     OPDS_TITLE = "Lenny Catalog"
     MAX_FILE_SIZE = 50 * 1024 * 1024
+    VALID_EXTS = {
+        ".pdf": FormatEnum.PDF,
+        ".epub": FormatEnum.EPUB
+    }
     Item = Item
     
     @classmethod
     def make_manifest_url(cls, book_id):
         return cls.make_url(f"/v1/api/items/{book_id}/manifest.json")
-
-    @classmethod
-    def make_readium_url(cls, book_id, format, readium_path):
-        ebp = encode_book_path(book_id, format=format)
-        readium_url = f"{READIUM_BASE_URL}/{ebp}/{readium_path}"
-        return readium_url
 
     @classmethod
     def make_reader_url(cls, manifest_uri):
@@ -50,12 +55,14 @@ class LennyAPI:
         return f"{url}{path}"
 
     @classmethod
-    def get_items(cls, offset=None, limit=None):
-        return db.query(Item).offset(offset).limit(limit).all()
+    def auth_check(cls, book_id: int, email=None):
+        # TODO: permission/auth checks go here
+        # for userid, store/check hashed email in db?
+        return True
 
     @classmethod
     def _enrich_items(cls, items, fields=None):
-        items = cls.get_items(offset=None, limit=None)
+        items = Item.get_many(offset=None, limit=None)
         imap = dict((i.openlibrary_edition, i) for i in items)
         olids = [f"OL{i}M" for i in imap.keys()]
         q = f"edition_key:({' OR '.join(olids)})"
@@ -68,8 +75,13 @@ class LennyAPI:
     
     @classmethod
     def get_enriched_items(cls, fields=None, offset=None, limit=None):
+        """Returns a dict whose keys are int `olid` Open Library
+        edition IDs and whose values are OpenLibraryRecords wwith an
+        additional `lenny` field containing Lenny's record for this
+        item in the LennyDB
+        """
         return cls._enrich_items(
-            cls.get_items(offset=offset, limit=limit),
+            Item.get_many(offset=offset, limit=limit),
             fields=fields
         )
 
@@ -119,42 +131,71 @@ class LennyAPI:
             feed.publications.append(pub)
         return feed.to_dict()
 
-    @classmethod
-    def patch_readium_manifest(cls, manifest: dict, book_id: str):
-        """Rewrites `self` to link to the correct public url"""
-        for i in range(len(manifest['links'])):
-            if manifest['links'][i].get('rel') == 'self':
-                manifest['links'][i]['href'] = cls.make_url(
-                    f"/v1/api/item/{book_id}/manifest.json"
-                )
-        return manifest        
 
-class LennyClient:
-
-    UPLOAD_API_URL = f"http://localhost:1337/v1/api/upload"
-    HTTP_HEADERS = LENNY_HTTP_HEADERS
 
     @classmethod
-    def upload(cls, olid: int, file_content: BytesIO, encrypted: bool = False,  timeout: int = 120) -> bool:
-        data_payload = {
-            'openlibrary_edition': olid,
-            'encrypted': str(encrypted).lower()
-        }
-        files_payload = {
-            'file': ('book.epub', file_content, 'application/epub+zip')
-        }
+    def encrypt_file(cls, f, method="lcp"):
+        # XXX Not Implemented
+        return f
+
+    @classmethod
+    def upload_file(cls, fp, filename):
+        if not fp.size or fp.size > cls.MAX_FILE_SIZE:
+            raise FileTooLargeError(
+                f"{fp.filename} exceeds {cls.MAX_FILE_SIZE // (1024 * 1024)}MB."
+            )            
+
+        fp.file.seek(0)
         try:
-            response = requests.post(
-                cls.UPLOAD_API_URL,
-                data=data_payload,
-                files=files_payload,
-                headers=cls.HTTP_HEADERS,
-                timeout=timeout,
-                verify=False
+            return s3.upload_fileobj(
+                fp.file,
+                s3.BOOKSHELF_BUCKET,
+                filename,
+                ExtraArgs={'ContentType': fp.content_type}
             )
-            print(response.content)
-            response.raise_for_status()
-            return True
-        except requests.exceptions.RequestException as e:
-            print(f"Error uploading to Lenny (OLID: {olid}): {e}")
-            return False
+        except ClientError as e:
+            raise S3UploadError(
+                f"Failed to upload '{fp.filename}' to S3: "
+                f"{e.response.get('Error', {}).get('Message', str(e))}."
+            )
+    
+    @classmethod
+    def upload_files(cls, files: list[UploadFile], filename, encrypt=False):
+        formats = 0
+        for fp in files:
+            if not fp.filename:
+                continue
+
+            ext = Path(fp.filename).suffix.lower()
+
+            if ext in cls.VALID_EXTS:
+                formats += cls.VALID_EXTS[ext].value
+
+                # Upload the unencrypted file to s3
+                cls.upload_file(fp, f"{filename}{ext}")
+                if encrypt:
+                    cls.upload_file(cls.encrypt_file(fp), f"{filename}_encrypted{ext}")
+            else:
+                raise InvalidFileError("Invalid format {ext} for {fp.filename}")
+        if not formats:
+            raise InvalidFileError("No valid files provided")
+        return formats
+
+    @classmethod
+    def add(cls, openlibrary_edition: int, files: list[UploadFile], encrypt: bool=False):
+        if Item.exists(openlibrary_edition):            
+            raise ItemExistsError(f"Item '{openlibrary_edition}' already exists.")
+
+        if formats:= cls.upload_files(files, openlibrary_edition, encrypt=encrypt):
+            try:
+                item = Item(
+                    openlibrary_edition=openlibrary_edition,
+                    encrypted=encrypt,
+                    formats=FormatEnum(formats)
+                )
+                db.add(item)
+                db.commit()
+                return item
+            except Exception as e:
+                db.rollback()
+                raise DatabaseInsertError(f"Failed to add item to db: {str(e)}.")

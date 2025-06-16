@@ -50,14 +50,8 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 cd lenny
-./run.sh
+./run.sh --preload
 
-echo "[+] Waiting up to 30 seconds for services to start and pass health checks..."
-for i in {1..15}; do
-    docker ps -f "name=lenny_api" -f status=running -q | grep -q .
-    sleep 2
-    [[ $i -eq 15 ]] && { echo "[!] Error: Lenny did not launch after 30 seconds."; exit 1; }
-done
 
-echo "[+] Preloading ~800 books from StandardEbooks (~5 minutes)..."
-docker exec -it lenny_api python scripts/preload.py
+
+
