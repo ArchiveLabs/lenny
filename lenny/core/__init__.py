@@ -10,7 +10,9 @@
 
 import boto3
 from lenny.configs import S3_CONFIG
+import logging
 
+logger = logging.getLogger(__name__)
 class LennyS3:
 
     BOOKSHELF_BUCKET = "bookshelf"
@@ -33,13 +35,13 @@ class LennyS3:
     def _initialize(self):
         try:
             self.s3.head_bucket(Bucket=self.BOOKSHELF_BUCKET)
-            print(f"Bucket '{self.BOOKSHELF_BUCKET}' already exists.")
+            logger.info(f"Bucket '{self.BOOKSHELF_BUCKET}' already exists.")
         except Exception as e:
             try:
                 self.s3.create_bucket(Bucket=self.BOOKSHELF_BUCKET)
-                print(f"Bucket '{self.BOOKSHELF_BUCKET}' created successfully.")
+                logger.info(f"Bucket '{self.BOOKSHELF_BUCKET}' created successfully.")
             except Exception as create_error:
-                print(f"Error creating bucket '{self.BOOKSHELF_BUCKET}': {create_error}")
+                logger.error(f"Error creating bucket '{self.BOOKSHELF_BUCKET}': {create_error}")
 
     def get_keys(self, bucket=None, prefix=''):
         """

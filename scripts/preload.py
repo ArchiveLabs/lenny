@@ -6,8 +6,9 @@ from io import BytesIO
 from typing import List, Generator, Optional, Dict, Any
 from lenny.core.openlibrary import OpenLibrary
 from lenny.core.api import LennyAPI, LennyClient
+import logging
 
-
+logger = logging.getLogger(__name__)
 class StandardEbooks:
 
     BASE_URL = "https://standardebooks.org/ebooks"
@@ -45,11 +46,11 @@ class StandardEbooks:
             content.seek(0)
             return content
         except requests.exceptions.RequestException as e:
-            print(f"Error downloading {url}: {e}")
+            logger.error(f"Error downloading {url}: {e}")
             return None
 
 def import_standardebooks(limit=None, offset=0):
-    print("[Preloading] Fetching StandardEbooks from Open Library...")
+    logger.info("[Preloading] Fetching StandardEbooks from Open Library...")
     query = 'id_standard_ebooks:*'
     for i, book in enumerate(OpenLibrary.search(query, offset=offset, fields=['id_standard_ebooks'])):
         if limit is not None and i >= limit:

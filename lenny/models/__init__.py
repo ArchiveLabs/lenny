@@ -10,6 +10,9 @@ import json
 from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker, declarative_base 
 from lenny.configs import DB_URI, DEBUG
+import logging
+
+logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
@@ -28,7 +31,7 @@ def _auto_init_db():
     try:
         init_db(engine)
     except Exception as e:
-        print(f"[WARNING] Database initialization failed: {e}")
+        logger.warning(f"[WARNING] Database initialization failed: {e}")
 
 _auto_init_db()
 
