@@ -18,6 +18,7 @@ services:
       - DB_HOST=db
     volumes:
       - .:/app
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
     networks:
       - lenny_network
 
