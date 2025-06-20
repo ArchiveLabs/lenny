@@ -68,7 +68,7 @@ services:
       dockerfile: docker/reader/Dockerfile
     container_name: lenny_reader
     ports:
-      - "${READER_PORT:-3000}:${READER_PORT:-3000}"
+      - "${READER_PORT:-3000}"
     networks:
       - lenny_network
 

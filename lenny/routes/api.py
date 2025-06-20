@@ -28,10 +28,12 @@ from lenny.core.api import LennyAPI
 from lenny.core.readium import ReadiumAPI
 from lenny.core.exceptions import (
     ItemExistsError,
+    ItemNotFoundError,
     InvalidFileError,
     DatabaseInsertError,
     FileTooLargeError,
     S3UploadError,
+    UploaderNotAllowedError,
 )
 
 router = APIRouter()
@@ -51,17 +53,28 @@ async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limi
 @router.get("/opds")
 async def get_opds(request: Request, offset: Optional[int]=None, limit: Optional[int]=None):
     return LennyAPI.opds_feed(offset=offset, limit=limit)
-    
-@router.get("/items/{book_id}/manifest.json")
+
+# Redirect to the Thorium Web Reader
+@router.get("/items/{book_id}/read")
+async def redirect_reader(book_id: str, format: str = "epub"):
+    if not LennyAPI.auth_check(book_id):
+        HTTPException(status_code=400, detail="Unauthorized request")
+    manifest_uri = LennyAPI.make_manifest_url(book_id)
+    reader_url = LennyAPI.make_url(f"/read?book={manifest_uri}")
+    print(reader_url)
+    return RedirectResponse(url=reader_url, status_code=307)
+
+@router.get("/items/{book_id}/readium/manifest.json")
 async def get_manifest(book_id: str, format: str=".epub"):
     if not LennyAPI.auth_check(book_id):
         HTTPException(status_code=400, detail="Unauthorized request")
-    readium_url = ReadiumAPI.make_url(book_id, format, "manifest.json")
-    manifest = requests.get(readium_url).json()
-    return ReadiumAPI.patch_manifest(manifest, book_id)
+    try:
+        return ReadiumAPI.get_manifest(book_id, format)
+    except ItemNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 # Proxy all other readium requests
-@router.get("/items/{book_id}/{readium_path:path}")
+@router.get("/items/{book_id}/readium/{readium_path:path}")
 async def proxy_readium(request: Request, book_id: str, readium_path: str, format: str=".epub"):
     if not LennyAPI.auth_check(book_id):
         HTTPException(status_code=400, detail="Unauthorized request")
@@ -72,32 +85,30 @@ async def proxy_readium(request: Request, book_id: str, readium_path: str, forma
     content_type = r.headers.get("Content-Type", "application/octet-stream")
     return Response(content=r.content, media_type=content_type)
 
-# Redirect to the Thorium Web Reader
-@router.get("/read/{book_id}")
-async def redirect_reader(book_id: str, format: str = "epub"):
-    manifest_uri = LennyAPI.make_manifest_url(book_id)
-    reader_url = LennyAPI.make_reader_url(manifest_uri)
-    return RedirectResponse(url=reader_url, status_code=307)
-
 @router.post('/upload', status_code=status.HTTP_200_OK)
 async def upload(
+    request: Request,
     openlibrary_edition: int = Form(
         ..., gt=0, description="OpenLibrary Edition ID (must be a positive integer)"),
     encrypted: bool = Form(
         False, description="Set to true if the file is encrypted"),
     file: UploadFile = File(
         ..., description="The PDF or EPUB file to upload (max 50MB)")
-    ):
+):
+
     try:
         item = LennyAPI.add(
             openlibrary_edition=openlibrary_edition,
+            files=[file],  # TODO expand to allow multiple
+            uploader_ip=request.client.host,
             encrypt=encrypted,
-            files=[file]  # TODO expand to allow multiple 
         )
         return HTMLResponse(
             status_code=status.HTTP_200_OK,
             content="File uploaded successfully."
         )
+    except UploaderNotAllowedError as e:
+        raise HTTPException(status_code=503, details=str(e))
     except ItemExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except InvalidFileError as e:
@@ -107,7 +118,8 @@ async def upload(
     except FileTooLargeError as e:
         raise HTTPException(status_code=413, detail=str(e))
     except S3UploadError as e:
+        print("?")
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-

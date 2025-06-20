@@ -10,7 +10,7 @@
 
 from sqlalchemy  import Column, String, Boolean, BigInteger, DateTime, Enum as SQLAlchemyEnum
 from sqlalchemy.sql import func
-from lenny.core import db
+from lenny.core.db import session as db, Base
 import enum
 
 class FormatEnum(enum.Enum):
@@ -18,7 +18,7 @@ class FormatEnum(enum.Enum):
     PDF = 2
     EPUB_PDF = 3
 
-class Item(db.Base):
+class Item(Base):
     __tablename__ = 'items'
     
     id = Column(BigInteger, primary_key=True)
@@ -27,7 +27,7 @@ class Item(db.Base):
     formats = Column(SQLAlchemyEnum(FormatEnum), nullable=False)
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
-    
+
     @classmethod
     def exists(cls, olid):
         return db.query(Item).filter(Item.openlibrary_edition == olid).first()

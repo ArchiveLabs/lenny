@@ -3,6 +3,7 @@ import requests
 from pathlib import Path
 from fastapi import UploadFile
 from botocore.exceptions import ClientError
+import socket
 from lenny.core import db, s3
 from lenny.core.models import Item, FormatEnum
 from lenny.core.openlibrary import OpenLibrary
@@ -12,6 +13,7 @@ from lenny.core.exceptions import (
     DatabaseInsertError,
     FileTooLargeError,
     S3UploadError,
+    UploaderNotAllowedError,
 )
 from lenny.core.opds import (
     Author,
@@ -22,9 +24,8 @@ from lenny.core.opds import (
 )
 from lenny.configs import (
     SCHEME, HOST, PORT,
-    READER_PORT,
+    READER_PORT
 )
-
 
 class LennyAPI:
 
@@ -38,12 +39,7 @@ class LennyAPI:
     
     @classmethod
     def make_manifest_url(cls, book_id):
-        return cls.make_url(f"/v1/api/items/{book_id}/manifest.json")
-
-    @classmethod
-    def make_reader_url(cls, manifest_uri):
-        path = f"/read?book={manifest_uri}"
-        return cls.make_url(path, port=READER_PORT)
+        return cls.make_url(f"/v1/api/items/{book_id}/readium/manifest.json")
 
     @classmethod
     def make_url(cls, path, port=PORT):
@@ -131,19 +127,37 @@ class LennyAPI:
             feed.publications.append(pub)
         return feed.to_dict()
 
-
-
     @classmethod
     def encrypt_file(cls, f, method="lcp"):
         # XXX Not Implemented
         return f
 
     @classmethod
+    def _resolve_ip_to_hostname(cls, client_ip: str) -> str:
+        try:
+            # Reverse DNS lookup
+            client_hostname, _, _ = socket.gethostbyaddr(client_ip)
+        except socket.herror:
+            return None
+    
+    @classmethod
+    def is_allowed_uploader(cls, client_ip: str) -> bool:
+        if client_ip in ("127.0.0.1", "::1"):
+            return True
+
+        if host := cls._resolve_ip_to_hostname(client_ip):
+            for allowed_host in ["localhost", "openlibrary.press"]:
+                if host == allowed_host or host.endswith(allowed_host):
+                    return True
+        return False
+
+    @classmethod
     def upload_file(cls, fp, filename):
         if not fp.size or fp.size > cls.MAX_FILE_SIZE:
+            one_mb = (1024 * 1024)
             raise FileTooLargeError(
-                f"{fp.filename} exceeds {cls.MAX_FILE_SIZE // (1024 * 1024)}MB."
-            )            
+                f"{fp.filename} exceeds {cls.MAX_FILE_SIZE // one_mb}MB."
+            )
 
         fp.file.seek(0)
         try:
@@ -182,8 +196,11 @@ class LennyAPI:
         return formats
 
     @classmethod
-    def add(cls, openlibrary_edition: int, files: list[UploadFile], encrypt: bool=False):
-        if Item.exists(openlibrary_edition):            
+    def add(cls, openlibrary_edition: int, files: list[UploadFile], uploader_ip:str, encrypt: bool=False):
+        if not cls.is_allowed_uploader(uploader_ip):
+            raise UploaderNotAllowedError(f"IP {uploader_ip} not in allow list")
+
+        if Item.exists(openlibrary_edition):
             raise ItemExistsError(f"Item '{openlibrary_edition}' already exists.")
 
         if formats:= cls.upload_files(files, openlibrary_edition, encrypt=encrypt):
