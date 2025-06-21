@@ -3,14 +3,15 @@ from typing import List, Generator, Optional, Dict, Any
 from urllib.parse import urlencode
 import logging
 
-from lenny.configs import LENNY_HTTP_HEADERS
+from lenny.configs import OLSYNC
 
 logger = logging.getLogger(__name__)
 
 class OpenLibrary:
     
     SEARCH_URL = "https://openlibrary.org/search.json"
-    HTTP_HEADERS = LENNY_HTTP_HEADERS
+    NOTIFY_URL = "https://openlibrary.org/notify.json"
+    HTTP_HEADERS = {"User-Agent": "LennyImportBot/1.0"}
     HTTP_TIMEOUT = 5
     DEFAULT_FIELDS = [
         'key', 'title', 'author_key', 'author_name', 'editions', 'editions.*',
@@ -70,6 +71,15 @@ class OpenLibrary:
             logger.error(f"Error searching Open Library: {e}")
             return {}
 
+    @classmethod
+    def notify_changes(cls, olid, host):
+        """Notifies openlibrary.org of changes to this instance; can be toggled with
+        OLSYNC config.
+        """
+        if OLSYNC:
+            r = requests.post(cls.NOTIFY_URL, headers=cls.HTTP_HEADERS, timeout=cls.HTTP_TIMEOUT)
+            re.raise_for_status()
+        
     
 class OpenLibraryRecord(dict):
     def __init__(self, data=None, **kwargs):
