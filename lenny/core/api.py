@@ -48,8 +48,8 @@ class LennyAPI:
         if PROXY:
             return f"{PROXY}{path}"
         url = f"{SCHEME}://{HOST}"
-        if port and port not in {80, 443}:
-            url += f":{port}"
+        if PORT not in {80, 443}:
+            url += f":{PORT}"
         return f"{url}{path}"
 
     @classmethod
