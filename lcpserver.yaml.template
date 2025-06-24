@@ -1,0 +1,21 @@
+public_base_url: ${LCP_SERVER_URL}
+port: 8081
+dsn: "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable"
+
+access:
+  username: ${LCP_SERVER_ADMIN_USER}
+  password: ${LCP_SERVER_ADMIN_PASSWORD}
+
+license:
+  provider: "http://lennyforlibrarians.org"
+  profile: "http://readium.org/lcp/basic-profile"
+  hint_link: "http://lennyforlibrarians.org/help/lcp/{license_id}"
+
+status:
+  renew_default_days: 30
+  renew_max_days: 365
+  renew_link: "http://lennyforlibrarians.org/renew/{license_id}"
+
+certificate:
+  cert: "/app/cert/cert-edrlab-test.pem"
+  private_key: "/app/cert/privkey-edrlab-test.pem"

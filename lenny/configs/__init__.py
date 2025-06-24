@@ -29,6 +29,11 @@ READER_PORT = int(os.environ.get('READER_PORT', 3000))
 READIUM_PORT = int(os.environ.get('READIUM_PORT', 15080))
 READIUM_BASE_URL = f"http://lenny_readium:{READIUM_PORT}"
 
+LCP_PORT = int(os.environ.get('LCP_PORT'))
+LCP_SERVER_URL = os.environ.get('LCP_SERVER_URL')
+LCP_SEVER_ADMIN = os.environ.get('LCP_SERVER_ADMIN')
+LCP_SERVER_PASSWORD = os.environ.get('LCP_SERVER_PASSWORD')
+
 OPTIONS = {
     'host': HOST,
     'port': PORT,
@@ -63,4 +68,10 @@ S3_CONFIG = {
     'secure': os.environ.get('S3_SECURE', 'false').lower() == 'true',
 }
 
-__all__ = ['SCHEME', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG','S3_CONFIG', 'TESTING']
+LCP_SERVER = {
+    'url': LCP_SERVER_URL,
+    'admin_username': LCP_SEVER_ADMIN,
+    'admin_password': LCP_SERVER_PASSWORD,
+}
+
+__all__ = ['SCHEME', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG','S3_CONFIG', 'LCP_SERVER', 'TESTING']

@@ -43,7 +43,7 @@ cd lenny
 ./run.sh
 ```
 
-This process will run `docker/configure.sh` and generate a gitignored `.env` file with reasonable default values, if not present.
+This process will run `docker/configure.sh` & `docker/lcpserverconfig.sh` to generate a gitignored `.env` & `lcpserver.yaml` file with reasonable default values, if not present.
 
 Navigate to localhost:8080 or whatever `$LENNY_PORT` is specified in your `.env`
 

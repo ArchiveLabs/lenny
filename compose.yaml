@@ -98,6 +98,31 @@ services:
     networks:
       - lenny_network
 
+  lcp:
+    build:
+      context: .
+      dockerfile: docker/lcp-server/Dockerfile
+    container_name: lenny_lcp
+    env_file: .env
+    ports:
+      - "8081:8081"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - LCPSERVER_CONFIG=/app/config/lcpserver.yaml
+      - LCP_PORT=${LCP_PORT:-8081}
+      - LCP_SERVER_URL=${LCP_SERVER_URL}
+      - LCP_ADMIN_USERNAME=${LCP_SERVER_ADMIN_USER}
+      - LCP_ADMIN_PASSWORD=${LCP_SERVER_ADMIN_PASSWORD}
+    volumes:
+      - ./configs/lcp/processed:/app/config:ro
+      - lcp_data:/app/data
+    networks:
+      - lenny_network
+    restart: unless-stopped
+
+
 networks:
   lenny_network:
     driver: bridge
@@ -106,3 +131,4 @@ volumes:
   db_data:
   s3_data:
   readium_data:
+  lcp_data:

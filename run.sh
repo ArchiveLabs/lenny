@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 ./docker/configure.sh
+./docker/lcpserverconfig.sh
 
 MODE=
 LOG=
@@ -123,6 +124,8 @@ function create_tunnel() {
 echo "[+] Loading .env file"
 export $(grep -v '^#' .env | xargs)
 
+echo "[+] Generated lcp-server configuration files"
+
 if [[ "$PUBLIC" == "true" ]]; then
     create_tunnel    
 fi
@@ -156,3 +159,5 @@ if [[ "$LOG" == "true" ]]; then
 elif [[ "$PUBLIC" == "true" ]]; then
     read -p "[+] Press Enter to close tunnel..."
 fi
+
+# End of script
