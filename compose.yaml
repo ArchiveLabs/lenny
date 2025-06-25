@@ -100,43 +100,56 @@ services:
       - lenny_network
 
   lcpserver:
-    image: ghcr.io/readium/readium-lcp-server:lcpserver-v1.10.0
+    build:
+      context: ./docker/readium-lcp-server
+    image: lcpserver-local:latest
     container_name: lcpserver
     ports:
       - "8989:8989"
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
-      - READIUM_LCPSERVER_CONFIG=/lcp-server/config/config.yaml
+      - READIUM_LCPSERVER_CONFIG=/srv/config/config.yaml
     volumes:
-      - ./lcp-server/config:/lcp-server/config
-      - ./lcp-server/db:/lcp-server/db
-      - ./lcp-server/cert:/lcp-server/cert
-      - ./lcp-server/storage:/lcp-server/storage
+      - ./readium/config:/srv/config
+      - ./readium/db:/srv/db
+      - ./readium/tmp:/srv/tmp
+    command: ["/usr/local/bin/lcpserver"]
     networks:
       - lenny_network
 
   lsdserver:
-    image: ghcr.io/readium/readium-lcp-server:lsdserver-v1.10.0
+    build:
+      context: ./docker/readium-lcp-server
+    image: lsdserver-local:latest
     container_name: lsdserver
     ports:
       - "8990:8990"
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
-      - READIUM_LSDSERVER_CONFIG=/lcp-server/config/lsd_config.yaml
+      - READIUM_LSDSERVER_CONFIG=/srv/config/lsd_config.yaml
     volumes:
-      - ./lcp-server/config:/lcp-server/config
-      - ./lcp-server/db:/lcp-server/db
-      - ./lcp-server/cert:/lcp-server/cert
+      - ./readium/config:/srv/config
+      - ./readium/db:/srv/db
+      - ./readium/tmp:/srv/tmp
+    command: ["/usr/local/bin/lsdserver"]
     networks:
       - lenny_network
 
   lcpencrypt:
-    image: ghcr.io/readium/readium-lcp-server:lcpencrypt-v1.10.0
+    build:
+      context: ./docker/readium-lcp-server
+    image: lcpencrypt-local:latest
     container_name: lcpencrypt
-    entrypoint: ["/bin/sh", "-c", "sleep infinity"] # For manual exec, replace with actual encryption command as needed
+    entrypoint: ["/usr/local/bin/lcpencrypt"]
     volumes:
-      - ./lcp-server/config:/lcp-server/config
-      - ./lcp-server/db:/lcp-server/db
-      - ./lcp-server/cert:/lcp-server/cert
-      - ./lcp-server/storage:/lcp-server/storage
+      - ./readium/config:/srv/config
+      - ./readium/db:/srv/db
+      - ./readium/tmp:/srv/tmp
+    command: ["sleep", "infinity"] 
     networks:
       - lenny_network
 

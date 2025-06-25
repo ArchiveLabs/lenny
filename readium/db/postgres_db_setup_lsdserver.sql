@@ -1,3 +1,6 @@
+-- Connect to the lcp database to create LSD server tables
+\c lcp
+
 CREATE TABLE license_status (
   id serial4 NOT NULL,
   status smallint NOT NULL,

@@ -4,7 +4,28 @@
 set -e
 
 ENV_FILE="./.env"
-[ -f "$ENV_FILE" ] && export $(grep -v '^#' "$ENV_FILE" | xargs)
+
+# Function to safely load environment variables from .env file
+load_env() {
+    if [ -f "$ENV_FILE" ]; then
+        # Clear any previously set variables that might interfere
+        unset LENNY_HOST LENNY_PORT LCP_HOST LCP_PORT LCP_PUBLIC_BASE_URL
+        unset LCP_DB_NAME LCP_UPDATE_USER LCP_UPDATE_PASS LCP_HTPASSWD_USER LCP_HTPASSWD_PASS
+        unset LSD_HOST LSD_PORT LSD_PUBLIC_BASE_URL LSD_NOTIFY_USER LSD_NOTIFY_PASS
+        unset DB_USER DB_HOST DB_PORT DB_PASSWORD DB_NAME
+        
+        # Load fresh values from .env file
+        set -a  # automatically export all variables
+        . "$ENV_FILE"
+        set +a  # stop automatically exporting
+    else
+        echo "Error: $ENV_FILE not found!"
+        exit 1
+    fi
+}
+
+# Load environment variables
+load_env
 
 CONFIG_DIR="./readium/config"
 
@@ -14,14 +35,19 @@ lcp:
     host: "${LCP_HOST}"
     port: ${LCP_PORT}
     public_base_url: "${LCP_PUBLIC_BASE_URL}"
-    database: "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${LCP_DB_NAME}?sslmode=disable"
-    auth_file: "/readium/config/htpasswd"
+    database: "postgres://${DB_USER}:${DB_PASSWORD}@db:${DB_PORT}/${LCP_DB_NAME}?sslmode=disable"
+    auth_file: "/srv/config/htpasswd"
+storage:
+    mode: "fs"
+    filesystem:
+        directory: "/srv/tmp"
+        url: "http://${LENNY_HOST}:${LENNY_PORT}/static"
 certificate:
-    cert: "/readium/config/cert-edrlab-test.pem"
-    private_key: "/readium/config/privkey-edrlab-test.pem"
+    cert: "/srv/config/cert-edrlab-test.pem"
+    private_key: "/srv/config/privkey-edrlab-test.pem"
 license:
     links:
-        status: "http://${LCD_HOST}:${LCD_PORT}/lcp/licenses/{license_id}/status"
+        status: "http://${LSD_HOST}:${LSD_PORT}/lcp/licenses/{license_id}/status"
         hint: "http://${LENNY_HOST}:${LENNY_PORT}/static/lcp_hint.html"
 lsd:
     public_base_url:  "${LSD_PUBLIC_BASE_URL}"
@@ -35,9 +61,9 @@ lsd:
   host: "${LSD_HOST}"
   port: ${LSD_PORT}
   public_base_url: "${LSD_PUBLIC_BASE_URL}"
-  database: "postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${LCP_DB_NAME}?sslmode=disable"
-  auth_file: "/readium/config/htpasswd"
-  license_link_url: "http://${LENNY_HOST}:${LENNY_PORT}/lcp/licenses/{license_id}"
+  database: "postgres://${DB_USER}:${DB_PASSWORD}@db:${DB_PORT}/${LCP_DB_NAME}?sslmode=disable"
+  auth_file: "/srv/config/htpasswd"
+  license_link_url: "http://${LCP_HOST}:${LCP_PORT}/lcp/licenses/{license_id}"
 license_status:
   register: true
   renew: true
@@ -51,4 +77,4 @@ lcp_update_auth:
   password: "${LCP_UPDATE_PASS}"
 EOF
 
-echo "[+]LCP config.yaml and lsd_config.yaml generated."
+echo "[+] LCP config.yaml and lsd_config.yaml generated."

@@ -58,4 +58,4 @@ for up in $USERS; do
   fi
 done
 
-echo "[+]LCP htpasswd generated"
+echo "[+] LCP htpasswd generated"

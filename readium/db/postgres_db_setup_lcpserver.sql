@@ -1,3 +1,5 @@
+-- Connect to the lcp database to create LCP server tables
+\c lcp
 
 CREATE TABLE content (
     id varchar(255) PRIMARY KEY NOT NULL,
