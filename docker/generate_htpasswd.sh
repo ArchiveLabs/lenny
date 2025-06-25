@@ -1,7 +1,5 @@
 #!/bin/sh
 # Generate an Apache htpasswd file for LCP/LSD server authentication (bcrypt)
-# Usage: ./generate_htpasswd.sh [<output_file>] [<username>:<password> ...]
-# Or: HTPASSWD_USERS="user1:pass1 user2:pass2" ./generate_htpasswd.sh [<output_file>]
 # Or: set LCP_HTPASSWD_USER and LCP_HTPASSWD_PASS in .env and run ./generate_htpasswd.sh [<output_file>]
 
 set -e
@@ -24,10 +22,8 @@ install_htpasswd() {
 
 command -v htpasswd >/dev/null 2>&1 || install_htpasswd
 
-# Default output file
 DEFAULT_OUTPUT_FILE="./readium/config/htpasswd"
 
-# If first argument is not empty and does not contain a colon, treat as output file
 if [ -n "$1" ] && ! echo "$1" | grep -q ':'; then
   OUTPUT_FILE="$1"
   shift
