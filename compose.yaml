@@ -115,6 +115,7 @@ services:
       - ./readium/config:/srv/config
       - ./readium/db:/srv/db
       - ./readium/tmp:/srv/tmp
+      - ./readium/bookshelf:/bookshelf
     command: ["/usr/local/bin/lcpserver"]
     networks:
       - lenny_network
@@ -135,6 +136,7 @@ services:
       - ./readium/config:/srv/config
       - ./readium/db:/srv/db
       - ./readium/tmp:/srv/tmp
+      - ./readium/bookshelf:/bookshelf
     command: ["/usr/local/bin/lsdserver"]
     networks:
       - lenny_network
@@ -144,12 +146,12 @@ services:
       context: ./docker/readium-lcp-server
     image: lcpencrypt-local:latest
     container_name: lcpencrypt
-    entrypoint: ["/usr/local/bin/lcpencrypt"]
     volumes:
       - ./readium/config:/srv/config
       - ./readium/db:/srv/db
       - ./readium/tmp:/srv/tmp
-    command: ["sleep", "infinity"] 
+      - ./readium/bookshelf:/bookshelf
+    command: ["tail", "-f", "/dev/null"]
     networks:
       - lenny_network
 

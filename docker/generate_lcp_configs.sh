@@ -38,13 +38,10 @@ lcp:
     database: "postgres://${DB_USER}:${DB_PASSWORD}@db:${DB_PORT}/${LCP_DB_NAME}?sslmode=disable"
     auth_file: "/srv/config/htpasswd"
 storage:
-    mode: "s3"
-    bucket: "bookshelf"
-    region: "us-east-1"
-    endpoint: "${S3_ENDPOINT}"
-    path_style: true
-    access_id: "${S3_ACCESS_KEY}"
-    secret: "${S3_SECRET_KEY}"
+    mode: "fs"
+    filesystem:
+        directory: "/srv/tmp"
+        url: "http://${LENNY_HOST}:${LENNY_PORT}/static"
 certificate:
     cert: "/srv/config/cert-edrlab-test.pem"
     private_key: "/srv/config/privkey-edrlab-test.pem"
