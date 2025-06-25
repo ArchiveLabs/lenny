@@ -102,7 +102,6 @@ services:
   lcpserver:
     build:
       context: ./docker/readium-lcp-server
-    image: lcpserver-local:latest
     container_name: lcpserver
     ports:
       - "8989:8989"
@@ -123,7 +122,6 @@ services:
   lsdserver:
     build:
       context: ./docker/readium-lcp-server
-    image: lsdserver-local:latest
     container_name: lsdserver
     ports:
       - "8990:8990"
@@ -144,7 +142,6 @@ services:
   lcpencrypt:
     build:
       context: ./docker/readium-lcp-server
-    image: lcpencrypt-local:latest
     container_name: lcpencrypt
     volumes:
       - ./readium/config:/srv/config

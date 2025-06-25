@@ -39,7 +39,7 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -contentid test-book \
   -storage /srv/tmp \
   -url http://localhost:8080/static \
-  -lcpsv http://<htpasswd-admin-key>@lcpserver:8989 \
+  -lcpsv http://<admin:+LCP_HTPASSWD_PASS-from-.env>@lcpserver:8989 \
   -verbose
 ```
 
@@ -117,7 +117,7 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -contentid my-protected-book \
   -storage /srv/tmp \
   -url http://localhost:8080/static \
-  -lcpsv http://<htpasswd-admin-key>@lcpserver:8989 \
+  -lcpsv http://<admin:+LCP_HTPASSWD_PASS-from-.env>@lcpserver:8989 \
   -verbose
 ```
 
@@ -164,7 +164,7 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -url http://localhost:8080/static \
   -filename custom-filename.epub \
   -cover true \
-  -lcpsv http://<htpasswd-admin-key>@lcpserver:8989 \
+  -lcpsv http://<admin:+LCP_HTPASSWD_PASS-from-.env>@lcpserver:8989 \
   -verbose
 ```
 
@@ -178,7 +178,7 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -contentid external-book \
   -storage /srv/tmp \
   -url http://localhost:8080/static \
-  -lcpsv http://<htpasswd-admin-key>@lcpserver:8989 \
+  -lcpsv http://<admin:+LCP_HTPASSWD_PASS-from-.env>@lcpserver:8989 \
   -verbose
 ```
 
@@ -191,7 +191,7 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
 curl http://localhost:8989/health
 
 # List available licenses (requires authentication)
-curl -u <htpasswd-admin-key> http://localhost:8989/lcpserver/licenses
+curl -u <admin:+LCP_HTPASSWD_PASS-from-.env> http://localhost:8989/lcpserver/licenses
 ```
 
 ### Check LSD Server Status
