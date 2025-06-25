@@ -35,6 +35,7 @@ services:
       - "${DB_PORT}:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
+      - ./readium/db/:/docker-entrypoint-initdb.d/:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -h localhost || exit 1"]
       interval: 5s
@@ -95,6 +96,47 @@ services:
       --s3-use-path-style
       --address 0.0.0.0
       --debug
+    networks:
+      - lenny_network
+
+  lcpserver:
+    image: ghcr.io/readium/readium-lcp-server:lcpserver-v1.10.0
+    container_name: lcpserver
+    ports:
+      - "8989:8989"
+    environment:
+      - READIUM_LCPSERVER_CONFIG=/lcp-server/config/config.yaml
+    volumes:
+      - ./lcp-server/config:/lcp-server/config
+      - ./lcp-server/db:/lcp-server/db
+      - ./lcp-server/cert:/lcp-server/cert
+      - ./lcp-server/storage:/lcp-server/storage
+    networks:
+      - lenny_network
+
+  lsdserver:
+    image: ghcr.io/readium/readium-lcp-server:lsdserver-v1.10.0
+    container_name: lsdserver
+    ports:
+      - "8990:8990"
+    environment:
+      - READIUM_LSDSERVER_CONFIG=/lcp-server/config/lsd_config.yaml
+    volumes:
+      - ./lcp-server/config:/lcp-server/config
+      - ./lcp-server/db:/lcp-server/db
+      - ./lcp-server/cert:/lcp-server/cert
+    networks:
+      - lenny_network
+
+  lcpencrypt:
+    image: ghcr.io/readium/readium-lcp-server:lcpencrypt-v1.10.0
+    container_name: lcpencrypt
+    entrypoint: ["/bin/sh", "-c", "sleep infinity"] # For manual exec, replace with actual encryption command as needed
+    volumes:
+      - ./lcp-server/config:/lcp-server/config
+      - ./lcp-server/db:/lcp-server/db
+      - ./lcp-server/cert:/lcp-server/cert
+      - ./lcp-server/storage:/lcp-server/storage
     networks:
       - lenny_network
 
