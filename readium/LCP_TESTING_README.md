@@ -39,7 +39,7 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -contentid test-book \
   -storage /srv/tmp \
   -url http://localhost:8080/static \
-  -lcpsv http://admin:zvQ4nzc5GuIUEFLtsgm0@lcpserver:8989 \
+  -lcpsv http://<HTPASSWD_USERS>:<LCP_HTPASSWD_PASS>@lcpserver:8989 \
   -verbose
 ```
 
@@ -117,7 +117,7 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -contentid my-protected-book \
   -storage /srv/tmp \
   -url http://localhost:8080/static \
-  -lcpsv http://admin:zvQ4nzc5GuIUEFLtsgm0@lcpserver:8989 \
+  -lcpsv http://<HTPASSWD_USERS>:<LCP_HTPASSWD_PASS>@lcpserver:8989 \
   -verbose
 ```
 
@@ -164,7 +164,7 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -url http://localhost:8080/static \
   -filename custom-filename.epub \
   -cover true \
-  -lcpsv http://admin:zvQ4nzc5GuIUEFLtsgm0@lcpserver:8989 \
+  -lcpsv http://<HTPASSWD_USERS>:<LCP_HTPASSWD_PASS>@lcpserver:8989 \
   -verbose
 ```
 
@@ -196,14 +196,14 @@ curl -X GET http://localhost:8990/licenses/{license-id}/status
 
 ### Authentication Examples
 
-For endpoints that require authentication, use the admin credentials:
+For endpoints that require authentication, use the <HTPASSWD_USERS> credentials:
 
 ```bash
 # Example with basic auth (if required)
-curl -u admin:zvQ4nzc5GuIUEFLtsgm0 -X GET http://localhost:8989/licenses
+curl -u <HTPASSWD_USERS>:<LCP_HTPASSWD_PASS> -X GET http://localhost:8989/licenses
 
 # Example with URL-encoded auth (for some endpoints)
-curl -X GET "http://admin:zvQ4nzc5GuIUEFLtsgm0@localhost:8989/licenses"
+curl -X GET "http://<HTPASSWD_USERS>:<LCP_HTPASSWD_PASS>@localhost:8989/licenses"
 ```
 
 ## Configuration Details
@@ -212,8 +212,8 @@ curl -X GET "http://admin:zvQ4nzc5GuIUEFLtsgm0@localhost:8989/licenses"
 
 The LCP system uses the following credentials (from `.env` file):
 
-- **LCP Server Username**: `admin`
-- **LCP Server Password**: `zvQ4nzc5GuIUEFLtsgm0`
+- **LCP Server Username**: `<HTPASSWD_USERS>`
+- **LCP Server Password**: `<LCP_HTPASSWD_PASS>`
 - **LSD Notify Username**: `VtLF3tLnRmHUPQiR`
 - **LSD Notify Password**: `MAMC1Qd66pcJ3AAwDzDnNDCsDM0SUsetiIfnrN3V`
 
