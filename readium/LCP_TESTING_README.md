@@ -25,25 +25,6 @@ This guide covers:
 * Testing license server integration
 * Troubleshooting common issues
 
-### Quick Test
-
-To quickly test LCP encryption:
-
-```bash
-# Ensure services are running
-docker compose up -d
-
-# Encrypt a test publication
-docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
-  -input /bookshelf/test.epub \
-  -contentid test-book \
-  -storage /srv/tmp \
-  -url http://localhost:8080/static \
-  -lcpsv http://<HTPASSWD_USERS>:<LCP_HTPASSWD_PASS>@lcpserver:8989 \
-  -verbose
-```
-
-
 ## Prerequisites
 
 1. Ensure all services are running:
@@ -117,7 +98,7 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -contentid my-protected-book \
   -storage /srv/tmp \
   -url http://localhost:8080/static \
-  -lcpsv http://<HTPASSWD_USERS>:<LCP_HTPASSWD_PASS>@lcpserver:8989 \
+  -lcpsv http://admin:zvQ4nzc5GuIUEFLtsgm0@lcpserver:8989 \
   -verbose
 ```
 
@@ -164,46 +145,61 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -url http://localhost:8080/static \
   -filename custom-filename.epub \
   -cover true \
-  -lcpsv http://<HTPASSWD_USERS>:<LCP_HTPASSWD_PASS>@lcpserver:8989 \
+  -lcpsv http://admin:zvQ4nzc5GuIUEFLtsgm0@lcpserver:8989 \
   -verbose
 ```
 
 ## Testing License Management
 
-### Check LCP Server API Endpoints
+### Working LCP Server API Endpoints
 
 ```bash
-# List encrypted content/publications
+# List encrypted content/publications (WORKS - no auth required)
 curl -X GET http://localhost:8989/contents
 ```
 
-```bash
-# List available licenses
-curl -X GET http://localhost:8989/licenses
+**Expected Response:**
+
+```json
+[{
+  "id":"my-protected-book",
+  "location":"http://localhost:8080/static/my-protected-book",
+  "length":139094,
+  "sha256":"663e83da428718ba0af2a2e05f47c39de1417efc343c8aa38f7de1a5d00b3f7f",
+  "type":"application/epub+zip"
+}]
 ```
 
-### Check LSD Server API Endpoints
+### Working LSD Server API Endpoints
+
+**Note:** The LSD server root endpoint (`/`) returns 404 - this is expected behavior.
 
 ```bash
-# Check LSD server base endpoint
-curl -X GET http://localhost:8990/
+# List available licenses (WORKS - requires authentication)
+curl -u "admin:zvQ4nzc5GuIUEFLtsgm0" -X GET http://localhost:8990/licenses
 ```
 
+**Expected Response:** `[]` (empty array if no licenses exist)
+
 ```bash
-# Check license status (requires valid license ID)
-curl -X GET http://localhost:8990/licenses/{license-id}/status
+# Check license status (WORKS - requires valid license ID and authentication)
+curl -u "admin:zvQ4nzc5GuIUEFLtsgm0" -X GET "http://localhost:8990/licenses/{license-id}/status"
 ```
 
-### Authentication Examples
+**Expected Response:** `404 - license Status not found` (if license doesn't exist)
 
-For endpoints that require authentication, use the <HTPASSWD_USERS> credentials:
+### Authentication Details
+
+**LSD Server Authentication:**
+
+- **Username:** `admin` (from LCP_HTPASSWD_USER)
+- **Password:** `zvQ4nzc5GuIUEFLtsgm0` (from LCP_HTPASSWD_PASS)
+
+**Working Authentication Example:**
 
 ```bash
-# Example with basic auth (if required)
-curl -u <HTPASSWD_USERS>:<LCP_HTPASSWD_PASS> -X GET http://localhost:8989/licenses
-
-# Example with URL-encoded auth (for some endpoints)
-curl -X GET "http://<HTPASSWD_USERS>:<LCP_HTPASSWD_PASS>@localhost:8989/licenses"
+# List licenses with correct authentication
+curl -u "admin:zvQ4nzc5GuIUEFLtsgm0" -X GET http://localhost:8990/licenses
 ```
 
 ## Configuration Details
@@ -212,10 +208,22 @@ curl -X GET "http://<HTPASSWD_USERS>:<LCP_HTPASSWD_PASS>@localhost:8989/licenses
 
 The LCP system uses the following credentials (from `.env` file):
 
-- **LCP Server Username**: `<HTPASSWD_USERS>`
-- **LCP Server Password**: `<LCP_HTPASSWD_PASS>`
-- **LSD Notify Username**: `VtLF3tLnRmHUPQiR`
-- **LSD Notify Password**: `MAMC1Qd66pcJ3AAwDzDnNDCsDM0SUsetiIfnrN3V`
+**For LCP Server Operations:**
+
+- **LCP Update Username**: `XBqmgJg7JHl9RowY` (LCP_UPDATE_USER)
+- **LCP Update Password**: `73WkskHlEfdMRfsnCPDW68Kzc0RGqiWtqq7rSOsF` (LCP_UPDATE_PASS)
+
+**For LSD Server API Access:**
+
+- **Username**: `admin` (LCP_HTPASSWD_USER)
+- **Password**: `zvQ4nzc5GuIUEFLtsgm0` (LCP_HTPASSWD_PASS)
+
+**For LSD Notifications:**
+
+- **LSD Notify Username**: `VtLF3tLnRmHUPQiR` (LSD_NOTIFY_USER)
+- **LSD Notify Password**: `MAMC1Qd66pcJ3AAwDzDnNDCsDM0SUsetiIfnrN3V` (LSD_NOTIFY_PASS)
+
+**Note:** The htpasswd file currently only contains the `admin` user for LSD server access.
 
 ### File Paths and Volumes
 
@@ -254,12 +262,24 @@ The `lcpencrypt` tool supports these parameters:
    - Verify the input file exists in `./readium/bookshelf/`
    - Use correct container path: `/bookshelf/filename.epub`
 
-3. **"401 Unauthorized" from LCP server**
+3. **"404 Not Found" on LSD server root endpoint**
+   - **This is expected behavior** - LSD server has no root endpoint
+   - Use specific endpoints like `/licenses` instead
+
+4. **"404 - license Status not found"**
+   - **This is normal** when no licenses exist yet
+   - Create a license first using the LCP encryption process
+
+5. **"401 Unauthorized" from LSD server**
+   - Use correct credentials: `admin:zvQ4nzc5GuIUEFLtsgm0`
+   - Ensure authentication format: `-u "admin:zvQ4nzc5GuIUEFLtsgm0"`
+
+6. **"401 Unauthorized" from LCP server**
    - Check credentials in `.env` file
    - Ensure lcpserver service is running
    - Verify authentication format: `http://username:password@lcpserver:8989`
 
-4. **Database connection issues**
+7. **Database connection issues**
    - Ensure `lenny_db` service is healthy
    - Check database configuration in `readium/config/config.yaml`
 
