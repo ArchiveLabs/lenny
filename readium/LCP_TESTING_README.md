@@ -39,7 +39,7 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -contentid test-book \
   -storage /srv/tmp \
   -url http://localhost:8080/static \
-  -lcpsv http://<admin:+LCP_HTPASSWD_PASS-from-.env>@lcpserver:8989 \
+  -lcpsv http://admin:zvQ4nzc5GuIUEFLtsgm0@lcpserver:8989 \
   -verbose
 ```
 
@@ -117,7 +117,7 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -contentid my-protected-book \
   -storage /srv/tmp \
   -url http://localhost:8080/static \
-  -lcpsv http://<admin:+LCP_HTPASSWD_PASS-from-.env>@lcpserver:8989 \
+  -lcpsv http://admin:zvQ4nzc5GuIUEFLtsgm0@lcpserver:8989 \
   -verbose
 ```
 
@@ -164,50 +164,53 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -url http://localhost:8080/static \
   -filename custom-filename.epub \
   -cover true \
-  -lcpsv http://<admin:+LCP_HTPASSWD_PASS-from-.env>@lcpserver:8989 \
-  -verbose
-```
-
-### Test with External Content
-
-You can also encrypt content from HTTP URLs:
-
-```bash
-docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
-  -input "https://www.gutenberg.org/ebooks/11.epub.noimages" \
-  -contentid external-book \
-  -storage /srv/tmp \
-  -url http://localhost:8080/static \
-  -lcpsv http://<admin:+LCP_HTPASSWD_PASS-from-.env>@lcpserver:8989 \
+  -lcpsv http://admin:zvQ4nzc5GuIUEFLtsgm0@lcpserver:8989 \
   -verbose
 ```
 
 ## Testing License Management
 
-### Check LCP Server Status
+### Check LCP Server API Endpoints
 
 ```bash
-# Test LCP server health
-curl http://localhost:8989/health
-
-# List available licenses (requires authentication)
-curl -u <admin:+LCP_HTPASSWD_PASS-from-.env> http://localhost:8989/lcpserver/licenses
+# List encrypted content/publications
+curl -X GET http://localhost:8989/contents
 ```
 
-### Check LSD Server Status
+```bash
+# List available licenses
+curl -X GET http://localhost:8989/licenses
+```
+
+### Check LSD Server API Endpoints
 
 ```bash
-# Test LSD server health
-curl http://localhost:8990/health
+# Check LSD server base endpoint
+curl -X GET http://localhost:8990/
+```
+
+```bash
+# Check license status (requires valid license ID)
+curl -X GET http://localhost:8990/licenses/{license-id}/status
+```
+
+### Authentication Examples
+
+For endpoints that require authentication, use the admin credentials:
+
+```bash
+# Example with basic auth (if required)
+curl -u admin:zvQ4nzc5GuIUEFLtsgm0 -X GET http://localhost:8989/licenses
+
+# Example with URL-encoded auth (for some endpoints)
+curl -X GET "http://admin:zvQ4nzc5GuIUEFLtsgm0@localhost:8989/licenses"
 ```
 
 ## Configuration Details
 
 ### Authentication Credentials
 
-The LCP system uses credentials (from `.env` file):
-
-**Ex:**
+The LCP system uses the following credentials (from `.env` file):
 
 - **LCP Server Username**: `admin`
 - **LCP Server Password**: `zvQ4nzc5GuIUEFLtsgm0`
