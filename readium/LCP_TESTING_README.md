@@ -149,6 +149,46 @@ docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
   -verbose
 ```
 
+## How to Create Licenses
+
+To create licenses that will appear in the `/licenses` endpoint, follow this complete workflow:
+
+### Step 1: Encrypt Content with License Creation
+
+```bash
+# This creates encrypted content AND notifies the LCP server
+docker compose exec lcpencrypt /usr/local/bin/lcpencrypt \
+  -input /bookshelf/test.epub \
+  -contentid my-licensed-book \
+  -storage /srv/tmp \
+  -url http://localhost:8080/static \
+  -lcpsv http://admin:zvQ4nzc5GuIUEFLtsgm0@lcpserver:8989 \
+  -verbose
+```
+
+**Expected Output:**
+
+```text
+Output path: /srv/tmp/my-licensed-book
+LCP Server Notification:
+{
+ "content-id": "my-licensed-book",
+ "content-encryption-key": "[base64-key]",
+ "storage-mode": 2,
+ "protected-content-location": "http://localhost:8080/static/my-licensed-book",
+ "protected-content-disposition": "test.epub",
+ "protected-content-length": [size],
+ "protected-content-sha256": "[hash]",
+ "protected-content-type": "application/epub+zip"
+}
+The LCP Server was notified
+The encryption took [X]ms
+```
+
+### Step 2: Create a License for a Specific User
+
+**Note:** Currently investigating the correct API format for license creation. The `/licenses` endpoint may remain empty until a full license is generated for a specific user through the proper LCP workflow.
+
 ## Testing License Management
 
 ### Working LCP Server API Endpoints
@@ -180,6 +220,14 @@ curl -u "admin:zvQ4nzc5GuIUEFLtsgm0" -X GET http://localhost:8990/licenses
 ```
 
 **Expected Response:** `[]` (empty array if no licenses exist)
+
+**Note:** The licenses list will be empty until you create licenses. This is normal behavior for a fresh setup.
+
+**To view formatted JSON in browser:**
+
+1. Visit: `http://localhost:8990/licenses`
+2. Enter credentials: Username: `admin`, Password: `zvQ4nzc5GuIUEFLtsgm0`
+3. Install a JSON formatter browser extension for better readability
 
 ```bash
 # Check license status (WORKS - requires valid license ID and authentication)
