@@ -187,7 +187,22 @@ The encryption took [X]ms
 
 ### Step 2: Create a License for a Specific User
 
-**Note:** Currently investigating the correct API format for license creation. The `/licenses` endpoint may remain empty until a full license is generated for a specific user through the proper LCP workflow.
+Based on the official [Readium LCP Server repository](https://github.com/readium/readium-lcp-server), licenses are created using the `/contents/{content_id}/license` endpoint. However, the current implementation requires specific user authentication and passphrase hashing that may not be fully configured.
+
+**Current Status:**
+
+- ✅ Content encryption works correctly
+- ✅ LCP and LSD servers are running and accessible
+- ✅ License creation via API works with correct payload and credentials
+- ✅ The `/licenses` endpoint returns created licenses after successful license creation
+
+**For production use, licenses would typically be created through:**
+
+1. A frontend application that handles user authentication
+2. Proper passphrase hashing using the required algorithm
+3. Integration with a Content Management System (CMS)
+
+The LCP system is **functioning correctly** for content encryption and license creation. The license creation process requires a valid API payload and working credentials.
 
 ## Testing License Management
 
@@ -198,16 +213,49 @@ The encryption took [X]ms
 curl -X GET http://localhost:8989/contents
 ```
 
+```bash
+# Fetch a specific encrypted publication (replace <content_id> as needed)
+curl -X GET http://localhost:8989/contents/<content_id>
+```
+
+```bash
+# Create a license for a user (replace <content_id> as needed)
+curl -u "admin:zvQ4nzc5GuIUEFLtsgm0" \
+  -H "Content-Type: application/json" \
+  -X POST http://localhost:8989/contents/<content_id>/license \
+  -d '{
+    "provider": "http://localhost:8989",
+    "user": {
+      "id": "test-user-1",
+      "email": "testuser@example.com",
+      "encrypted": ["email"]
+    },
+    "encryption": {
+      "user_key": {
+        "text_hint": "The title of the first book you ever read",
+        "hex_value": "4981AA0A50D563040519E9032B5D74367B1D129E239A1BA82667A57333866494"
+      }
+    },
+    "rights": {
+      "print": 10,
+      "copy": 2048,
+      "start": "2025-07-08T01:08:15+01:00",
+      "end": "2025-07-25T01:08:15+01:00"
+    }
+  }'
+```
+
 **Expected Response:**
 
+A JSON license document with a unique `id`, `links`, `user`, `rights`, and `signature` fields. Example:
+
 ```json
-[{
-  "id":"my-protected-book",
-  "location":"http://localhost:8080/static/my-protected-book",
-  "length":139094,
-  "sha256":"663e83da428718ba0af2a2e05f47c39de1417efc343c8aa38f7de1a5d00b3f7f",
-  "type":"application/epub+zip"
-}]
+{
+  "provider": "http://localhost:8989",
+  "id": "<license-id>",
+  "issued": "2025-07-08T18:13:22Z",
+  ...
+}
 ```
 
 ### Working LSD Server API Endpoints
@@ -219,7 +267,11 @@ curl -X GET http://localhost:8989/contents
 curl -u "admin:zvQ4nzc5GuIUEFLtsgm0" -X GET http://localhost:8990/licenses
 ```
 
-**Expected Response:** `[]` (empty array if no licenses exist)
+**Expected Response:**
+
+```bash
+[{"id":"c702d38f-3720-4970-978c-fa3a0e5a9799","status":"ready","updated":{"license":"2025-07-08T19:06:08Z","status":"2025-07-08T19:06:08Z"},"message":"","device_count":0}]
+```
 
 **Note:** The licenses list will be empty until you create licenses. This is normal behavior for a fresh setup.
 
@@ -234,7 +286,46 @@ curl -u "admin:zvQ4nzc5GuIUEFLtsgm0" -X GET http://localhost:8990/licenses
 curl -u "admin:zvQ4nzc5GuIUEFLtsgm0" -X GET "http://localhost:8990/licenses/{license-id}/status"
 ```
 
-**Expected Response:** `404 - license Status not found` (if license doesn't exist)
+**Expected Response:**
+
+```bash
+{
+  "id": "c702d38f-3720-4970-978c-fa3a0e5a9799",
+  "status": "ready",
+  "updated": {
+    "license": "2025-07-08T19:06:08Z",
+    "status": "2025-07-08T19:06:08Z"
+  },
+  "message": "The license is in ready state",
+  "links": [
+    {
+      "rel": "self",
+      "href": "http://lsdserver:8990/licenses/c702d38f-3720-4970-978c-fa3a0e5a9799/status",
+      "type": "application/vnd.readium.license.status.v1.0+json"
+    },
+    {
+      "rel": "license",
+      "href": "http://0.0.0.0:8989/lcp/licenses/c702d38f-3720-4970-978c-fa3a0e5a9799",
+      "type": "application/vnd.readium.lcp.license.v1.0+json"
+    },
+    {
+      "rel": "register",
+      "href": "http://lsdserver:8990/licenses/c702d38f-3720-4970-978c-fa3a0e5a9799/register{?id,name}",
+      "type": "application/vnd.readium.license.status.v1.0+json",
+      "templated": true
+    },
+    {
+      "rel": "return",
+      "href": "http://lsdserver:8990/licenses/c702d38f-3720-4970-978c-fa3a0e5a9799/return{?id,name}",
+      "type": "application/vnd.readium.license.status.v1.0+json",
+      "templated": true
+    }
+  ],
+  "potential_rights": {
+    "end": "2025-09-06T19:06:08Z"
+  }
+}
+```
 
 ### Authentication Details
 
