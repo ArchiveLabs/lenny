@@ -11,17 +11,18 @@ Let's assume our server is called lib.org...
 
 ### Borrow a Book
 ```sh
-curl -X POST "http://localhost:8080/v1/api/items/{openlibrary_edition}/borrow" \
+curl -X POST "http://localhost:8080/v1/api/items/{openlibrary_editions}/borrow" \
   -H "Content-Type: application/json" \
   -d '{"email": "user@example.com"}'
 ```
 
 ### Return a Book
 ```sh
-curl -X POST "http://localhost:8080/v1/api/items/{openlibrary_edition}/return" \
+curl -X POST "http://localhost:8080/v1/api/items/{openlibrary_editions}/return" \
   -H "Content-Type: application/json" \
   -d '{"email": "user@example.com"}'
 ```
+
 
 ### Get Borrowed Items
 ```sh
@@ -30,9 +31,22 @@ curl -X POST "http://localhost:8080/v1/api/items/borrowed" \
   -d '{"email": "user@example.com"}'
 ```
 
+### Read a Borrowed Book (Encrypted)
+> **Note:** The /read endpoint requires the email as a query parameter for encrypted books.
+```sh
+curl "http://localhost:8080/v1/api/items/{openlibrary_editions}/read?email=user@example.com"
+```
+
 ### Checkout Multiple Books
 ```sh
 curl -X POST "http://localhost:8080/v1/api/items/checkout" \
   -H "Content-Type: application/json" \
   -d '{"openlibrary_editions": [12345678, 23456789], "email": "user@example.com"}'
+```
+
+### Open Access Book Redirect
+```sh
+curl -X POST "http://localhost:8080/v1/api/item/openaccess" \
+  -H "Content-Type: application/json" \
+  -d '{"item_id": {openlibrary_editions}, "email": "user@example.com"}'
 ```

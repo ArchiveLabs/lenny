@@ -20,6 +20,7 @@ from fastapi import (
     status,
     Body,
 )
+from lenny.routes.schemas import EmailRequest, CheckoutRequest, OpenAccessRequest
 from fastapi.responses import (
     HTMLResponse,
     RedirectResponse,
@@ -56,10 +57,23 @@ async def get_opds(request: Request, offset: Optional[int]=None, limit: Optional
     return LennyAPI.opds_feed(offset=offset, limit=limit)
 
 # Redirect to the Thorium Web Reader
+from fastapi import Query
+
 @router.get("/items/{book_id}/read")
-async def redirect_reader(book_id: str, format: str = "epub"):
-    if not LennyAPI.auth_check(book_id):
-        HTTPException(status_code=400, detail="Unauthorized request")
+async def redirect_reader(book_id: int, email: str = Query(None, description="Patron's email for access check"), format: str = "epub"):
+    item = LennyAPI.get_item(book_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Book not found")
+    normalized_email = email.strip().lower() if email else None
+    if item.encrypted:
+        if not normalized_email:
+            raise HTTPException(status_code=400, detail="Email is required for encrypted books")
+        active_loan = LennyAPI.has_active_loan(book_id, normalized_email)
+        if not active_loan:
+            raise HTTPException(status_code=403, detail="No active loan found for this email")
+    elif item.is_login_required:
+        if not normalized_email or not LennyAPI.auth_check(book_id, normalized_email):
+            raise HTTPException(status_code=403, detail="Login required to read this book")
     manifest_uri = LennyAPI.make_manifest_url(book_id)
     reader_url = LennyAPI.make_url(f"/read?book={manifest_uri}")
     return RedirectResponse(url=reader_url, status_code=307)
@@ -126,25 +140,25 @@ async def upload(
 
 
 @router.post('/items/{book_id}/borrow', status_code=status.HTTP_200_OK)
-async def borrow_item(book_id: int, email: str = Body(..., embed=True)):
+async def borrow_item(book_id: int, req: EmailRequest):
     """
-    Handles the borrow process for a single book . Requires patron's email.
+    Handles the borrow process for a single book. Requires patron's email.
     Calls borrow_redirect to process the borrow and redirect logic.
     """
     try:
-        result = LennyAPI.borrow_redirect(book_id, email)
+        result = LennyAPI.borrow_redirect(book_id, req.email)
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     
 @router.post('/items/checkout', status_code=status.HTTP_200_OK)
-async def checkout_items(openlibrary_editions: List[int] = Body(...), email: str = Body(..., embed=True)):
+async def checkout_items(req: CheckoutRequest):
     """
     Handles the checkout process for multiple books. Requires patron's email and a list of openlibrary_editions.
     Calls checkout_items to process the borrow for all books.
     """
     try:
-        loans = LennyAPI.checkout_items(openlibrary_editions, email)
+        loans = LennyAPI.checkout_items(req.openlibrary_editions, req.email)
         return {
             "success": True,
             "loan_ids": [loan.id for loan in loans],
@@ -154,25 +168,25 @@ async def checkout_items(openlibrary_editions: List[int] = Body(...), email: str
         raise HTTPException(status_code=400, detail=str(e))
     
 @router.post('/items/{book_id}/return', status_code=status.HTTP_200_OK)
-async def return_item(book_id: int, email: str = Body(..., embed=True)):
+async def return_item(book_id: int, req: EmailRequest):
     """
     Handles the return process for a single borrowed book. Requires patron's email.
     Calls return_items to mark the loan as returned.
     """
     try:
-        loan = LennyAPI.return_items(book_id, email)
+        loan = LennyAPI.return_items(book_id, req.email)
         return {"success": True, "loan_id": loan.id, "returned_at": str(loan.returned_at)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     
 @router.post('/items/borrowed', status_code=status.HTTP_200_OK)
-async def get_borrowed_items(email: str = Body(..., embed=True)):
+async def get_borrowed_items(req: EmailRequest):
     """
     Returns a list of active (not returned) borrowed items for the given patron's email.
     Calls get_borrowed_items to fetch the list.
     """
     try:
-        loans = LennyAPI.get_borrowed_items(email)
+        loans = LennyAPI.get_borrowed_items(req.email)
         return {
             "success": True,
             "loans": [
@@ -185,5 +199,17 @@ async def get_borrowed_items(email: str = Body(..., embed=True)):
             ],
             "count": len(loans)
         }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+@router.post('/item/openaccess', status_code=status.HTTP_200_OK)
+async def open_access_item(req: OpenAccessRequest):
+    """
+    Handles the open access process for a single book. Requires patron's email.
+    Calls open_access to process the open access and redirect logic.
+    """
+    try:
+        result = LennyAPI.open_access(req.item_id, req.email)
+        return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
