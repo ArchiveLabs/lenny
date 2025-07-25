@@ -4,7 +4,7 @@ from fastapi import UploadFile
 from botocore.exceptions import ClientError
 import socket
 from lenny.core import db, s3
-from lenny.core.models import Item, FormatEnum
+from lenny.core.models import Item, Loan, FormatEnum
 from lenny.core.openlibrary import OpenLibrary
 from lenny.core.exceptions import (
     ItemExistsError,
@@ -54,10 +54,16 @@ class LennyAPI:
 
     @classmethod
     def auth_check(cls, book_id: int, email=None):
-        # TODO: permission/auth checks go here
-        # for userid, store/check hashed email in db?
-        return True
-    
+        # Look up the book_id in the Item table
+        # if the book is *not* encrypted, then the auth_check succeeds!
+        # i.e. the patron can be *allowed* to access this book
+        item = db.query(Item).filter(Item.openlibrary_edition == openlibrary_edition).first()
+        if not item.encrypted:
+            return True
+
+        # Currently, auth_check doesn't consider loans!
+        # Does this `email` have a loan for `book_id`?
+        return cls.has_active_loan(openlibrary_edition=book_id, email=email)
 
     @classmethod
     def _enrich_items(cls, items, fields=None, limit=None):
@@ -300,6 +306,17 @@ class LennyAPI:
             db.rollback()
             raise DatabaseInsertError(f"Failed to borrow one or more books: {str(e)}.")
 
+    @classmethod
+    def has_active_loan(cls, openlibrary_edition: int, email: str) -> bool:
+        """
+        Checks if the user has an active loan for the given book (by OpenLibrary edition).
+        Returns True if an active loan exists, False otherwise.
+        """
+        if item := Item.exists(openlibrary_edition):
+            email_hash = cls.hash_email(email)
+            return Loan.exists(item.id, email_hash) is not None
+        return False
+        
     @classmethod
     def get_borrowed_items(cls, email: str):
         """
