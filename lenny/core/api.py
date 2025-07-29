@@ -4,15 +4,19 @@ from fastapi import UploadFile
 from botocore.exceptions import ClientError
 import socket
 from lenny.core import db, s3
-from lenny.core.models import Item, FormatEnum
+from lenny.core.models import Item, Loan, FormatEnum
 from lenny.core.openlibrary import OpenLibrary
 from lenny.core.exceptions import (
+    EmailNotFoundError,
+    ExistingLoanError,
     ItemExistsError,
     InvalidFileError,
     DatabaseInsertError,
     FileTooLargeError,
+    ItemNotFoundError,
+    LoanNotFoundError,
     S3UploadError,
-    UploaderNotAllowedError,
+    UploaderNotAllowedError
 )
 from lenny.core.opds import (
     Author,
@@ -23,8 +27,10 @@ from lenny.core.opds import (
 )
 from lenny.configs import (
     SCHEME, HOST, PORT, PROXY,
-    READER_PORT
+    READER_PORT, LENNY_SEED
 )
+import datetime
+from itsdangerous import TimestampSigner, BadSignature
 
 class LennyAPI:
 
@@ -36,7 +42,8 @@ class LennyAPI:
         ".epub": FormatEnum.EPUB
     }
     Item = Item
-    
+    signer = TimestampSigner(LENNY_SEED)
+
     @classmethod
     def make_manifest_url(cls, book_id):
         return cls.make_url(f"/v1/api/items/{book_id}/readium/manifest.json")
@@ -51,13 +58,35 @@ class LennyAPI:
         if PORT and PORT not in {80, 443}:
             url += f":{PORT}"
         return f"{url}{path}"
+    
+    @classmethod
+    def make_session_cookie(cls,email: str):
+        return cls.signer.sign(email).decode('utf-8')
+    
+    @classmethod
+    def validate_session_cookie(cls, session_cookie: str):
+        """Validates the session cookie and returns the email if valid."""
+        if not session_cookie:
+            return None
+        try:
+            return cls.signer.unsign(session_cookie).decode('utf-8')
+        except BadSignature:
+            return None
 
     @classmethod
-    def auth_check(cls, book_id: int, email=None):
-        # TODO: permission/auth checks go here
-        # for userid, store/check hashed email in db?
-        return True
-    
+    def auth_check(cls, openlibrary_edition: int, email = None , session: str = None):
+        """
+        Checks if the user is allowed to access the book.
+        """
+        if item := Item.exists(openlibrary_edition):
+            if not item.is_login_required:
+                return item # open access book
+            session_email = cls.validate_session_cookie(session)
+            if not (email and session and email == session_email) and item.is_login_required:
+                return None # not authenticated user for open access book
+            return item
+        raise ItemNotFoundError(f"Item with OpenLibrary edition {openlibrary_edition} does not exist.")
+
 
     @classmethod
     def _enrich_items(cls, items, fields=None, limit=None):
@@ -236,53 +265,49 @@ class LennyAPI:
     @classmethod
     def borrow(cls, openlibrary_edition: int, email: str):
         """
-        Lending: A patron finds a book, clicks "borrow", and a Loan record is created in the LennyDB
-        after auth_check succeeds. DB will have a hash of the email and (optionally) the plain email for now.
+        Borrows a book for a patron. Returns the Loan object if successful.
         """
-        from lenny.core.models import Loan, Item
-        # Find the item by openlibrary_edition
-        item = db.query(Item).filter(Item.openlibrary_edition == openlibrary_edition).first()
-        if not item:
-            raise Exception(f"Item with openlibrary_edition {openlibrary_edition} not found.")
-        # Check auth before lending
-        if not cls.auth_check(item.id, email):
-            raise Exception("Patron is not authorized to borrow this book.")
-        email_hash = cls.hash_email(email)
-        # Only block if there is an active (not returned) loan
-        active_loan = db.query(Loan).filter(
-            Loan.item_id == item.id,
-            Loan.patron_email_hash == email_hash,
-            Loan.returned_at == None
-        ).first()
-        if active_loan:
-            raise Exception("Book is already borrowed by this patron and not yet returned.")
-        # Create a new loan record
-        try:
-            loan = Loan(
-                item_id=item.id,
-                patron_email_hash=email_hash,
-            )
-            db.add(loan)
-            db.commit()
-            return loan
-        except Exception as e:
-            db.rollback()
-            raise DatabaseInsertError(f"Failed to create loan record: {str(e)}.")
+        if item := Item.exists(openlibrary_edition):
+            if not email:
+                raise EmailNotFoundError("Email is required to borrow encrypted items.")
+            email_hash = cls.hash_email(email)
+            active_loan = db.query(Loan).filter(
+                Loan.item_id == item.id,
+                Loan.patron_email_hash == email_hash,
+                Loan.returned_at == None
+            ).first()
+            if active_loan:
+                raise ExistingLoanError("Book is already borrowed by this patron and not yet returned.")
+            try:
+                loan = Loan(
+                    item_id=item.id,
+                    patron_email_hash=email_hash,
+                )
+                db.add(loan)
+                db.commit()
+                return loan
+            except Exception as e:
+                db.rollback()
+                raise DatabaseInsertError(f"Failed to create loan record: {str(e)}.")
+        raise ItemNotFoundError(f"Item with openlibrary_edition {openlibrary_edition} not found.")
         
     @classmethod
-    def borrow_redirect(cls, openlibrary_edition: int, email: str):
+    def borrow_redirect(cls, openlibrary_edition: int, email: str = None):
         """
         Borrows a book and redirects user to the reader if successful.
+        Only creates a loan for encrypted items, as per the Item model.
         """
-        loan = cls.borrow(openlibrary_edition, email)
-        # Construct the redirect URL
-        # Find the item id for redirect
-        from lenny.core.models import Item
-        item = db.query(Item).filter(Item.openlibrary_edition == openlibrary_edition).first()
-        if not item:
-            raise Exception(f"Item with openlibrary_edition {openlibrary_edition} not found.")
-        redirect_url = cls.make_url(f"/v1/api/items/{openlibrary_edition}/read")
-        return {"success": True, "loan_id": loan.id, "redirect_url": redirect_url}
+        if item := Item.exists(openlibrary_edition):
+            redirect_url = cls.make_url(f"/v1/api/items/{openlibrary_edition}/read")
+            # If not encrypted, just allow access and redirect
+            if not item.encrypted:
+                return {"success": True, "redirect_url": redirect_url}
+            # If encrypted, require email and create a loan
+            if not email:
+                raise EmailNotFoundError("Email is required to borrow encrypted items.")
+            loan = cls.borrow(openlibrary_edition, email)
+            return {"success": True, "loan ID": loan.id, "redirect_url": redirect_url}
+        raise ItemNotFoundError(f"Item with openlibrary_edition {openlibrary_edition} not found.")
 
     @classmethod
     def checkout_items(cls, openlibrary_editions: list, email: str):
@@ -301,12 +326,22 @@ class LennyAPI:
             raise DatabaseInsertError(f"Failed to borrow one or more books: {str(e)}.")
 
     @classmethod
+    def has_active_loan(cls, openlibrary_edition: int, email: str) -> bool:
+        """
+        Checks if the user has an active loan for the given book (by OpenLibrary edition).
+        Returns True if an active loan exists, False otherwise.
+        """
+        if item := Item.exists(openlibrary_edition):
+            email_hash = cls.hash_email(email)
+            return Loan.Loan_exists(item.id, email_hash)
+        return False
+        
+    @classmethod
     def get_borrowed_items(cls, email: str):
         """
         Returns a list of active (not returned) Loan objects for the given user email.
         Ensures openlibrary_edition is set for each loan.
         """
-        from lenny.core.models import Loan, Item
         email_hash = cls.hash_email(email)
         loans = db.query(Loan).filter(
             Loan.patron_email_hash == email_hash,
@@ -327,24 +362,21 @@ class LennyAPI:
         Marks a loan as returned for the patron and book.
         Returns the updated Loan object if successful. Rolls back on error.
         """
-        from lenny.core.models import Loan, Item
         # Find the item by openlibrary_edition
-        item = db.query(Item).filter(Item.openlibrary_edition == openlibrary_edition).first()
-        if not item:
-            raise Exception(f"Item with openlibrary_edition {openlibrary_edition} not found.")
-        email_hash = cls.hash_email(email)
-        loan = db.query(Loan).filter(
-            Loan.item_id == item.id,
-            Loan.patron_email_hash == email_hash,
-            Loan.returned_at == None
-        ).first()
-        if not loan:
-            raise Exception("No active loan found for this patron and book.")
-        import datetime
-        try:
-            loan.returned_at = datetime.datetime.utcnow()
-            db.commit()
-            return loan
-        except Exception as e:
-            db.rollback()
-            raise DatabaseInsertError(f"Failed to return loan: {str(e)}.")
+        if item := Item.exists(openlibrary_edition):
+            email_hash = cls.hash_email(email)
+            loan = db.query(Loan).filter(
+                Loan.item_id == item.id,
+                Loan.patron_email_hash == email_hash,
+                Loan.returned_at == None
+            ).first()
+            if not loan:
+                raise LoanNotFoundError("No active loan found for this patron and book.")
+            try:
+                loan.returned_at = datetime.datetime.utcnow()
+                db.commit()
+                return loan
+            except Exception as e:
+                db.rollback()
+                raise DatabaseInsertError(f"Failed to return loan: {str(e)}.")
+        raise ItemNotFoundError(f"Item with openlibrary_edition {openlibrary_edition} not found.")

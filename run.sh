@@ -133,7 +133,7 @@ if [[ "$REBUILD" == "true" ]]; then
     docker compose build --no-cache
     LENNY_PROXY="$LENNY_PROXY" docker compose up -d
 else
-    LENNY_PROXY="$LENNY_PROXY" docker-compose -p lenny up -d
+    LENNY_PROXY="$LENNY_PROXY" docker compose -p lenny up -d
 fi
 
 if [[ -n "$PRELOAD" ]]; then
