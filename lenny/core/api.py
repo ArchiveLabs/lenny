@@ -223,6 +223,7 @@ class LennyAPI:
                 )
                 db.add(item)
                 db.commit()
+                OpenLibrary.notify_changes(openlibrary_edition, uploader_ip)
                 return item
             except Exception as e:
                 db.rollback()
