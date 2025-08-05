@@ -5,14 +5,17 @@ from datetime import datetime, timedelta
 from typing import Optional
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from lenny.config import LENNY_SEED
+from lenny.core.exceptions import RateLimitError
 
+OTP_VALID_MINUTES = 10
+ATTEMPT_LIMIT = 5
+ATTEMPT_WINDOW_SECONDS = 60
 SERIALIZER = URLSafeTimedSerializer(LENNY_SEED, salt="auth-cookie")
 COOKIE_TTL = 3600
 
 def create_session_cookie(email: str) -> str:
     """Returns a signed + encrypted session cookie."""
     return SERIALIZER.dumps(email)
-
 
 def get_authenticated_email(session) -> Optional[str]:
     """Retrieves and verifies email from signed cookie."""
@@ -36,15 +39,22 @@ class OTP:
     @classmethod
     def verify(cls, email: str, ts: str, otp: str) -> bool:
         if cls.is_rate_limited(email):
-            raise RateLimitException
+            raise RateLimitError
         expected_otp = cls.generate(email, ts)
         return hmac.compare_digest(otp, expected_otp)
 
     @classmethod
-    def send_email(cls, email: str):
-        now_minute = int(time.time() // 60)
-        otp = cls.generate(email, now_minute)
+    def sendmail(cls, email: str, url: str):
+        """Interim: Use OpenLibrary.org to send & rate limit otp"""
         # TODO: send otp via Open Library
+        otp = cls.generate(email)
+        params = {
+            "email": email,
+            "url": url,
+            "otp": otp,
+        }
+        headers = {"authorization": "..."}
+        # e.g. r = requests.post("https://openlibrary.org/api/auth", params=params, headers=headers)
 
     @classmethod
     def is_rate_limited(cls, email: str) -> bool:
