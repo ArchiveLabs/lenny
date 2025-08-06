@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 from itsdangerous import URLSafeTimedSerializer, BadSignature
-from lenny.config import SEED
+from lenny.configs import SEED
 from lenny.core.exceptions import RateLimitError
 
 OTP_VALID_MINUTES = 10
