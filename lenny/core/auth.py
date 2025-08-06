@@ -79,4 +79,4 @@ class OTP:
             ts = now_minute - delta
             if cls.verify(email, ts, otp):
                 return create_session_cookie(email)
-        return False
+        return None
