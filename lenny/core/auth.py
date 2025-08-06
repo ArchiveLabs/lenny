@@ -4,13 +4,13 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 from itsdangerous import URLSafeTimedSerializer, BadSignature
-from lenny.config import LENNY_SEED
+from lenny.config import SEED
 from lenny.core.exceptions import RateLimitError
 
 OTP_VALID_MINUTES = 10
 ATTEMPT_LIMIT = 5
 ATTEMPT_WINDOW_SECONDS = 60
-SERIALIZER = URLSafeTimedSerializer(LENNY_SEED, salt="auth-cookie")
+SERIALIZER = URLSafeTimedSerializer(SEED, salt="auth-cookie")
 COOKIE_TTL = 3600
 
 def create_session_cookie(email: str) -> str:
@@ -34,7 +34,7 @@ class OTP:
         now = int(time.time() // 60)
         ts = issued_minute or now
         payload = f"{email}:{ts}".encode()
-        return hmac.new(LENNY_SEED, payload, hashlib.sha256).hexdigest()
+        return hmac.new(SEED, payload, hashlib.sha256).hexdigest()
 
     @classmethod
     def verify(cls, email: str, ts: str, otp: str) -> bool:
