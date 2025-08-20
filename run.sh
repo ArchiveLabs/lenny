@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 ./docker/configure.sh
+sh docker/generate_lcp_configs.sh
+sh docker/generate_htpasswd.sh
 
 MODE=
 LOG=
