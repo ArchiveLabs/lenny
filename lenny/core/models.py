@@ -13,6 +13,7 @@ from sqlalchemy.sql import func
 from lenny.core.db import session as db, Base
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
+from sqlalchemy.ext.hybrid import unique_property
 import enum
 
 class FormatEnum(enum.Enum):
@@ -27,8 +28,30 @@ class Item(Base):
     openlibrary_edition = Column(BigInteger, nullable=False)
     encrypted = Column(Boolean, default= False, nullable=False)
     formats = Column(SQLAlchemyEnum(FormatEnum), nullable=False)
+    is_login_required = Column(Boolean, default= False, nullable=False)
+    num_lendable_total = Column(BigInteger, default=1, nullable=False)
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
+    
+    @unique_property
+    def is_readable(self):
+        """Publicly readable if not encrypted."""
+        return not self.encrypted
+    
+    @unique_property
+    def is_lendable(self):
+        """Borrow if encrypted else not."""
+        return bool(self.encrypted)
+    
+    @unique_property
+    def is_waitlistable(self):
+        """Waitlist if encrypted else not."""
+        return bool(self.encrypted)
+    
+    @unique_property
+    def is_printdisabled(self):
+        """Always print disabled."""
+        return True
 
     @classmethod
     def exists(cls, olid):
@@ -44,6 +67,14 @@ class Loan(Base):
     returned_at = Column(DateTime(timezone=True), nullable=True)
 
     item = relationship('Item', back_populates='loans')
+    
+    @classmethod 
+    def Loan_exists(cls, item_id, patron_email_hash):
+        return db.query(Loan).filter(
+            Loan.item_id == item_id,
+            Loan.patron_email_hash == patron_email_hash,
+            Loan.returned_at == None
+        ).first() is not None
 
 
 Item.loans = relationship('Loan', back_populates='item', cascade='all, delete-orphan')
