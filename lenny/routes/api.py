@@ -65,26 +65,30 @@ async def get_opds(request: Request, offset: Optional[int]=None, limit: Optional
 # Redirect to the Thorium Web Reader
 @router.get("/items/{book_id}/read")
 async def redirect_reader(request: Request,book_id: str, format: str = "epub", session: Optional[str] = Cookie(None)):
-    email = None
     if item := Item.exists(book_id):
         if item.is_login_required:
-            email = auth.verify_session_cookie(session, request.client.host)
-            if not email:
-                raise HTTPException(status_code=401, detail="Authentication required to access this item.")
-    if not LennyAPI.auth_check(book_id, email=email, session=session):
-        return JSONResponse(
-            status_code=401,
-            content={
-                "url": "/authenticate",
-                "params": ["email", "ip"],
-                "error": "Not authenticated; POST to url to get a one-time-password"
-            }
-        )
-    manifest_uri = LennyAPI.make_manifest_url(book_id)
-    # URL encode the manifest URI for use as a path parameter
-    encoded_manifest_uri = quote(manifest_uri, safe='')
-    reader_url = LennyAPI.make_url(f"/read/manifest/{encoded_manifest_uri}")
-    return RedirectResponse(url=reader_url, status_code=307)
+            # Auth-check determines if we're logged in, has borrow, or can borrow
+            # Update auth-check to call auth.verify_session_cookie()
+            # Update auth-check to return an dict of either {"success": "authenticated"} or
+            # {"error": "unauthenticated", "reasons": ["ip", "email"]
+            result = LennyAPI.auth_check(item, session=session, ip=request.client.host)
+            if result['error']:
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "url": "/authenticate",
+                            "params": result['reasons'],
+                            "error": "Not authenticated; POST to url to get a one-time-password"
+                        })
+        manifest_uri = LennyAPI.make_manifest_url(book_id)
+        # URL encode the manifest URI for use as a path parameter
+        encoded_manifest_uri = quote(manifest_uri, safe='')
+        reader_url = LennyAPI.make_url(f"/read/manifest/{encoded_manifest_uri}")
+        return RedirectResponse(url=reader_url, status_code=307)
+            
+    raise JSONResponse(status_code=401, detail={"error": "invalid_item": "reasons": ["Invalid item selected"])
+
+
 
 @router.get("/items/{book_id}/readium/manifest.json")
 async def get_manifest(request: Request, book_id: str, format: str=".epub" , session: Optional[str] = Cookie(None)):
