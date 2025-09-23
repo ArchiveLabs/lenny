@@ -68,7 +68,7 @@ class LennyAPI:
         Checks if the user is allowed to access the book.
         """
         if item := Item.exists(openlibrary_edition):
-            if  item.is_login_required:
+            if item.is_login_required:
                 return {"success": "authenticated"} if auth.verify_session_cookie(session,ip) else {"error": "unauthenticated", "reasons": ["ip", "email"]}
             else:
                 return {"success": "authenticated"} 
