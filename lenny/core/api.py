@@ -63,15 +63,15 @@ class LennyAPI:
         return f"{url}{path}"
 
     @classmethod
-    def auth_check(cls, openlibrary_edition: int, email: str = None, session: str = None):
+    def auth_check(cls, openlibrary_edition: int, session: str = None, ip: str = None):
         """
         Checks if the user is allowed to access the book.
         """
         if item := Item.exists(openlibrary_edition):
             if not item.is_login_required:
-                return item # open access book
-            if session_email := cls.validate_session_cookie(session):
-                return item if email and email == session_email else None
+                return {"success": "authenticated"}
+            else:
+                return {"success": "authenticated"} if auth.verify_session_cookie(session,ip) else {"error": "unauthenticated", "reasons": ["ip", "email"]}
         raise ItemNotFoundError(f"Item with OpenLibrary edition {openlibrary_edition} does not exist.")
     
     @classmethod

@@ -67,11 +67,7 @@ async def get_opds(request: Request, offset: Optional[int]=None, limit: Optional
 async def redirect_reader(request: Request,book_id: str, format: str = "epub", session: Optional[str] = Cookie(None)):
     if item := Item.exists(book_id):
         if item.is_login_required:
-            # Auth-check determines if we're logged in, has borrow, or can borrow
-            # Update auth-check to call auth.verify_session_cookie()
-            # Update auth-check to return an dict of either {"success": "authenticated"} or
-            # {"error": "unauthenticated", "reasons": ["ip", "email"]
-            result = LennyAPI.auth_check(item, session=session, ip=request.client.host)
+            result = LennyAPI.auth_check(item.openlibrary_edition, session=session, ip=request.client.host)
             if result['error']:
                     return JSONResponse(
                         status_code=401,
@@ -85,21 +81,24 @@ async def redirect_reader(request: Request,book_id: str, format: str = "epub", s
         encoded_manifest_uri = quote(manifest_uri, safe='')
         reader_url = LennyAPI.make_url(f"/read/manifest/{encoded_manifest_uri}")
         return RedirectResponse(url=reader_url, status_code=307)
-            
-    raise JSONResponse(status_code=401, detail={"error": "invalid_item": "reasons": ["Invalid item selected"])
+
+    raise JSONResponse(status_code=401, detail={"error": "invalid_item", "reasons": ["Invalid item selected"]})
 
 
 
 @router.get("/items/{book_id}/readium/manifest.json")
 async def get_manifest(request: Request, book_id: str, format: str=".epub" , session: Optional[str] = Cookie(None)):
-    email = None
     if item := Item.exists(book_id):
         if item.is_login_required:
-            email = auth.verify_session_cookie(session, request.client.host)
-            if not email:
-                raise HTTPException(status_code=401, detail="Authentication required to access this item.")
-    if not LennyAPI.auth_check(book_id, email=email, session=session):
-        raise HTTPException(status_code=400, detail="Unauthorized request")
+            result = LennyAPI.auth_check(item.openlibrary_edition, session=session, ip=request.client.host)
+            if result['error']:
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "url": "/authenticate",
+                            "params": result['reasons'],
+                            "error": "Not authenticated; POST to url to get a one-time-password"
+                        })
     try:
         return ReadiumAPI.get_manifest(book_id, format)
     except ItemNotFoundError as e:
@@ -108,14 +107,17 @@ async def get_manifest(request: Request, book_id: str, format: str=".epub" , ses
 # Proxy all other readium requests
 @router.get("/items/{book_id}/readium/{readium_path:path}")
 async def proxy_readium(request: Request, book_id: str, readium_path: str, format: str=".epub", session: Optional[str] = Cookie(None)):
-    email = None
     if item := Item.exists(book_id):
         if item.is_login_required:
-            email = auth.verify_session_cookie(session, request.client.host)
-            if not email:
-                raise HTTPException(status_code=401, detail="Authentication required to access this item.")
-    if not LennyAPI.auth_check(book_id, email=email, session=session):
-        raise HTTPException(status_code=400, detail="Unauthorized request")
+            result = LennyAPI.auth_check(item.openlibrary_edition, session=session, ip=request.client.host)
+            if result['error']:
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "url": "/authenticate",
+                            "params": result['reasons'],
+                            "error": "Not authenticated; POST to url to get a one-time-password"
+                        })
     readium_url = ReadiumAPI.make_url(book_id, format, readium_path)
     r = requests.get(readium_url, params=dict(request.query_params))
     if readium_url.endswith('.json'):
@@ -189,16 +191,23 @@ async def borrow_item(request: Request,  book_id: int, session: Optional[str] = 
     Requires the patron's email and checks if they are logged in.
     If not logged in, checks the OTP and sets cookies if valid.
     """
-    email = None
     if item := Item.exists(book_id):
         if item.is_login_required:
-            email = auth.verify_session_cookie(session, request.client.host)
-            if not email:
-                return RedirectResponse(url="/authenticate", status_code=303)
-    success = LennyAPI.auth_check(book_id, email=email , session=session)
-    if not success:
-        return RedirectResponse(url="/authenticate", status_code=303)
+            
+            result = LennyAPI.auth_check(item.openlibrary_edition, session=session, ip=request.client.host)
+            if result['error']:
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "url": "/authenticate",
+                            "params": result['reasons'],
+                            "error": "Not authenticated; POST to url to get a one-time-password"
+                        })
     try:
+        if session :
+            email = LennyAPI.validate_session_cookie(session)
+        else:
+            email = None
         result = LennyAPI.borrow_redirect(book_id, email)
         return result
     except Exception as e:
@@ -221,22 +230,27 @@ async def checkout_items(openlibrary_editions: List[int] = Body(...), email: str
         raise HTTPException(status_code=400, detail=str(e))
     
 @router.post('/items/{book_id}/return', status_code=status.HTTP_200_OK)
-async def return_item(request: Request, book_id: int):
+async def return_item(request: Request, book_id: int,session : Optional[str] = Cookie(None)):
     """
     Handles the return process for a single borrowed book. Requires patron's email.
     Calls return_items to mark the loan as returned.
     """
-    session = request.cookies.get("session")
-    email = auth.verify_session_cookie(session, request.client.host)
-    if not LennyAPI.auth_check(book_id, session=session):
-        return JSONResponse(
-            {
-                "auth_required": True,
-                "message": "Authentication required to return this book."
-            },
-            status_code=401
-        )
+    if item := Item.exists(book_id):
+        if item.is_login_required:
+            result = LennyAPI.auth_check(item.openlibrary_edition, session=session, ip=request.client.host)
+            if result['error']:
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "url": "/authenticate",
+                            "params": result['reasons'],
+                            "error": "Not authenticated; POST to url to get a one-time-password"
+                        })
     try:
+        if session :
+            email = LennyAPI.validate_session_cookie(session)
+        else:
+            email = None
         loan = LennyAPI.return_items(book_id, email)
         return JSONResponse({"success": True, "loan ID": loan.id, "returned_at": str(loan.returned_at)})
     except Exception as e:
@@ -253,6 +267,7 @@ async def get_borrowed_items(request: Request, session : Optional[str] = Cookie(
         return JSONResponse(
             {
                 "auth_required": True,
+                "url": "/authenticate",
                 "message": "Authentication required to view encrypted borrowed items."
             },
             status_code=401
