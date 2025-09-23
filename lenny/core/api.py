@@ -29,6 +29,7 @@ from lenny.configs import (
     SCHEME, HOST, PORT, PROXY,
     READER_PORT
 )
+from urllib.parse import quote
 
 class LennyAPI:
 
@@ -44,6 +45,11 @@ class LennyAPI:
     @classmethod
     def make_manifest_url(cls, book_id):
         return cls.make_url(f"/v1/api/items/{book_id}/readium/manifest.json")
+    
+    @classmethod
+    def encoded_manifest_url(cls, book_id):
+        manifest_uri = cls.make_manifest_url(book_id)
+        return quote(manifest_uri, safe='')
 
     @classmethod
     def make_url(cls, path):

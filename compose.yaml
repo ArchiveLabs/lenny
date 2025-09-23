@@ -64,15 +64,20 @@ services:
       - lenny_network
 
   reader:
+    container_name: lenny_reader  
     build:
       context: .
       dockerfile: docker/reader/Dockerfile
-    container_name: lenny_reader
-    env_file: .env
+      args:
+        NODE_ENV: ${NODE_ENV}
+        NEXT_PUBLIC_ENABLE_MANIFEST_ROUTE: ${NEXT_PUBLIC_ENABLE_MANIFEST_ROUTE}
+        NEXT_PUBLIC_MANIFEST_FORCE_ENABLE: ${NEXT_PUBLIC_MANIFEST_FORCE_ENABLE}
+        NEXT_PUBLIC_MANIFEST_ALLOWED_DOMAINS: ${NEXT_PUBLIC_MANIFEST_ALLOWED_DOMAINS}
     environment:
-      - NODE_ENV=${NODE_ENV}
-      - NEXT_PUBLIC_ENABLE_MANIFEST_ROUTE=${NEXT_PUBLIC_ENABLE_MANIFEST_ROUTE}
-      - NEXT_PUBLIC_MANIFEST_FORCE_ENABLE=${NEXT_PUBLIC_MANIFEST_FORCE_ENABLE}
+      NODE_ENV: ${NODE_ENV}
+      NEXT_PUBLIC_ENABLE_MANIFEST_ROUTE: ${NEXT_PUBLIC_ENABLE_MANIFEST_ROUTE}
+      NEXT_PUBLIC_MANIFEST_FORCE_ENABLE: ${NEXT_PUBLIC_MANIFEST_FORCE_ENABLE}
+      NEXT_PUBLIC_MANIFEST_ALLOWED_DOMAINS: ${NEXT_PUBLIC_MANIFEST_ALLOWED_DOMAINS}
     ports:
       - "${READER_PORT:-3000}"
     networks:
@@ -93,7 +98,7 @@ services:
     volumes:
       - readium_data:/srv/publications
     command: >
-      serve 
+      serve
       --file-directory /srv/publications
       --s3-access-key ${S3_ACCESS_KEY}
       --s3-secret-key ${S3_SECRET_KEY}

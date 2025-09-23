@@ -18,6 +18,7 @@ from lenny.core.api import LennyAPI
 from lenny.core.utils import encode_book_path
 from lenny.core.exceptions import ItemNotFoundError
 from lenny.configs import READIUM_BASE_URL
+from urllib.parse import quote
 
 class ReadiumAPI:
 
@@ -43,4 +44,6 @@ class ReadiumAPI:
                 manifest['links'][i]['href'] = LennyAPI.make_url(
                     f"/v1/api/items/{book_id}/readium/manifest.json"
                 )
+        encoded_manifest = quote(manifest['links'][i]['href'], safe='')
+        manifest['links'][i]['href'] = encoded_manifest
         return manifest

@@ -6,7 +6,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.cfg
-lenny.env
+*.env
 
 # C extensions
 *.so

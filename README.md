@@ -40,7 +40,7 @@ If you have `git` and `docker` installed on your system, the following commands 
 ```
 git clone git@github.com:ArchiveLabs/lenny.git
 cd lenny
-./run.sh
+make all
 ```
 
 This process will run `docker/configure.sh` and generate a gitignored `.env` file with reasonable default values, if not present.
@@ -75,6 +75,29 @@ curl "http://localhost:15080/$BOOK/manifest.json"
 ```
 docker compose -p lenny down
 docker compose -p lenny up -d --build
+```
+### FAQS
+
+- Everything is broken and I need to start from scratch
+```
+make tunnel rebuild start preload items=10 log
+```
+
+- If I disconnect from the internet and tunnel stops working, what do I do?
+
+  I think you should be able to:
+  ``` bash
+  make untunnel tunnel start
+  ```
+
+- I am getting database connection problems
+```bash
+make resetdb restart preload items=5
+```
+
+- I need to stop services (also kills the tunnel)
+``` bash
+make stop 
 ```
 
 ## Pilot

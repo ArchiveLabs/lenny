@@ -18,6 +18,7 @@ if [[ ! -d "lenny" ]]; then
   echo "[✓] Downloaded Lenny source code..."
 fi
 
+# TODO: Switch to docker/utils/docker_helpers
 wait_for_docker_ready() {
     echo "[+] Waiting up to 1 minute for Docker to start..."
     for i in {1..10}; do
@@ -50,8 +51,4 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 cd lenny
-./run.sh --preload
-
-
-
-
+make start preload
