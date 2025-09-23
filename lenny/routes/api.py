@@ -205,7 +205,7 @@ async def borrow_item(request: Request,  book_id: int, session: Optional[str] = 
                         })
     try:
         if session :
-            email = LennyAPI.validate_session_cookie(session)
+            email = LennyAPI.extract_email_from_session(session)
         else:
             email = None
         result = LennyAPI.borrow_redirect(book_id, email)
@@ -248,7 +248,7 @@ async def return_item(request: Request, book_id: int,session : Optional[str] = C
                         })
     try:
         if session :
-            email = LennyAPI.validate_session_cookie(session)
+            email = LennyAPI.extract_email_from_session(session)
         else:
             email = None
         loan = LennyAPI.return_items(book_id, email)

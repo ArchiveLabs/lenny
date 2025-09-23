@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import UploadFile
 from botocore.exceptions import ClientError
 import socket
+from typing import Optional
 from lenny.core import db, s3, auth
 from lenny.core.models import Item, FormatEnum, Loan
 from lenny.core.openlibrary import OpenLibrary
@@ -80,11 +81,13 @@ class LennyAPI:
         return auth.create_session_cookie(email)
 
     @classmethod
-    def validate_session_cookie(cls, session_cookie: str):
-        """Validates the session cookie and returns the email if valid."""
-        if session_cookie:
-            return auth.verify_session_cookie(session_cookie)
-        return None
+    def extract_email_from_session(cls,session: Optional[str]) -> Optional[str]:
+        if not session:
+            return None
+        try:
+            return auth.verify_session_cookie(session)
+        except Exception:
+            return None
 
     @classmethod
     def _enrich_items(cls, items, fields=None, limit=None):
