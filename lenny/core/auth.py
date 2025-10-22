@@ -92,21 +92,19 @@ class OTP:
         return len(attempts) >= EMAIL_REQUEST_LIMIT
 
     @classmethod
-    def sendmail(cls, email: str, ip_address: str, url: str):
+    def sendmail(cls, email: str, ip_address: str) -> dict:
         """Interim: Use OpenLibrary.org to send & rate limit otp"""
-        if cls.is_send_rate_limited(email):
-            raise RateLimitError("Too many attempts. Please try again later.")
-        # TODO: send otp via Open Library
-        otp = cls.generate(email, ip_address)
-        logger.info(f"Generated OTP for {email} at {ip_address}: {otp}")
-        params = {
+        return requests.post("https://openlibrary.org/api/auth", params={
             "email": email,
             "ip_address": ip_address,
-            "url": url,
-            "otp": otp,
-        }
-        headers = {"authorization": "..."}
-        # e.g. r = requests.post("https://openlibrary.org/api/auth", params=params, headers=headers)
+        }).json()
+
+    @classmethod
+    def redeem(cls, email: str, ip_address: str, otp: str) -> bool:
+        return 'success' in requests.post("https://openlibrary.org/api/auth", params={
+            "email": email,
+            "ip_address": ip_address,
+        }).json()
 
     @classmethod
     def is_rate_limited(cls, email: str) -> bool:

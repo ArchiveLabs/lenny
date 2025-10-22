@@ -207,11 +207,8 @@ async def authenticate(request: Request, response: Response):
     otp = body.get("otp")
 
     if email and not otp:
-        auth.OTP.sendmail(email, client_ip, url="/authenticate")
-        return JSONResponse({
-            "success": True,
-            "message": "OTP sent successfully."
-        })
+        return JSONResponse(auth.OTP.sendmail(email, client_ip))
+
     if session_cookie := auth.OTP.authenticate(email, otp, client_ip):
         response.set_cookie(
             key="session",
