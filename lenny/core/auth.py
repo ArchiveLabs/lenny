@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 from itsdangerous import URLSafeTimedSerializer, BadSignature
-from lenny.configs import SEED
+from lenny.configs import SEED, OTP_SERVER
 from lenny.core.exceptions import RateLimitError
 
 logger = logging.getLogger(__name__)
@@ -92,18 +92,19 @@ class OTP:
         return len(attempts) >= EMAIL_REQUEST_LIMIT
 
     @classmethod
-    def sendmail(cls, email: str, ip_address: str) -> dict:
+    def issue(cls, email: str, ip_address: str) -> dict:
         """Interim: Use OpenLibrary.org to send & rate limit otp"""
-        return requests.post("https://openlibrary.org/api/auth", params={
+        return requests.post(f"{OTP_SERVER}/account/otp/issue", params={
             "email": email,
             "ip_address": ip_address,
         }).json()
 
     @classmethod
     def redeem(cls, email: str, ip_address: str, otp: str) -> bool:
-        return 'success' in requests.post("https://openlibrary.org/api/auth", params={
+        return 'success' in requests.post(f"{OTP_SERVER}/account/otp/redeem", params={
             "email": email,
             "ip_address": ip_address,
+            "otp": otp,
         }).json()
 
     @classmethod
