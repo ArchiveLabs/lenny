@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import logging
 import time
+import requests
 from datetime import datetime, timedelta
 from typing import Optional
 from itsdangerous import URLSafeTimedSerializer, BadSignature
@@ -96,14 +97,14 @@ class OTP:
         """Interim: Use OpenLibrary.org to send & rate limit otp"""
         return requests.post(f"{OTP_SERVER}/account/otp/issue", params={
             "email": email,
-            "ip_address": ip_address,
+            "ip": ip_address,
         }).json()
 
     @classmethod
     def redeem(cls, email: str, ip_address: str, otp: str) -> bool:
         return 'success' in requests.post(f"{OTP_SERVER}/account/otp/redeem", params={
             "email": email,
-            "ip_address": ip_address,
+            "ip": ip_address,
             "otp": otp,
         }).json()
 
