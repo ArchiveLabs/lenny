@@ -11,7 +11,6 @@ from lenny.core.exceptions import RateLimitError
 
 logger = logging.getLogger(__name__)
 
-OTP_VALID_MINUTES = 10
 ATTEMPT_LIMIT = 5
 ATTEMPT_WINDOW_SECONDS = 60
 SERIALIZER = URLSafeTimedSerializer(SEED, salt="auth-cookie")
@@ -24,8 +23,8 @@ EMAIL_WINDOW_SECONDS = 300
 def create_session_cookie(email: str, ip: str = None) -> str:
     """Returns a signed + encrypted session cookie."""
     if ip:
-        # New format: serialize both email and IP
-        data = {"email": email, "ip": ip}
+        # New format: serialize both email, IP & seed
+        data = {"email": email, "ip": ip, "seed": SEED}
         return SERIALIZER.dumps(data)
     else:
         # Backward compatibility: serialize just email
@@ -68,20 +67,16 @@ class OTP:
     _attempts = {}
     _send_attempts = {}
 
-    @staticmethod
-    def generate(email: str, ip_address: str, issued_minute: Optional[int] = None) -> str:
-        """Generates an OTP for a given email, IP address, and timestamp."""
-        now = int(time.time() // 60)
-        ts = issued_minute or now
-        payload = f"{email}:{ip_address}:{ts}".encode()
-        return hmac.new(SEED.encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
     @classmethod
-    def verify(cls, email: str, ip_address: str, ts: str, otp: str) -> bool:
+    def verify(cls, email: str, ip_address: str, otp: str) -> bool:
+        """Verifies OTP for email and IP address, with rate limiting."""
         if cls.is_rate_limited(email):
             raise RateLimitError("Too many attempts. Please try again later.")
-        expected_otp = cls.generate(email, ip_address, ts)
-        return hmac.compare_digest(otp, expected_otp)
+        opt_redeemtion = cls.redeem(email, ip_address, otp)
+        if opt_redeemtion:
+            return True
+        return False 
     
     @classmethod
     def is_send_rate_limited(cls, email: str) -> bool:
@@ -102,11 +97,14 @@ class OTP:
 
     @classmethod
     def redeem(cls, email: str, ip_address: str, otp: str) -> bool:
-        return 'success' in requests.post(f"{OTP_SERVER}/account/otp/redeem", params={
+        data = requests.post(f"{OTP_SERVER}/account/otp/redeem", params={
             "email": email,
             "ip": ip_address,
             "otp": otp,
         }).json()
+        if "success" not in data:
+            return False
+        return True
 
     @classmethod
     def is_rate_limited(cls, email: str) -> bool:
@@ -126,9 +124,6 @@ class OTP:
         Validates OTP for a window of past `OTP_VALID_MINUTES` and IP address.
         Returns a signed session cookie if authentication is successful.
         """
-        now_minute = int(time.time() // 60)
-        for delta in range(OTP_VALID_MINUTES):
-            ts = now_minute - delta
-            if cls.verify(email, ip, ts, otp):
-                return create_session_cookie(email, ip)
+        if cls.verify(email, ip, otp):
+            return create_session_cookie(email, ip)
         return None
