@@ -132,6 +132,24 @@ make all
 docker exec -it lenny_api python scripts/load_open_books.py 
 ```
 
+## Making a Book Borrowable
+
+If you'd like to change the encrypted state of an existing book (e.g. with `id=1`) to test borrowing, run the following:
+
+First, exec into the api docker container and start a python session:
+```sh
+docker compose exec -it api python
+```
+
+Second, fetch the db item and set its `encrypted` state to:
+```python
+from lenny.core.models import Item, db
+i = db.query(Item).filter(Item.id == 1).first()
+i.encrypted = True
+db.add(i)
+db.commit()
+```
+
 ---
 
 ## Testing Readium Server
