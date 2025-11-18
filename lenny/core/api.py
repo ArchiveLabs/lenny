@@ -62,7 +62,6 @@ class LennyAPI:
     def make_url(cls, path):
         """Constructs a public Lenny URL that points to the public HOST and PORT
         """
-        
         return _make_url(path)
 
     @classmethod

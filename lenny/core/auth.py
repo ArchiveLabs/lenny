@@ -9,6 +9,10 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature
 from lenny.configs import SEED, OTP_SERVER
 from lenny.core.exceptions import RateLimitError
 
+logging.basicConfig(
+    level=logging.DEBUG,  # Show DEBUG and higher
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 ATTEMPT_LIMIT = 5
@@ -121,14 +125,12 @@ class OTP:
     @classmethod
     def redeem(cls, email: str, ip_address: str, otp: str) -> bool:
         with httpx.Client(http2=True) as client:
-            data = client.post(f"{OTP_SERVER}/account/otp/redeem", params={
+            return "success" in client.post(f"{OTP_SERVER}/account/otp/redeem", params={
                 "email": email,
                 "ip": ip_address,
                 "otp": otp,
             }).json()
-        if "success" not in data:
-            return False
-        return True
+	return False
 
     @classmethod
     def is_rate_limited(cls, email: str) -> bool:

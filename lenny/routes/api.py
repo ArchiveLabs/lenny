@@ -67,6 +67,9 @@ def requires_item_auth(do_function=None):
                 result = LennyAPI.auth_check(item, session=session, request=request)
                 email = result.get('email')
                 if 'error' in result:
+                    if request.query_params.get('beta'):
+                        kwargs = {"request": request, "book_id": book_id}
+                        return request.app.templates.TemplateResponse("auth.html", kwargs)
                     return JSONResponse(status_code=401, content=result)
 
                 # NB: Email and Item will be passed into any function decorated by requires_item_auth
@@ -220,22 +223,33 @@ async def upload(
 async def authenticate(request: Request, response: Response):
     client_ip = request.client.host
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except json.decoder.JSONDecodeError:
+        form = await request.form()
+        body = dict(form)
+        
     email = body.get("email")
     otp = body.get("otp")
 
+    book_id = body.get("book_id")
+    action = body.get("action", "borrow")
+    beta = body.get("beta")
+
     if email and not otp:
-        try:
-            return JSONResponse(auth.OTP.issue(email, client_ip))
-        except:
-            return JSONResponse(
-                {
-                    "success": False,
-                    "error": "Failed to issue OTP. Please try again later."
-                }
-            )
+        #try:
+        r = auth.OTP.issue(email, client_ip)
+        if beta:
+            kwargs = {"request": request, "email": email, "book_id": book_id, "action": action}
+            return request.app.templates.TemplateResponse("otp_redeem.html", kwargs)      
+        return JSONResponse(r)
+        #except:
+        #    return JSONResponse({
+        #        "success": False,
+        #        "error": "Failed to issue OTP. Please try again later."
+        #    })
     else:
-        try: 
+        try:
             session_cookie = auth.OTP.authenticate(email, otp, client_ip)
         except:
             return JSONResponse(
@@ -254,6 +268,11 @@ async def authenticate(request: Request, response: Response):
                 samesite="Lax",  # Helps mitigate CSRF
                 path="/"
             )
+            if beta and action and book_id:
+                # perform borrow & redirect
+                # XXX perform borrow
+                url = LennyAPI.make_url(f"/api/v1/items/{book_id}/{action}")
+                return RedirectResponse(url=url, status_code=307)
             return {"Authentication successful": "OTP verified.","success": True}
         else:
             return {"Authentication failed": "Invalid OTP.", "success": False}
