@@ -3,14 +3,13 @@
 """
     API routes for Lenny,
     including the root endpoint and upload endpoint.
-
-    :copyright: (c) 2015 by AUTHORS
-    :license: see LICENSE for more details
 """
+
+from lenny.app import limiter
 
 import requests
 from functools import wraps
-from typing import Optional, Generator, List
+from typing import Optional, List
 from fastapi import (
     APIRouter,
     Request,
@@ -59,8 +58,6 @@ def requires_item_auth(do_function=None):
         async def wrapper(
                 request: Request, book_id: str, format: str = "epub",
                 session: Optional[str] = Cookie(None),
-                # Email and Item will get magically injected by this decorator and
-                # passed in to the wrapped function
                 email=None, item=None, *args, **kwargs):
             if item := Item.exists(book_id):
                 result = LennyAPI.auth_check(item, session=session, request=request)
@@ -68,50 +65,58 @@ def requires_item_auth(do_function=None):
                 if 'error' in result:
                     return JSONResponse(status_code=401, content=result)
 
-                # NB: Email and Item will be passed into any function decorated by requires_item_auth
                 return await func(
-                    request=request, book_id=book_id, format=format, session=session,
-                    email=email, item=item, *args, **kwargs
+                    request=request, book_id=book_id, format=format,
+                    session=session, email=email, item=item, *args, **kwargs
                 )            
             return JSONResponse(status_code=401, content={"detail": "Invalid item"})    
         return wrapper
     return decorator
+
+
+# -------------------------------------------
+# PUBLIC ROUTES (no rate limiting)
+# -------------------------------------------
 
 @router.get('/', status_code=status.HTTP_200_OK)
 async def home(request: Request):
     kwargs = {"request": request}
     return request.app.templates.TemplateResponse("index.html", kwargs)
 
+
 @router.get("/items")
-async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limit: Optional[int]=None):
+async def get_items(fields: Optional[str] = None, offset: Optional[int] = None, limit: Optional[int] = None):
     fields = fields.split(",") if fields else None
-    return LennyAPI.get_enriched_items(
-        fields=fields, offset=offset, limit=limit
-    )
+    return LennyAPI.get_enriched_items(fields=fields, offset=offset, limit=limit)
+
 
 @router.get("/opds")
-async def get_opds(request: Request, offset: Optional[int]=None, limit: Optional[int]=None):
+async def get_opds(request: Request, offset: Optional[int] = None, limit: Optional[int] = None):
     return LennyAPI.opds_feed(offset=offset, limit=limit)
 
-# Redirect to the Thorium Web Reader
+
+# -------------------------------------------
+# READER ROUTES
+# -------------------------------------------
+
 @router.get("/items/{book_id}/read")
 @requires_item_auth()
-async def redirect_reader(request: Request, book_id: str, format: str = "epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
+async def redirect_reader(request: Request, book_id: str, format: str = "epub", session: Optional[str] = Cookie(None), item=None, email: str = ''):
     manifest_uri = LennyAPI.make_manifest_url(book_id)
-    # URL encode the manifest URI for use as a path parameter
     encoded_manifest_uri = quote(manifest_uri, safe='')
     reader_url = LennyAPI.make_url(f"/read/manifest/{encoded_manifest_uri}")
     return RedirectResponse(url=reader_url, status_code=307)
 
+
 @router.get("/items/{book_id}/readium/manifest.json")
 @requires_item_auth()
-async def get_manifest(request: Request, book_id: str, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
+async def get_manifest(request: Request, book_id: str, format: str = ".epub", session: Optional[str] = Cookie(None), item=None, email: str = ''):
     return ReadiumAPI.get_manifest(book_id, format)
 
-# Proxy all other readium requests
+
 @router.get("/items/{book_id}/readium/{readium_path:path}")
 @requires_item_auth()
-async def proxy_readium(request: Request, book_id: str, readium_path: str, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
+async def proxy_readium(request: Request, book_id: str, readium_path: str, format: str = ".epub", session: Optional[str] = Cookie(None), item=None, email: str = ''):
     readium_url = ReadiumAPI.make_url(book_id, format, readium_path)
     r = requests.get(readium_url, params=dict(request.query_params))
     if readium_url.endswith('.json'):
@@ -119,14 +124,15 @@ async def proxy_readium(request: Request, book_id: str, readium_path: str, forma
     content_type = r.headers.get("Content-Type", "application/octet-stream")
     return Response(content=r.content, media_type=content_type)
 
+
+# -------------------------------------------
+# BORROW / RETURN (rate-limited)
+# -------------------------------------------
+
 @router.post('/items/{book_id}/borrow', status_code=status.HTTP_200_OK)
+@limiter.limit("10/minute")
 @requires_item_auth()
-async def borrow_item(request: Request, book_id: int, format: str=".epub",  session: Optional[str] = Cookie(None), item=None, email: str=''):
-    """
-    Handles the borrowing of a book for a patron.
-    Requires the patron's email and checks if they are logged in.
-    If not logged in, checks the OTP and sets cookies if valid.
-    """
+async def borrow_item(request: Request, book_id: int, format: str = ".epub", session: Optional[str] = Cookie(None), item=None, email: str = ''):
     try:
         loan = item.borrow(email)
         return JSONResponse(status_code=200, content={
@@ -135,56 +141,50 @@ async def borrow_item(request: Request, book_id: int, format: str=".epub",  sess
             "loan_id": loan.id,
             "item_id": book_id
         })
-    except LoanNotRequiredError as e:
-        return JSONResponse({"error": "open_access","message": "open_access"})
-    #except Exception as e:
-    #    raise JSONResponse(status_code=400, content={"error": str(e)})
+    except LoanNotRequiredError:
+        return JSONResponse({"error": "open_access", "message": "open_access"})
+
 
 @router.post('/items/{book_id}/return', status_code=status.HTTP_200_OK)
+@limiter.limit("10/minute")
 @requires_item_auth()
-async def return_item(request: Request, book_id: int, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
-    """
-    Handles the return process for a single borrowed book. Requires patron's email.
-    Calls return_items to mark the loan as returned.
-    """
+async def return_item(request: Request, book_id: int, format: str = ".epub", session: Optional[str] = Cookie(None), item=None, email: str = ''):
     try:
         loan = item.unborrow(email)
-        return JSONResponse(content={
+        return {
             "success": True,
             "email": email,
             "loan_id": loan.id,
             "item_id": book_id
-        })        
-    except LoanNotRequiredError as e:
-        return JSONResponse({"error": "open_access","message": "open_access"})
+        }
+    except LoanNotRequiredError:
+        return JSONResponse({"error": "open_access", "message": "open_access"})
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# -------------------------------------------
+# UPLOAD (rate-limited)
+# -------------------------------------------
+
 @router.post('/upload', status_code=status.HTTP_200_OK)
+@limiter.limit("3/minute")
 async def upload(
     request: Request,
-    openlibrary_edition: int = Form(
-        ..., gt=0, description="OpenLibrary Edition ID (must be a positive integer)"),
-    encrypted: bool = Form(
-        False, description="Set to true if the file is encrypted"),
-    file: UploadFile = File(
-        ..., description="The PDF or EPUB file to upload (max 50MB)")
+    openlibrary_edition: int = Form(..., gt=0, description="OpenLibrary Edition ID"),
+    encrypted: bool = Form(False),
+    file: UploadFile = File(..., description="PDF or EPUB file (max 50MB)")
 ):
-
     try:
         item = LennyAPI.add(
             openlibrary_edition=openlibrary_edition,
-            files=[file],  # TODO expand to allow multiple
+            files=[file],
             uploader_ip=request.client.host,
-            encrypt=encrypted,
+            encrypt=encrypted
         )
-        return HTMLResponse(
-            status_code=status.HTTP_200_OK,
-            content="File uploaded successfully."
-        )
+        return HTMLResponse(status_code=200, content="File uploaded successfully.")
     except UploaderNotAllowedError as e:
-        raise HTTPException(status_code=503, details=str(e))
+        raise HTTPException(status_code=503, detail=str(e))
     except ItemExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except InvalidFileError as e:
@@ -197,11 +197,16 @@ async def upload(
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-    
+
+
+# -------------------------------------------
+# AUTHENTICATION (highly rate-limited)
+# -------------------------------------------
+
 @router.post("/authenticate")
+@limiter.limit("5/minute")
 async def authenticate(request: Request, response: Response):
     client_ip = request.client.host
-
     body = await request.json()
     email = body.get("email")
     otp = body.get("otp")
@@ -210,54 +215,49 @@ async def authenticate(request: Request, response: Response):
         try:
             return JSONResponse(auth.OTP.issue(email, client_ip))
         except:
-            return JSONResponse(
-                {
-                    "success": False,
-                    "error": "Failed to issue OTP. Please try again later."
-                }
-            )
+            return JSONResponse({
+                "success": False,
+                "error": "Failed to issue OTP. Please try again later."
+            })
+
     else:
-        try: 
+        try:
             session_cookie = auth.OTP.authenticate(email, otp, client_ip)
         except:
-            return JSONResponse(
-                {
-                    "success": False,
-                    "error": "Failed to verify OTP due to rate limiting. Please try again later."
-                }
-            )
+            return JSONResponse({
+                "success": False,
+                "error": "Failed to verify OTP due to rate limiting. Please try again later."
+            })
+
         if session_cookie:
             response.set_cookie(
                 key="session",
                 value=session_cookie,
                 max_age=auth.COOKIE_TTL,
-                httponly=True,   # Prevent JavaScript access
-                secure=True,     # Only over HTTPS in production
-                samesite="Lax",  # Helps mitigate CSRF
+                httponly=True,
+                secure=True,
+                samesite="Lax",
                 path="/"
             )
-            return {"Authentication successful": "OTP verified.","success": True}
+            return {"Authentication successful": "OTP verified.", "success": True}
         else:
             return {"Authentication failed": "Invalid OTP.", "success": False}
 
-    
-        
-    
+
+# -------------------------------------------
+# BORROWED ITEMS LIST (rate-limited)
+# -------------------------------------------
+
 @router.post('/items/borrowed', status_code=status.HTTP_200_OK)
-async def get_borrowed_items(request: Request, session : Optional[str] = Cookie(None)):
-    """
-    Returns a list of active (not returned) borrowed items for the given patron's email.
-    Calls get_borrowed_items to fetch the list.
-    """
+@limiter.limit("10/minute")
+async def get_borrowed_items(request: Request, session: Optional[str] = Cookie(None)):
     email = auth.verify_session_cookie(session, request.client.host)
     if not (email and session):
         return JSONResponse(
-            {
-                "auth_required": True,
-                "message": "Authentication required to view encrypted borrowed items."
-            },
+            {"auth_required": True, "message": "Authentication required."},
             status_code=401
         )
+
     try:
         loans = LennyAPI.get_borrowed_items(email)
         return {
@@ -266,7 +266,7 @@ async def get_borrowed_items(request: Request, session : Optional[str] = Cookie(
                 {
                     "loan_id": loan.id,
                     "openlibrary_edition": getattr(loan, "openlibrary_edition", None),
-                    "borrowed_at": str(loan.created_at),
+                    "borrowed_at": str(loan.created_at)
                 }
                 for loan in loans
             ],
@@ -276,10 +276,11 @@ async def get_borrowed_items(request: Request, session : Optional[str] = Cookie(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# -------------------------------------------
+# LOGOUT (no rate limit)
+# -------------------------------------------
+
 @router.get('/logout', status_code=status.HTTP_200_OK)
 async def logout_page(response: Response):
-    """
-    Logs out the user and sends a logout confirmation JSON response.
-    """
     response.delete_cookie(key="session", path="/")
     return {"success": True, "message": "Logged out successfully."}
