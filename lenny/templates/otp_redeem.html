@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Lenny API</title>
+  </head>
+  <body>
+    <h3>Please authenticate by providing your email to receive a one-time-password in order to access this item.</h3>
+    <form action="/v1/api/authenticate" method="POST">
+      <label>One Time Password: <input name="otp"/></label>
+      <input type="hidden" name="book_id" value="{{book_id}}" />
+      <input type="hidden" name="action" value="borrow" />
+      <input type="hidden" name="email" value="{{email}}">
+      <input type="hidden" name="beta" value="true">
+      <input type="submit"/>
+    </form>
+  </body>
+</html>

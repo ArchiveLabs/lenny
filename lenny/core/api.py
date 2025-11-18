@@ -62,7 +62,6 @@ class LennyAPI:
     def make_url(cls, path):
         """Constructs a public Lenny URL that points to the public HOST and PORT
         """
-        
         return _make_url(path)
 
     @classmethod
@@ -208,7 +207,7 @@ class LennyAPI:
             metadata=Metadata(title=cls.OPDS_TITLE),
             publications=[],
             navigation=navigation,
-        )
+        )	
         catalog.links = cls._catalog_links(offset, limit)
         return catalog.model_dump()
 
