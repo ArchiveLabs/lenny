@@ -90,10 +90,12 @@ class OTP:
     @classmethod
     def issue(cls, email: str, ip_address: str) -> dict:
         """Interim: Use OpenLibrary.org to send & rate limit otp"""
-        return requests.post(f"{OTP_SERVER}/account/otp/issue", params={
+        r = requests.post(f"{OTP_SERVER}/account/otp/issue", params={
             "email": email,
             "ip": ip_address,
-        }).json()
+        })
+        logger.error(r.content)
+        return r.json()
 
     @classmethod
     def redeem(cls, email: str, ip_address: str, otp: str) -> bool:
