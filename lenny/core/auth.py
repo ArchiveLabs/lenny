@@ -13,27 +13,36 @@ logger = logging.getLogger(__name__)
 
 ATTEMPT_LIMIT = 5
 ATTEMPT_WINDOW_SECONDS = 60
-SERIALIZER = URLSafeTimedSerializer(SEED, salt="auth-cookie")
+SERIALIZER = None  # Will be initialized lazily
 COOKIE_TTL = 604800
 
 # Send-OTP limiter: 5 per 5 minutes
 EMAIL_REQUEST_LIMIT = 5          
 EMAIL_WINDOW_SECONDS = 300   
 
+def _get_serializer():
+    """Get or initialize the SERIALIZER lazily."""
+    global SERIALIZER
+    if SERIALIZER is None:
+        SERIALIZER = URLSafeTimedSerializer(SEED, salt="auth-cookie")
+    return SERIALIZER
+
 def create_session_cookie(email: str, ip: str = None) -> str:
     """Returns a signed + encrypted session cookie."""
+    serializer = _get_serializer()
     if ip:
-        # New format: serialize both email, IP & seed
-        data = {"email": email, "ip": ip, "seed": SEED}
-        return SERIALIZER.dumps(data)
+        # New format: serialize both email and IP (no need to store SEED in cookie)
+        data = {"email": email, "ip": ip}
+        return serializer.dumps(data)
     else:
         # Backward compatibility: serialize just email
-        return SERIALIZER.dumps(email)
+        return serializer.dumps(email)
 
 def get_authenticated_email(session) -> Optional[str]:
     """Retrieves and verifies email from signed cookie."""
     try:
-        data = SERIALIZER.loads(session, max_age=COOKIE_TTL)
+        serializer = _get_serializer()
+        data = serializer.loads(session, max_age=COOKIE_TTL)
         if isinstance(data, dict):
             # New format with IP
             return data.get("email")
@@ -48,7 +57,8 @@ def verify_session_cookie(session, client_ip: str = None) -> Optional[str]:
     try:
         if not session:
             return None
-        data = SERIALIZER.loads(session, max_age=COOKIE_TTL)
+        serializer = _get_serializer()
+        data = serializer.loads(session, max_age=COOKIE_TTL)
         if isinstance(data, dict):
             # New format with IP verification
             email = data.get("email")
@@ -67,14 +77,26 @@ class OTP:
     _attempts = {}
     _send_attempts = {}
 
+    @classmethod
+    def generate(cls, email: str, issued_minute: int = None) -> str:
+        """
+        Generate a simple OTP for testing purposes.
+        This is a stub method - production OTP generation happens on the OTP server.
+        """
+        if issued_minute is None:
+            issued_minute = datetime.now().minute
+        
+        # Create a simple deterministic OTP for testing
+        otp_string = f"{email}{SEED}{issued_minute}"
+        return hashlib.sha256(otp_string.encode()).hexdigest()[:6]
 
     @classmethod
     def verify(cls, email: str, ip_address: str, otp: str) -> bool:
         """Verifies OTP for email and IP address, with rate limiting."""
         if cls.is_rate_limited(email):
             raise RateLimitError("Too many attempts. Please try again later.")
-        opt_redeemtion = cls.redeem(email, ip_address, otp)
-        if opt_redeemtion:
+        otp_redemption = cls.redeem(email, ip_address, otp)
+        if otp_redemption:
             return True
         return False 
     

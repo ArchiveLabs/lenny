@@ -51,13 +51,16 @@ def test_otp_authenticate_with_ip():
     # Generate an OTP (pass None for issued_minute to use current time)
     otp = auth.OTP.generate(email, None)
     
-    # Authenticate with IP
-    session_cookie = auth.OTP.authenticate(email, otp, ip)
-    assert session_cookie is not None
-    
-    # Verify the cookie contains both email and IP
-    verified_email = auth.verify_session_cookie(session_cookie, ip)
-    assert verified_email == email
-    
-    # Should fail with wrong IP
-    assert auth.verify_session_cookie(session_cookie, "10.0.0.2") is None
+    # Mock the external OTP redeem call to return success
+    import unittest.mock as mock
+    with mock.patch.object(auth.OTP, 'redeem', return_value=True):
+        # Authenticate with IP
+        session_cookie = auth.OTP.authenticate(email, otp, ip)
+        assert session_cookie is not None
+        
+        # Verify the cookie contains both email and IP
+        verified_email = auth.verify_session_cookie(session_cookie, ip)
+        assert verified_email == email
+        
+        # Should fail with wrong IP
+        assert auth.verify_session_cookie(session_cookie, "10.0.0.2") is None
