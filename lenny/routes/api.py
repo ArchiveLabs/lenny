@@ -189,7 +189,13 @@ async def upload(
 ):
 
     try:
-        item = LennyAPI.add(
+        if item := Item.exists(openlibrary_edition):
+            return HTMLResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content=f"Item with OpenLibrary Edition ID {openlibrary_edition} already exists."
+            )
+        if not item:
+            LennyAPI.add(
             openlibrary_edition=openlibrary_edition,
             files=[file],  # TODO expand to allow multiple
             uploader_ip=request.client.host,
@@ -201,8 +207,6 @@ async def upload(
         )
     except UploaderNotAllowedError as e:
         raise HTTPException(status_code=503, details=str(e))
-    except ItemExistsError as e:
-        raise HTTPException(status_code=409, detail=str(e))
     except InvalidFileError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except DatabaseInsertError as e:

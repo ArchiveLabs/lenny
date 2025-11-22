@@ -230,7 +230,7 @@ class LennyAPI:
     
     @classmethod
     def is_allowed_uploader(cls, client_ip: str) -> bool:
-        if client_ip in ("127.0.0.1", "::1"):
+        if client_ip in ("127.0.0.1", "::1") or client_ip.startswith("172.18.0."): # localhost and docker internal
             return True
 
         if host := cls._resolve_ip_to_hostname(client_ip):
