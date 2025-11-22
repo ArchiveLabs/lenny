@@ -106,7 +106,7 @@ async def get_opds(request: Request, book_id:int):
         content=json.dumps(
             LennyAPI.opds_feed(olid=book_id)
         ),
-        media_type="application/opds+json"
+        media_type="application/opds-publication+json"
     )
 
 # Redirect to the Thorium Web Reader
