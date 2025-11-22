@@ -91,7 +91,7 @@ async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limi
     )
 
 @router.get("/opds")
-async def get_opds(request: Request, offset: Optional[int]=None, limit: Optional[int]=None):
+async def get_opds_catalog(request: Request, offset: Optional[int]=None, limit: Optional[int]=None):
     return Response(
         content=json.dumps(
             LennyAPI.opds_feed(offset=offset, limit=limit)
@@ -99,9 +99,8 @@ async def get_opds(request: Request, offset: Optional[int]=None, limit: Optional
         media_type="application/opds+json"
     )
 
-
 @router.get("/opds/{book_id}")
-async def get_opds(request: Request, book_id:int):
+async def get_opds_item(request: Request, book_id:int):
     return Response(
         content=json.dumps(
             LennyAPI.opds_feed(olid=book_id)
@@ -135,26 +134,28 @@ async def proxy_readium(request: Request, book_id: str, readium_path: str, forma
     content_type = r.headers.get("Content-Type", "application/octet-stream")
     return Response(content=r.content, media_type=content_type)
 
-@router.post('/items/{book_id}/borrow', status_code=status.HTTP_200_OK)
+@router.post('/items/{book_id}/borrow')
 @requires_item_auth()
 async def borrow_item(request: Request, book_id: int, format: str=".epub",  session: Optional[str] = Cookie(None), item=None, email: str=''):
     """
     Handles the borrowing of a book for a patron.
-    Requires the patron's email and checks if they are logged in.
-    If not logged in, checks the OTP and sets cookies if valid.
+    Redirects to the reader after successful borrow, similar to Internet Archive.
     """
     try:
         loan = item.borrow(email)
-        return JSONResponse(status_code=200, content={
-            "success": True,
-            "email": email,
-            "loan_id": loan.id,
-            "item_id": book_id
-        })
+        # Redirect to the reader after successful borrow
+        manifest_uri = LennyAPI.make_manifest_url(book_id)
+        encoded_manifest_uri = quote(manifest_uri, safe='')
+        reader_url = LennyAPI.make_url(f"/read/manifest/{encoded_manifest_uri}")
+        return RedirectResponse(url=reader_url, status_code=303)
     except LoanNotRequiredError as e:
-        return JSONResponse({"error": "open_access","message": "open_access"})
-    #except Exception as e:
-    #    raise JSONResponse(status_code=400, content={"error": str(e)})
+        # For open-access items, redirect to read
+        manifest_uri = LennyAPI.make_manifest_url(book_id)
+        encoded_manifest_uri = quote(manifest_uri, safe='')
+        reader_url = LennyAPI.make_url(f"/read/manifest/{encoded_manifest_uri}")
+        return RedirectResponse(url=reader_url, status_code=303)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.post('/items/{book_id}/return', status_code=status.HTTP_200_OK)
 @requires_item_auth()
@@ -213,7 +214,7 @@ async def upload(
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-    
+
 @router.post("/authenticate")
 async def authenticate(request: Request, response: Response):
     client_ip = request.client.host

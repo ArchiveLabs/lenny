@@ -127,7 +127,7 @@ class LennyAPI:
         return cls._enrich_items(items, fields=fields)
 
     @classmethod
-    def opds_feed(cls, olid=None, offset=None, limit=None):
+    def opds_feed(cls, olid=None, offset=None, limit=None, query=None):
         """
         Generate an OPDS 2.0 catalog using the opds2 Catalog.create helper
         and the LennyDataProvider to transform Open Library metadata into
@@ -135,26 +135,51 @@ class LennyAPI:
         """
         limit = limit or cls.DEFAULT_LIMIT
         offset = offset or 0
-        navigation = cls._navigation(limit)
         items = cls.get_enriched_items(olid=olid, offset=offset, limit=limit)
         if not items:
-            return cls._build_empty_feed(offset=offset, limit=limit, navigation=navigation)
+            return cls._build_empty_feed(offset=offset, limit=limit, navigation=cls._navigation(limit))
         query, lenny_ids, total = cls._build_query_and_lenny_ids(items)
-        records, numfound = LennyDataProvider.search(
+        lenny_ids_map = {k: v for k, v in zip(items.keys(), lenny_ids) if v is not None}
+        lenny_ids_arg = lenny_ids_map if lenny_ids_map else None
+        
+        encryption_map = {
+            int(getattr(rec, "lenny").openlibrary_edition): getattr(rec, "lenny").encrypted
+            for rec in items.values()
+            if hasattr(rec, "lenny") and getattr(rec, "lenny") is not None
+        }
+
+        borrowable_map = {}
+        for rec in items.values():
+            if not hasattr(rec, "lenny") or getattr(rec, "lenny") is None:
+                continue
+            local_item = getattr(rec, "lenny")
+            try:
+                key = int(getattr(local_item, "openlibrary_edition"))
+                borrowable_map[key] = bool(getattr(local_item, "is_borrowable", False))
+            except Exception:
+                try:
+                    key = int(getattr(local_item, "openlibrary_edition", 0) or 0)
+                    borrowable_map[key] = True
+                except Exception:
+                    continue
+
+        search_response = LennyDataProvider.search(
             query=query,
-            numfound=total,
             limit=limit,
             offset=offset,
-            lenny_ids=lenny_ids,
+            lenny_ids=lenny_ids_arg,
+            encryption_map=encryption_map,
+            borrowable_map=borrowable_map,
         )
+        
         if olid:
-            return records[0].to_publication().model_dump()
+            return search_response.records[0].to_publication().model_dump()
+        
         catalog = Catalog.create(
-            metadata=Metadata(title=cls.OPDS_TITLE, numberOfItems=numfound),
-            publications=[r.to_publication() for r in records],
-            navigation=navigation,
+            search_response,
+            metadata=Metadata(title=cls.OPDS_TITLE), # type: ignore
+            navigation=cls._navigation(limit),
         )
-        catalog.links = cls._catalog_links(offset, limit)
         return catalog.model_dump()
 
     @classmethod
@@ -168,23 +193,13 @@ class LennyAPI:
         def _href(path: str) -> str:
             return cls.make_url(path)
         return [
-            Navigation(href=_href("/"), title="Home", type="text/html"),
+            Navigation(href=_href("/v1/api/opds"), title="Home", type="text/html", rel="alternate"),
             Navigation(
                 href=_href(f"/v1/api/opds?offset=0&limit={limit}"),
                 title="Catalog",
                 type="application/opds+json",
                 rel="collection",
             ),
-        ]
-
-    @classmethod
-    def _catalog_links(cls, offset: int, limit: int):
-        """Return standard self/next links for this catalog page."""
-        def _href(path: str) -> str:
-            return cls.make_url(path)
-        return [
-            Link(rel="self", href=_href(f"/v1/api/opds?offset={offset}&limit={limit}")),
-            Link(rel="next", href=_href(f"/v1/api/opds?offset={offset + limit}&limit={limit}")),
         ]
 
     @classmethod
@@ -204,15 +219,26 @@ class LennyAPI:
     @classmethod
     def _build_empty_feed(cls, offset: int, limit: int, navigation):
         """Create an empty OPDS catalog via opds2 with local links + navigation."""
+        from pyopds2.provider import DataProvider
+        from pyopds2.models import Metadata
+        empty_response = DataProvider.SearchResponse(
+            provider=LennyDataProvider,
+            records=[],
+            total=0,
+            query="",
+            limit=limit,
+            offset=offset,
+            sort=None,
+        )
         catalog = Catalog.create(
-            metadata=Metadata(title=cls.OPDS_TITLE),
-            publications=[],
+            empty_response,
             navigation=navigation,
         )
-        catalog.links = cls._catalog_links(offset, limit)
-        return catalog.model_dump()
-
-        catalog.links = cls._catalog_links(offset, limit)
+        try:
+            if hasattr(catalog, "metadata") and getattr(catalog.metadata, "title", None) is None:
+                catalog.metadata.title = cls.cl
+        except Exception:
+            pass
         return catalog.model_dump()
 
     @classmethod
@@ -342,7 +368,6 @@ class LennyAPI:
             Loan.patron_email_hash == email_hash,
             Loan.returned_at == None
         ).all()
-        # Always enrich with openlibrary_edition and filter out loans with missing items
         enriched_loans = []
         for loan in loans:
             item = db.query(Item).filter(Item.id == loan.item_id).first()

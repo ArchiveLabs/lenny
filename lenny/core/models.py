@@ -50,6 +50,34 @@ class Item(Base):
         return 1
 
     @hybrid_property
+    def available_copies(self):
+        """Number of copies currently available for lending.
+
+        This queries the Loan table for active (not returned) loans
+        on this item and subtracts from `num_lendable_total`.
+        """
+        try:
+            active_loans = db.query(Loan).filter(
+                Loan.item_id == getattr(self, "id"),
+                Loan.returned_at == None
+            ).count()
+            available = getattr(self, "num_lendable_total", 1) - active_loans
+            return max(0, int(available))
+        except Exception:
+            return int(getattr(self, "num_lendable_total", 1))
+
+    @hybrid_property
+    def is_borrowable(self):
+        """True if the item currently supports borrowing (has available copies).
+
+        This returns False for non-lendable items, otherwise True when
+        `available_copies > 0`.
+        """
+        if not self.is_lendable:
+            return False
+        return self.available_copies > 0
+
+    @hybrid_property
     def is_readable(self):
         """Publicly readable if not encrypted."""
         return not self.encrypted
@@ -92,7 +120,6 @@ class Item(Base):
         """
         Borrows a book for a patron. Returns the Loan object if successful.
         """
-        # If the book doesn't require auth, skip borrow
         if not self.is_login_required:
             raise LoanNotRequiredError
         
