@@ -48,18 +48,13 @@ class StandardEbooks:
         url = cls.construct_download_url(identifier)
         try:
             with httpx.Client(http2=True) as client:
-                response = client.get(
-                    url,
-                    headers=LennyClient.HTTP_HEADERS,
-                    follow_redirects=True,
-                    timeout=timeout or cls.HTTP_TIMEOUT
-                )
-                response.raise_for_status()
-                content = BytesIO()
-                for chunk in response.iter_bytes(chunk_size=8192):
-                    content.write(chunk)
-                content.seek(0)
-                return content
+                with client.stream("GET", url, headers=LennyClient.HTTP_HEADERS, follow_redirects=True, timeout=timeout or cls.HTTP_TIMEOUT) as response:
+                    response.raise_for_status()
+                    content = BytesIO()
+                    for chunk in response.iter_bytes(chunk_size=8192):
+                        content.write(chunk)
+                    content.seek(0)
+                    return content
         except httpx.HTTPError as e:
             logger.error(f"Error downloading {url}: {e}")
             return None
