@@ -44,6 +44,7 @@ from lenny.core.exceptions import (
 )
 from lenny.core.readium import ReadiumAPI
 from lenny.core.models import Item
+from lenny.core.ratelimit import limiter, RATE_LIMIT_GENERAL, RATE_LIMIT_LENIENT, RATE_LIMIT_STRICT
 from urllib.parse import quote
 
 COOKIES_MAX_AGE = 604800  # 1 week
@@ -84,7 +85,7 @@ async def home(request: Request):
     return request.app.templates.TemplateResponse("index.html", kwargs)
 
 @router.get("/items")
-async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limit: Optional[int]=None):
+async def get_items(request: Request, fields: Optional[str]=None, offset: Optional[int]=None, limit: Optional[int]=None):
     fields = fields.split(",") if fields else None
     return LennyAPI.get_enriched_items(
         fields=fields, offset=offset, limit=limit
@@ -110,6 +111,7 @@ async def get_opds_item(request: Request, book_id:int):
 
 # Redirect to the Thorium Web Reader
 @router.get("/items/{book_id}/read")
+@limiter.limit(RATE_LIMIT_GENERAL)
 @requires_item_auth()
 async def redirect_reader(request: Request, book_id: str, format: str = "epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
     manifest_uri = LennyAPI.make_manifest_url(book_id)
@@ -119,12 +121,14 @@ async def redirect_reader(request: Request, book_id: str, format: str = "epub", 
     return RedirectResponse(url=reader_url, status_code=307)
 
 @router.get("/items/{book_id}/readium/manifest.json")
+@limiter.limit(RATE_LIMIT_GENERAL)
 @requires_item_auth()
 async def get_manifest(request: Request, book_id: str, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
     return ReadiumAPI.get_manifest(book_id, format)
 
 # Proxy all other readium requests
 @router.get("/items/{book_id}/readium/{readium_path:path}")
+@limiter.limit(RATE_LIMIT_GENERAL)
 @requires_item_auth()
 async def proxy_readium(request: Request, book_id: str, readium_path: str, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
     readium_url = ReadiumAPI.make_url(book_id, format, readium_path)
@@ -135,6 +139,7 @@ async def proxy_readium(request: Request, book_id: str, readium_path: str, forma
     return Response(content=r.content, media_type=content_type)
 
 @router.post('/items/{book_id}/borrow')
+@limiter.limit(RATE_LIMIT_GENERAL)
 @requires_item_auth()
 async def borrow_item(request: Request, book_id: int, format: str=".epub",  session: Optional[str] = Cookie(None), item=None, email: str=''):
     """
@@ -158,6 +163,7 @@ async def borrow_item(request: Request, book_id: int, format: str=".epub",  sess
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post('/items/{book_id}/return', status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_LIMIT_GENERAL)
 @requires_item_auth()
 async def return_item(request: Request, book_id: int, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
     """
@@ -179,6 +185,7 @@ async def return_item(request: Request, book_id: int, format: str=".epub", sessi
 
 
 @router.post('/upload', status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_LIMIT_STRICT)
 async def upload(
     request: Request,
     openlibrary_edition: int = Form(
@@ -216,6 +223,7 @@ async def upload(
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @router.post("/authenticate")
+@limiter.limit(RATE_LIMIT_STRICT)
 async def authenticate(request: Request, response: Response):
     client_ip = request.client.host
 
@@ -261,6 +269,7 @@ async def authenticate(request: Request, response: Response):
         
     
 @router.post('/items/borrowed', status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_LIMIT_GENERAL)
 async def get_borrowed_items(request: Request, session : Optional[str] = Cookie(None)):
     """
     Returns a list of active (not returned) borrowed items for the given patron's email.
@@ -294,7 +303,8 @@ async def get_borrowed_items(request: Request, session : Optional[str] = Cookie(
 
 
 @router.get('/logout', status_code=status.HTTP_200_OK)
-async def logout_page(response: Response):
+@limiter.limit(RATE_LIMIT_GENERAL)
+async def logout_page(request: Request, response: Response):
     """
     Logs out the user and sends a logout confirmation JSON response.
     """

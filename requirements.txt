@@ -46,6 +46,7 @@ urllib3==2.4.0
 uvicorn==0.32.0
 watchfiles==1.0.5
 itsdangerous==2.2.0
+slowapi==0.1.9
 
 git+https://github.com/ArchiveLabs/pyopds2.git
 git+https://github.com/ArchiveLabs/pyopds2_openlibrary.git
