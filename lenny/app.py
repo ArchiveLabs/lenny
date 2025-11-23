@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from lenny.routes import api
 from lenny.configs import OPTIONS
 from lenny import __version__ as VERSION
+from lenny.core.ratelimit import init_rate_limiter
 
 app = FastAPI(
     title="Lenny API",
@@ -26,6 +27,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize rate limiting
+init_rate_limiter(app)
 
 app.templates = Jinja2Templates(directory="lenny/templates")
 
