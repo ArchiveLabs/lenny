@@ -13,7 +13,7 @@ Finally, you can navigate to `http:localhost:3000/read?book={readium_manifest_ur
 * e.g. `<http:localhost:3000/read?book=http://localhost:15080/czM6Ly9ib29rc2hlbGYvMzI5NDEzMTEuZXB1Yg/manifest.json>`
 """
 
-import httpx
+import requests
 from lenny.core.api import LennyAPI
 from lenny.core.utils import encode_book_path
 from lenny.core.exceptions import ItemNotFoundError
@@ -27,8 +27,7 @@ class ReadiumAPI:
         if not LennyAPI.Item.exists(book_id):
             raise ItemNotFoundError(f"Item {book_id} doesn't exist")
         readium_url = cls.make_url(book_id, format, "/manifest.json")
-        with httpx.Client(http2=True) as client:
-            manifest = client.get(readium_url).json()
+        manifest = requests.get(readium_url).json()
         return cls.patch_manifest(manifest, book_id)
     
     @classmethod
