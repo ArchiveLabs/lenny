@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 
 """
 Rate limiting configuration for Lenny.
@@ -26,21 +25,15 @@ def _parse_rate_limit(env_var: str, default: int) -> int:
     Returns the integer count of requests.
     """
     value = os.environ.get(env_var, str(default))
-    # If it's already a string like '100/minute', extract the number
     if '/' in str(value):
         return int(value.split('/')[0])
-    # Otherwise, treat as integer
     return int(value)
 
-# Rate limits as number of requests per window
-# These are converted to slowapi-compatible strings below
 # Supports both integer (100) and string ('100/minute') formats for backward compatibility
 RATE_LIMIT_GENERAL_COUNT = _parse_rate_limit('RATE_LIMIT_GENERAL', 100)
 RATE_LIMIT_LENIENT_COUNT = _parse_rate_limit('RATE_LIMIT_LENIENT', 300)
 RATE_LIMIT_STRICT_COUNT = _parse_rate_limit('RATE_LIMIT_STRICT', 20)
 
-# Convert to slowapi-compatible string format (requests per minute)
-# This ensures TTL compatibility between nginx and slowapi
 RATE_LIMIT_GENERAL = f'{RATE_LIMIT_GENERAL_COUNT}/minute'
 RATE_LIMIT_LENIENT = f'{RATE_LIMIT_LENIENT_COUNT}/minute'
 RATE_LIMIT_STRICT = f'{RATE_LIMIT_STRICT_COUNT}/minute'
