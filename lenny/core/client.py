@@ -1,4 +1,4 @@
-import requests
+import httpx
 from io import BytesIO
 from lenny.configs import LENNY_HTTP_HEADERS    
 import logging
@@ -20,17 +20,17 @@ class LennyClient:
             'file': ('book.epub', file_content, 'application/epub+zip')
         }
         try:
-            response = requests.post(
-                cls.UPLOAD_API_URL,
-                data=data_payload,
-                files=files_payload,
-                headers=cls.HTTP_HEADERS,
-                timeout=timeout,
-                verify=False
-            )
-            logger.info(f"Upload response (OLID: {olid}): {response.content}")
-            response.raise_for_status()
-            return True
-        except requests.exceptions.RequestException as e:
+            with httpx.Client(verify=False) as client:
+                response = client.post(
+                    cls.UPLOAD_API_URL,
+                    data=data_payload,
+                    files=files_payload,
+                    headers=cls.HTTP_HEADERS,
+                    timeout=timeout
+                )
+                logger.info(f"Upload response (OLID: {olid}): {response.content}")
+                response.raise_for_status()
+                return True
+        except httpx.HTTPError as e:
             logger.error(f"Error uploading to Lenny (OLID: {olid}): {e}")
             return False

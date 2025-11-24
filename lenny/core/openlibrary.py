@@ -1,4 +1,4 @@
-import requests
+import httpx
 from typing import List, Generator, Optional, Dict, Any
 from urllib.parse import urlencode
 import logging
@@ -63,10 +63,11 @@ class OpenLibrary:
     def search_json(cls, query: str, fields: Optional[List[str]] = None, page: int = 1, limit: int = 100) -> Dict[str, Any]:
         url = cls._construct_search_url(query, fields, page, limit)
         try:
-            response = requests.get(url, headers=cls.HTTP_HEADERS, timeout=cls.HTTP_TIMEOUT)
-            response.raise_for_status()
-            return response.json()
-        except (requests.exceptions.RequestException, ValueError) as e:
+            with httpx.Client() as client:
+                response = client.get(url, headers=cls.HTTP_HEADERS, timeout=cls.HTTP_TIMEOUT)
+                response.raise_for_status()
+                return response.json()
+        except (httpx.HTTPError, ValueError) as e:
             logger.error(f"Error searching Open Library: {e}")
             return {}
 

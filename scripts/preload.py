@@ -11,7 +11,7 @@ Preload README
 """
 
 import argparse
-import requests
+import httpx
 import os
 from urllib.parse import urlencode
 from io import BytesIO
@@ -47,20 +47,15 @@ class StandardEbooks:
     def download(cls, identifier: str, timeout: Optional[int] = None) -> Optional[BytesIO]:
         url = cls.construct_download_url(identifier)
         try:
-            response = requests.get(
-                url,
-                headers=LennyClient.HTTP_HEADERS,
-                allow_redirects=True,
-                timeout=timeout or cls.HTTP_TIMEOUT,
-                stream=True
-            )
-            response.raise_for_status()
-            content = BytesIO()
-            for chunk in response.iter_content(chunk_size=8192):
-                content.write(chunk)
-            content.seek(0)
-            return content
-        except requests.exceptions.RequestException as e:
+            with httpx.Client() as client:
+                with client.stream("GET", url, headers=LennyClient.HTTP_HEADERS, follow_redirects=True, timeout=timeout or cls.HTTP_TIMEOUT) as response:
+                    response.raise_for_status()
+                    content = BytesIO()
+                    for chunk in response.iter_bytes(chunk_size=8192):
+                        content.write(chunk)
+                    content.seek(0)
+                    return content
+        except httpx.HTTPError as e:
             logger.error(f"Error downloading {url}: {e}")
             return None
 
@@ -76,7 +71,6 @@ def import_standardebooks(limit=None, offset=0):
                 LennyClient.upload(int(book.olid), epub, encrypted=False)
 
 if __name__ == "__main__":
-    requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
     parser = argparse.ArgumentParser(description="Preload StandardEbooks from Open Library")
     parser.add_argument("-n", type=int, help="Number of books to preload", default=None)
     parser.add_argument("-o", type=int, help="Offset", default=0)

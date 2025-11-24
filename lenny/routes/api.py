@@ -9,7 +9,7 @@
 """
 
 import json
-import requests
+import httpx
 from functools import wraps
 from typing import Optional, Generator, List
 from fastapi import (
@@ -128,11 +128,12 @@ async def get_manifest(request: Request, book_id: str, format: str=".epub", sess
 @requires_item_auth()
 async def proxy_readium(request: Request, book_id: str, readium_path: str, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
     readium_url = ReadiumAPI.make_url(book_id, format, readium_path)
-    r = requests.get(readium_url, params=dict(request.query_params))
-    if readium_url.endswith('.json'):
-        return r.json()
-    content_type = r.headers.get("Content-Type", "application/octet-stream")
-    return Response(content=r.content, media_type=content_type)
+    with httpx.Client() as client:
+        r = client.get(readium_url, params=dict(request.query_params))
+        if readium_url.endswith('.json'):
+            return r.json()
+        content_type = r.headers.get("Content-Type", "application/octet-stream")
+        return Response(content=r.content, media_type=content_type)
 
 @router.post('/items/{book_id}/borrow')
 @requires_item_auth()
