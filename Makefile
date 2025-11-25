@@ -28,6 +28,7 @@ preload: ifup
 .PHONY: tunnel
 tunnel:
 	@bash docker/utils/tunnel.sh --start
+	@bash docker/utils/lenny.sh --rebuild-reader
 
 # Start a public tunnel (e.g., via cloudflared)
 .PHONY: untunnel
