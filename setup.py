@@ -58,7 +58,7 @@ setup(
         'SQLAlchemy==2.0.39',
         'psycopg2-binary==2.9.10',
         'pyyaml==6.0.2',
-        'requests==2.32.3',
+        'httpx[http2]==0.28.1',
         'typing_extensions==4.12.2',
         'minio==7.2.9',
     ],
