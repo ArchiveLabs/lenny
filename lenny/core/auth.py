@@ -23,6 +23,7 @@ COOKIE_TTL = 604800
 # Send-OTP limiter: 5 per 5 minutes
 EMAIL_REQUEST_LIMIT = 5          
 EMAIL_WINDOW_SECONDS = 300   
+TIMEOUT = httpx.Timeout(connect=20.0, read=5.0, write=5.0, pool=5.0)
 
 def _get_serializer():
     """Get or initialize the SERIALIZER lazily."""
@@ -116,21 +117,21 @@ class OTP:
     @classmethod
     def issue(cls, email: str, ip_address: str) -> dict:
         """Interim: Use OpenLibrary.org to send & rate limit otp"""
-        with httpx.Client(http2=True) as client:
-            return client.post(f"{OTP_SERVER}/account/otp/issue", params={
-                "email": email,
-                "ip": ip_address,
-            }).json()
+        with httpx.Client(http2=True, verify=False, timeout=TIMEOUT) as client:
+            return client.post(
+                f"{OTP_SERVER}/account/otp/issue",
+                params={"email": email, "ip": ip_address},
+                follow_redirects=False,
+            ).json()
 
     @classmethod
     def redeem(cls, email: str, ip_address: str, otp: str) -> bool:
-        with httpx.Client(http2=True) as client:
-            return "success" in client.post(f"{OTP_SERVER}/account/otp/redeem", params={
-                "email": email,
-                "ip": ip_address,
-                "otp": otp,
-            }).json()
-	return False
+        with httpx.Client(http2=True, verify=False, timeout=TIMEOUT) as client:
+            return "success" in client.post(
+                f"{OTP_SERVER}/account/otp/redeem",
+                params={"email": email, "ip": ip_address, "otp": otp},
+                follow_redirects=False
+            ).json()
 
     @classmethod
     def is_rate_limited(cls, email: str) -> bool:

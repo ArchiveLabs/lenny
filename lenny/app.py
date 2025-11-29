@@ -14,6 +14,8 @@ app = FastAPI(
     version=VERSION,
 )
 
+# App-level CORS should be a setting, as to not
+# conflict with CORS handled by nginx
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

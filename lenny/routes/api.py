@@ -12,6 +12,7 @@ import json
 import httpx
 from functools import wraps
 from typing import Optional, Generator, List
+from urllib.parse import urlencode
 from fastapi import (
     APIRouter,
     Request,
@@ -65,11 +66,16 @@ def requires_item_auth(do_function=None):
                 email=None, item=None, *args, **kwargs):
             if item := Item.exists(book_id):
                 result = LennyAPI.auth_check(item, session=session, request=request)
-                email = result.get('email')
+                email = result.get('email', '')
                 if 'error' in result:
                     if request.query_params.get('beta'):
-                        kwargs = {"request": request, "book_id": book_id}
-                        return request.app.templates.TemplateResponse("auth.html", kwargs)
+                        params ={
+                            "book_id": book_id,
+                            "email": email,
+                            "otp": request.query_params.get('otp', ''),
+                        }
+                        url = LennyAPI.make_url('/v1/api/authenticate') + f"?{urlencode(params)}"
+                        return RedirectResponse(url=url, status_code=307)
                     return JSONResponse(status_code=401, content=result)
 
                 # NB: Email and Item will be passed into any function decorated by requires_item_auth
@@ -137,6 +143,7 @@ async def proxy_readium(request: Request, book_id: str, readium_path: str, forma
             return r.json()
         content_type = r.headers.get("Content-Type", "application/octet-stream")
         return Response(content=r.content, media_type=content_type)
+
 
 @router.post('/items/{book_id}/borrow')
 @requires_item_auth()
@@ -219,6 +226,50 @@ async def upload(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
+
+@router.get("/profile")
+async def profile(session: str = Cookie(None)):
+    """
+    Returns the logged-in user's email if session is valid, else null.
+    """
+    email = session and auth.verify_session_cookie(session)
+    loans = [{
+        "loan_id": loan.id,
+        "openlibrary_edition": getattr(loan, "openlibrary_edition", None),
+        "borrowed_at": str(loan.created_at),
+    } for loan in LennyAPI.get_borrowed_items(email)] if email else []
+    return JSONResponse({
+        "logged_in": bool(email),
+        "email": email,
+        "loans": loans,
+        "loan_count": len(loans)
+    })
+
+
+@router.api_route("/logout", methods=["GET", "POST"])
+async def logout(response: Response, session: str = Cookie(None)):
+    response.delete_cookie(
+        key="session",
+        path="/",
+        secure=True,
+        samesite="Lax"
+    )
+    return {"success": True, "message": "Logged out successfully"}
+
+
+@router.get("/authenticate")
+async def authenticate_ui(request: Request, response: Response):
+    book_id = request.query_params.get("book_id")
+    email = request.query_params.get("email")
+    otp = request.query_params.get("otp")
+    action = request.query_params.get("action", "borrow")
+
+    kwargs = {"request": request, "email": email, "book_id": book_id, "action": action, "beta": True}
+    if email:
+        return request.app.templates.TemplateResponse("otp_redeem.html", kwargs)
+    return request.app.templates.TemplateResponse("otp_issue.html", kwargs)
+
+
 @router.post("/authenticate")
 async def authenticate(request: Request, response: Response):
     client_ip = request.client.host
@@ -237,86 +288,46 @@ async def authenticate(request: Request, response: Response):
     beta = body.get("beta")
 
     if email and not otp:
-        #try:
-        r = auth.OTP.issue(email, client_ip)
-        if beta:
-            kwargs = {"request": request, "email": email, "book_id": book_id, "action": action}
-            return request.app.templates.TemplateResponse("otp_redeem.html", kwargs)      
-        return JSONResponse(r)
-        #except:
-        #    return JSONResponse({
-        #        "success": False,
-        #        "error": "Failed to issue OTP. Please try again later."
-        #    })
-    else:
         try:
-            session_cookie = auth.OTP.authenticate(email, otp, client_ip)
+            r = auth.OTP.issue(email, client_ip)
+            if beta:
+                params = {
+                    "email": email,
+                    "book_id": book_id,
+                }
+                url = LennyAPI.make_url("/v1/api/authenticate") + f"?{urlencode(params)}"
+                return RedirectResponse(url=url, status_code=303)
+            return JSONResponse(r)
         except:
+            return JSONResponse({
+                "success": False,
+                "error": "Failed to issue OTP. Please try again later."
+            })
+    elif email and otp:
+        if not (session_cookie := auth.OTP.authenticate(email, otp, client_ip)):
             return JSONResponse(
                 {
                     "success": False,
-                    "error": "Failed to verify OTP due to rate limiting. Please try again later."
+                    "error": "Authentication failed",
                 }
             )
-        if session_cookie:
-            response.set_cookie(
-                key="session",
-                value=session_cookie,
-                max_age=auth.COOKIE_TTL,
-                httponly=True,   # Prevent JavaScript access
-                secure=True,     # Only over HTTPS in production
-                samesite="Lax",  # Helps mitigate CSRF
-                path="/"
+
+        if beta and action and book_id and (item := Item.exists(book_id)):
+            loan = item.borrow(email)
+            response = RedirectResponse(
+                url=LennyAPI.make_url(f"/v1/api/items/{book_id}/read"),
+                status_code=303
             )
-            if beta and action and book_id:
-                # perform borrow & redirect
-                # XXX perform borrow
-                url = LennyAPI.make_url(f"/api/v1/items/{book_id}/{action}")
-                return RedirectResponse(url=url, status_code=307)
-            return {"Authentication successful": "OTP verified.","success": True}
         else:
-            return {"Authentication failed": "Invalid OTP.", "success": False}
-
-    
-        
-    
-@router.post('/items/borrowed', status_code=status.HTTP_200_OK)
-async def get_borrowed_items(request: Request, session : Optional[str] = Cookie(None)):
-    """
-    Returns a list of active (not returned) borrowed items for the given patron's email.
-    Calls get_borrowed_items to fetch the list.
-    """
-    email = auth.verify_session_cookie(session, request.client.host)
-    if not (email and session):
-        return JSONResponse(
-            {
-                "auth_required": True,
-                "message": "Authentication required to view encrypted borrowed items."
-            },
-            status_code=401
+            response = JSONResponse({"Authentication successful": "OTP verified.","success": True})
+        response.set_cookie(
+            key="session",
+            value=session_cookie,
+            max_age=auth.COOKIE_TTL,
+            httponly=True,   # Prevent JavaScript access
+            secure=True,     # Only over HTTPS in production
+            samesite="Lax",  # Helps mitigate CSRF
+            path="/"
         )
-    try:
-        loans = LennyAPI.get_borrowed_items(email)
-        return {
-            "success": True,
-            "loans": [
-                {
-                    "loan_id": loan.id,
-                    "openlibrary_edition": getattr(loan, "openlibrary_edition", None),
-                    "borrowed_at": str(loan.created_at),
-                }
-                for loan in loans
-            ],
-            "count": len(loans)
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return response
 
-
-@router.get('/logout', status_code=status.HTTP_200_OK)
-async def logout_page(response: Response):
-    """
-    Logs out the user and sends a logout confirmation JSON response.
-    """
-    response.delete_cookie(key="session", path="/")
-    return {"success": True, "message": "Logged out successfully."}
