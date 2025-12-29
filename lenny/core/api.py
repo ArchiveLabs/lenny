@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import UploadFile, Request
 from botocore.exceptions import ClientError
 import socket
-from pyopds2_lenny import LennyDataProvider
+from pyopds2_lenny import LennyDataProvider, LennyDataRecord
 from pyopds2 import Catalog, Metadata
 from pyopds2.models import Link, Navigation
 from lenny.core import db, s3, auth
@@ -24,7 +24,7 @@ from lenny.core.exceptions import (
 
 from lenny.configs import (
     SCHEME, HOST, PORT, PROXY,
-    READER_PORT
+    READER_PORT, LOAN_LIMIT
 )
 from urllib.parse import quote
 
@@ -75,13 +75,15 @@ class LennyAPI:
         redir = request.url.path
 
         if item.is_login_required:
-            if not (email := auth.verify_session_cookie(session, ip)):
+            email_data = auth.verify_session_cookie(session, ip)
+            if not email_data:
                 return {
                     "error": "unauthenticated",
                     "url": f"/v1/api/authenticate?redir={redir}",
                     "required": ["email"],
                     "message": "Not authenticated; POST to url to get a one-time-password"
                 }
+            email = email_data.get("email") if isinstance(email_data, dict) else email_data
             success['email'] = email
             if not (loan := item.borrow(email)):
                 return {
@@ -100,7 +102,8 @@ class LennyAPI:
     def validate_session_cookie(cls, session_cookie: str):
         """Validates the session cookie and returns the email if valid."""
         if session_cookie:
-            return auth.verify_session_cookie(session_cookie)
+            email_data = auth.verify_session_cookie(session_cookie)
+            return email_data.get("email") if isinstance(email_data, dict) else email_data
         return None
 
     @classmethod
@@ -167,12 +170,34 @@ class LennyAPI:
         )
         
         if olid:
-            return search_response.records[0].to_publication().model_dump()
+            pub = search_response.records[0].to_publication().model_dump()
+            if "links" in pub:
+                pub["links"].append({
+                    "rel": "profile",
+                    "href": f"{LennyDataProvider.BASE_URL}profile",
+                    "type": "application/opds-profile+json",
+                    "title": "User Profile"
+                })
+            return pub
         
         catalog = Catalog.create(
             search_response,
             metadata=Metadata(title=cls.OPDS_TITLE), # type: ignore
             navigation=cls._navigation(limit),
+            links=[
+                Link(
+                    rel="http://opds-spec.org/shelf",
+                    href=cls.make_url("/v1/api/shelf"),
+                    type="application/opds+json",
+                    title="Bookshelf"
+                ),
+                Link(
+                    rel="profile",
+                    href=cls.make_url("/v1/api/profile"),
+                    type="application/opds-profile+json",
+                    title="User Profile"
+                )
+            ]
         )
         return catalog.model_dump()
 
@@ -375,3 +400,81 @@ class LennyAPI:
                 loan.openlibrary_edition = item.openlibrary_edition
                 enriched_loans.append(loan)
         return enriched_loans
+
+    @classmethod
+    def get_user_profile(cls, email: str, name: Optional[str] = None) -> dict:
+        """
+        Retrieves loan stats and generates the OPDS User Profile using LennyDataProvider.
+        """
+        current_loans = cls.get_borrowed_items(email)
+        loans_count = len(current_loans)
+        
+        return LennyDataProvider.get_user_profile(
+            name=name,
+            email=email,
+            active_loans_count=loans_count,
+            loan_limit=LOAN_LIMIT
+        )
+
+    @classmethod
+    def get_shelf_feed(cls, email: str) -> dict:
+        """
+        Retrieves user loans, fetches their metadata, and generates the OPDS Shelf Feed.
+        """
+        loans = cls.get_borrowed_items(email)
+        
+        if not loans:
+             return LennyDataProvider.get_shelf_feed([])
+
+        olids = [f"OL{loan.openlibrary_edition}M" for loan in loans if loan.openlibrary_edition]
+        lenny_ids = {int(loan.openlibrary_edition): int(loan.openlibrary_edition) for loan in loans if loan.openlibrary_edition}
+        
+        if not olids:
+             return LennyDataProvider.get_shelf_feed([])
+
+        query = f"edition_key:({' OR '.join(olids)})"
+        
+        resp = LennyDataProvider.search(
+            query=query, 
+            limit=len(olids), 
+            lenny_ids=lenny_ids
+        )
+
+        publications = []
+        for record in resp.records:
+            if isinstance(record, LennyDataRecord):
+                 pub = record.to_publication().model_dump()
+                 if hasattr(record, 'post_borrow_links'):
+                     pub["links"] = [
+                         link.model_dump(exclude_none=True) 
+                         for link in record.post_borrow_links()
+                     ]
+                 publications.append(pub)
+        
+        return LennyDataProvider.get_shelf_feed(publications)
+
+    @classmethod
+    def build_oauth_fragment(cls, session_cookie: str, state: str = None) -> dict:
+        """Build OAuth token fragment for redirect URL or opds:// callback."""
+        auth_doc_id = quote(LennyAPI.make_url("/v1/api/oauth/implicit"), safe='')
+        fragment = {
+            "id": auth_doc_id,
+            "access_token": session_cookie,
+            "token_type": "bearer",
+            "expires_in": auth.COOKIE_TTL
+        }
+        if state:
+            fragment["state"] = state
+        return fragment
+
+    @classmethod
+    async def parse_request_body(cls, request: Request) -> dict:
+        """Parse request body from JSON or form data, with fallback to empty dict."""
+        try:
+            return await request.json()
+        except:
+            try:
+                form = await request.form()
+                return dict(form)
+            except:
+                return {}

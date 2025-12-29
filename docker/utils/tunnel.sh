@@ -29,10 +29,39 @@ function close_tunnel() {
     fi
 }
 
+function verify_tunnel() {
+    local url="$1"
+    if ! pgrep -f 'cloudflared tunnel --url' > /dev/null; then
+        echo "[!] Cloudflared process is not running."
+        return 1
+    fi
+
+    if ! curl -s --head --max-time 5 "$url" > /dev/null; then
+         echo "[!] Tunnel URL $url is not reachable."
+         return 1
+    fi
+    return 0
+}
+
 function create_tunnel() {
     ! command -v cloudflared &> /dev/null && install_cloudflared
     local port="${1:-8080}"  # default to 8080 if not provided
     local url=$(get_tunnel)
+
+    # Check if we have an existing URL and if it's healthy
+    if [[ -n "$url" ]]; then
+        echo "[*] Found existing tunnel: $url. Checking health..."
+        if verify_tunnel "$url"; then
+            echo "[+] Existing tunnel is active and working."
+            return 0
+        else
+            echo "[!] Existing tunnel is dead. Restarting..."
+            pkill -f 'cloudflared tunnel --url' || true
+            rm -f cloudflared.log
+            url=""
+        fi
+    fi
+
     if [[ -z "$url" ]]; then
 	echo "[+] Exposing local service on port $port via cloudflared..."
 	nohup cloudflared tunnel --url http://localhost:"$port" --no-autoupdate > cloudflared.log 2>&1 &

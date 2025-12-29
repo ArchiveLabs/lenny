@@ -34,13 +34,17 @@ def test_cookie_with_ip_verification():
     assert auth.get_authenticated_email(cookie) == email
     
     # Should verify successfully with correct IP
-    assert auth.verify_session_cookie(cookie, ip) == email
+    result = auth.verify_session_cookie(cookie, ip)
+    assert isinstance(result, dict)
+    assert result['email'] == email
     
     # Should fail with wrong IP
     assert auth.verify_session_cookie(cookie, "192.168.1.101") is None
     
     # Should work without IP verification
-    assert auth.verify_session_cookie(cookie) == email
+    result = auth.verify_session_cookie(cookie)
+    assert isinstance(result, dict)
+    assert result['email'] == email
 
 def test_otp_authenticate_with_ip():
     """Test OTP authentication with IP verification"""
@@ -61,8 +65,9 @@ def test_otp_authenticate_with_ip():
         assert session_cookie is not None
         
         # Verify the cookie contains both email and IP
-        verified_email = auth.verify_session_cookie(session_cookie, ip)
-        assert verified_email == email
+        result = auth.verify_session_cookie(session_cookie, ip)
+        assert isinstance(result, dict)
+        assert result['email'] == email
         
         # Should fail with wrong IP
         assert auth.verify_session_cookie(session_cookie, "10.0.0.2") is None

@@ -32,6 +32,7 @@ READIUM_PORT = int(os.environ.get('READIUM_PORT', 15080))
 READIUM_BASE_URL = f"http://lenny_readium:{READIUM_PORT}"
 
 LENNY_SEED = os.environ.get('LENNY_SEED')
+LOAN_LIMIT = int(os.environ.get('LENNY_LOAN_LIMIT', 10))
 
 OPTIONS = {
     'host': HOST,

@@ -57,8 +57,8 @@ def get_authenticated_email(session) -> Optional[str]:
     except BadSignature:
         return None
 
-def verify_session_cookie(session, client_ip: str = None) -> Optional[str]:
-    """Retrieves and verifies email from signed cookie, optionally checking IP."""
+def verify_session_cookie(session, client_ip: str = None):
+    """Retrieves and verifies data from signed cookie, optionally checking IP."""
     try:
         if not session:
             return None
@@ -66,11 +66,10 @@ def verify_session_cookie(session, client_ip: str = None) -> Optional[str]:
         data = serializer.loads(session, max_age=COOKIE_TTL)
         if isinstance(data, dict):
             # New format with IP verification
-            email = data.get("email")
             stored_ip = data.get("ip")
             if client_ip and stored_ip and client_ip != stored_ip:
                 return None  # IP mismatch
-            return email
+            return data
         else:
             # Old format, just email (no IP verification possible)
             return data
