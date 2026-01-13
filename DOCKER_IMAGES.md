@@ -59,8 +59,10 @@ The `.github/workflows/build-images.yml` workflow automatically builds and pushe
 - **Platforms**: Builds for both `linux/amd64` and `linux/arm64`
 - **Registry**: Images are pushed to GitHub Container Registry (ghcr.io)
 - **Tags**:
-  - `latest` - for the main branch
-  - `main-<git-sha>` - for specific commits
+  - `latest` - always points to the most recent build from the main branch
+  - `main` - also points to the main branch (same as latest)
+  - `main-sha-<git-sha>` - specific commit on main branch (e.g., `main-sha-abc1234`)
+  - `<branch>-sha-<git-sha>` - specific commits on other branches (if workflow runs on them)
 - **Caching**: Uses GitHub Actions cache for faster builds
 
 ## Benefits
@@ -145,7 +147,8 @@ To ensure the workflow can push images to GitHub Container Registry, verify that
    - Or use the specific permissions defined in the workflow file
 
 2. **Package visibility**: After the first successful workflow run, you may want to make the package public:
-   - Go to the package page: `https://github.com/orgs/ArchiveLabs/packages/container/lenny%2Flenny-api`
+   - Go to the package page: `https://github.com/orgs/<YOUR_ORG>/packages/container/<repo>%2Flenny-api`
+   - For this repository, that would be: `https://github.com/orgs/ArchiveLabs/packages/container/lenny%2Flenny-api`
    - Click "Package settings"
    - Change visibility to "Public" (optional, but recommended for easier access)
 
