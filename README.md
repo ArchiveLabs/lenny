@@ -79,7 +79,7 @@ Lenny is a free, open source, Library-in-a-Box for libraries to preserve and len
 ---
 ## Technologies
 
-- **Docker** for deployment and containerization  
+- **Docker** for deployment and containerization (with pre-built multi-architecture images - see [DOCKER_IMAGES.md](DOCKER_IMAGES.md))  
 - **nginx** as a reverse proxy  
 - **FastAPI** (Python) as the web & API framework  
 - **Minio** API for storing digital assets  
