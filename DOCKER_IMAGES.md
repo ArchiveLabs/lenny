@@ -122,3 +122,19 @@ The GitHub Actions workflow requires the following permissions:
 - `packages: write` - to push images to GitHub Container Registry
 
 The `GITHUB_TOKEN` secret is automatically provided by GitHub Actions and has the necessary permissions.
+
+### Repository Settings
+
+To ensure the workflow can push images to GitHub Container Registry, verify that:
+
+1. **Workflow permissions** are set correctly in the repository settings:
+   - Go to Settings > Actions > General > Workflow permissions
+   - Ensure "Read and write permissions" is selected
+   - Or use the specific permissions defined in the workflow file
+
+2. **Package visibility**: After the first successful workflow run, you may want to make the package public:
+   - Go to the package page: `https://github.com/orgs/ArchiveLabs/packages/container/lenny%2Flenny-api`
+   - Click "Package settings"
+   - Change visibility to "Public" (optional, but recommended for easier access)
+
+3. **No additional secrets needed**: The workflow uses `GITHUB_TOKEN`, which is automatically available in GitHub Actions.
