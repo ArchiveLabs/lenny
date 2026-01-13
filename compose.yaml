@@ -4,7 +4,6 @@ services:
   # Falls back to local build if image is not available or during development
   api:
     image: ghcr.io/archivelabs/lenny/lenny-api:latest
-    pull_policy: always
     build:
       context: .
       dockerfile: docker/api/Dockerfile
