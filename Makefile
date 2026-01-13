@@ -52,6 +52,12 @@ resetdb:
 start:
 	@bash docker/utils/lenny.sh --start
 
+# Pull latest pre-built images from GitHub Container Registry
+.PHONY: pull
+pull:
+	@echo "[+] Pulling latest pre-built images..."
+	@docker compose pull api db s3 readium
+
 .PHONY: restart
 restart:
 	@bash docker/utils/lenny.sh --restart

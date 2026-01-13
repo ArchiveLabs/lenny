@@ -110,6 +110,8 @@ To install and run Lenny as a production application:
 curl -fsSL https://raw.githubusercontent.com/ArchiveLabs/lenny/refs/heads/main/install.sh | sudo bash
 ```
 
+**Note**: Lenny now uses pre-built multi-architecture Docker images, making the initial setup significantly faster. The first time you run `make all`, Docker will pull optimized images instead of building everything from scratch. For more details, see [DOCKER_IMAGES.md](DOCKER_IMAGES.md).
+
 ---
 
 ## Development Setup
@@ -121,6 +123,8 @@ make all
 ```
 
 - This will generate a `.env` file with reasonable defaults (if not present).
+- Pre-built images for API, Database, S3, and Readium will be pulled automatically.
+- Only the Reader service needs to be built locally (due to dynamic domain configuration).
 - Navigate to `localhost:8080` (or your `$LENNY_PORT`).
 - Enter the API container with:  
   `docker exec -it lenny_api bash`

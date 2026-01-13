@@ -70,6 +70,18 @@ The `.github/workflows/build-images.yml` workflow automatically builds and pushe
 3. **Multi-architecture support**: Works on both x86_64 and ARM64 (Apple Silicon, ARM servers)
 4. **Reduced build time**: Only the reader service needs to be built locally
 
+## For Users
+
+### Updating to Latest Images
+
+To pull the latest pre-built images:
+
+```bash
+make pull
+```
+
+This will update the API, database, S3, and Readium images to their latest versions.
+
 ## For Developers
 
 ### Testing the Build Workflow
