@@ -48,6 +48,7 @@ from lenny.core.exceptions import (
 )
 from lenny.core.readium import ReadiumAPI
 from lenny.core.models import Item
+from lenny.core.ratelimit import limiter, RATE_LIMIT_GENERAL, RATE_LIMIT_STRICT
 from urllib.parse import quote
 
 COOKIES_MAX_AGE = 604800  # 1 week
@@ -99,7 +100,7 @@ async def home(request: Request):
     return request.app.templates.TemplateResponse("index.html", kwargs)
 
 @router.get("/items")
-async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limit: Optional[int]=None):
+async def get_items(request: Request, fields: Optional[str]=None, offset: Optional[int]=None, limit: Optional[int]=None):
     fields = fields.split(",") if fields else None
     return LennyAPI.get_enriched_items(
         fields=fields, offset=offset, limit=limit
@@ -144,6 +145,7 @@ async def get_opds_item(request: Request, book_id: int, session: Optional[str] =
 
 
 @router.get("/items/{book_id}/read")
+@limiter.limit(RATE_LIMIT_GENERAL)
 @requires_item_auth()
 async def redirect_reader(request: Request, book_id: str, format: str = "epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
     manifest_uri = LennyAPI.make_manifest_url(book_id)
@@ -152,11 +154,13 @@ async def redirect_reader(request: Request, book_id: str, format: str = "epub", 
     return RedirectResponse(url=reader_url, status_code=307)
 
 @router.get("/items/{book_id}/readium/manifest.json")
+@limiter.limit(RATE_LIMIT_GENERAL)
 @requires_item_auth()
 async def get_manifest(request: Request, book_id: str, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
     return ReadiumAPI.get_manifest(book_id, format)
 
 @router.get("/items/{book_id}/readium/{readium_path:path}")
+@limiter.limit(RATE_LIMIT_GENERAL)
 @requires_item_auth()
 async def proxy_readium(request: Request, book_id: str, readium_path: str, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
     readium_url = ReadiumAPI.make_url(book_id, format, readium_path)
@@ -169,6 +173,7 @@ async def proxy_readium(request: Request, book_id: str, readium_path: str, forma
 
 
 @router.api_route('/items/{book_id}/borrow', methods=["GET", "POST"])
+@limiter.limit(RATE_LIMIT_GENERAL)
 async def borrow_item(request: Request, response: Response, book_id: int, format: str=".epub", session: Optional[str] = Cookie(None), beta: bool = False, auth_mode: Optional[str] = None):
     """
     Unified Borrow Endpoint.
@@ -266,6 +271,7 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
     return request.app.templates.TemplateResponse("otp_issue.html", context)
 
 @router.api_route('/items/{book_id}/return', methods=['GET', 'POST'], status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_LIMIT_GENERAL)
 @requires_item_auth()
 async def return_item(request: Request, book_id: int, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str='', beta: bool = False, auth_mode: Optional[str] = None):
     """
@@ -299,6 +305,7 @@ async def return_item(request: Request, book_id: int, format: str=".epub", sessi
 
 
 @router.post('/upload', status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_LIMIT_STRICT)
 async def upload(
     request: Request,
     openlibrary_edition: int = Form(
@@ -337,6 +344,7 @@ async def upload(
 
 
 @router.get("/profile")
+@limiter.limit(RATE_LIMIT_GENERAL)
 async def profile(request: Request, session: str = Cookie(None)):
     """
     Returns the OPDS 2.0 User Profile.
@@ -373,7 +381,8 @@ async def profile(request: Request, session: str = Cookie(None)):
 
 
 @router.get("/shelf")
-async def get_shelf(session: str = Cookie(None), auth_mode: Optional[str] = None):
+@limiter.limit(RATE_LIMIT_GENERAL)
+async def get_shelf(request: Request, session: str = Cookie(None), auth_mode: Optional[str] = None):
     """
     Returns the user's bookshelf as an OPDS 2.0 Feed.
     Contains all currently borrowed items with return/read links.
@@ -417,6 +426,7 @@ async def oauth_implicit(request: Request):
     )
 
 @router.api_route("/oauth/authorize", methods=["GET", "POST"])
+@limiter.limit(RATE_LIMIT_STRICT)
 async def oauth_authorize(
     request: Request, 
     response: Response,
