@@ -48,7 +48,7 @@ from lenny.core.exceptions import (
 )
 from lenny.core.readium import ReadiumAPI
 from lenny.core.models import Item
-from lenny.core.ratelimit import limiter, RATE_LIMIT_GENERAL, RATE_LIMIT_LENIENT, RATE_LIMIT_STRICT
+from lenny.core.ratelimit import limiter, RATE_LIMIT_GENERAL, RATE_LIMIT_STRICT
 from urllib.parse import quote
 
 COOKIES_MAX_AGE = 604800  # 1 week
@@ -173,6 +173,7 @@ async def proxy_readium(request: Request, book_id: str, readium_path: str, forma
 
 
 @router.api_route('/items/{book_id}/borrow', methods=["GET", "POST"])
+@limiter.limit(RATE_LIMIT_GENERAL)
 async def borrow_item(request: Request, response: Response, book_id: int, format: str=".epub", session: Optional[str] = Cookie(None), beta: bool = False, auth_mode: Optional[str] = None):
     """
     Unified Borrow Endpoint.
@@ -270,6 +271,7 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
     return request.app.templates.TemplateResponse("otp_issue.html", context)
 
 @router.api_route('/items/{book_id}/return', methods=['GET', 'POST'], status_code=status.HTTP_200_OK)
+@limiter.limit(RATE_LIMIT_GENERAL)
 @requires_item_auth()
 async def return_item(request: Request, book_id: int, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str='', beta: bool = False, auth_mode: Optional[str] = None):
     """
@@ -342,6 +344,7 @@ async def upload(
 
 
 @router.get("/profile")
+@limiter.limit(RATE_LIMIT_GENERAL)
 async def profile(request: Request, session: str = Cookie(None)):
     """
     Returns the OPDS 2.0 User Profile.
@@ -378,7 +381,8 @@ async def profile(request: Request, session: str = Cookie(None)):
 
 
 @router.get("/shelf")
-async def get_shelf(session: str = Cookie(None), auth_mode: Optional[str] = None):
+@limiter.limit(RATE_LIMIT_GENERAL)
+async def get_shelf(request: Request, session: str = Cookie(None), auth_mode: Optional[str] = None):
     """
     Returns the user's bookshelf as an OPDS 2.0 Feed.
     Contains all currently borrowed items with return/read links.
@@ -422,6 +426,7 @@ async def oauth_implicit(request: Request):
     )
 
 @router.api_route("/oauth/authorize", methods=["GET", "POST"])
+@limiter.limit(RATE_LIMIT_STRICT)
 async def oauth_authorize(
     request: Request, 
     response: Response,
