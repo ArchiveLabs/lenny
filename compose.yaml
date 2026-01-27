@@ -1,6 +1,9 @@
 services:
 
+  # API Service: Pre-built multi-architecture image from GitHub Container Registry
+  # Falls back to local build if image is not available or during development
   api:
+    image: ghcr.io/archivelabs/lenny/lenny-api:latest
     build:
       context: .
       dockerfile: docker/api/Dockerfile
@@ -23,6 +26,7 @@ services:
     networks:
       - lenny_network
 
+  # Database: Pre-built official PostgreSQL image from Docker Hub
   db:
     image: postgres:16
     container_name: lenny_db
@@ -43,6 +47,7 @@ services:
     networks:
       - lenny_network
 
+  # S3 Storage: Pre-built official MinIO image from Docker Hub
   s3:
     image: minio/minio:latest
     container_name: lenny_s3
@@ -63,6 +68,8 @@ services:
     networks:
       - lenny_network
 
+  # Reader: Built locally due to dynamic NEXT_PUBLIC_MANIFEST_ALLOWED_DOMAINS
+  # This needs to be rebuilt when using custom domains or cloudflared tunnels
   reader:
     container_name: lenny_reader  
     build:
@@ -80,6 +87,7 @@ services:
     networks:
       - lenny_network
 
+  # Readium: Pre-built multi-architecture image from Readium project
   readium:
     image: ghcr.io/readium/readium:0.6.3
     container_name: lenny_readium
