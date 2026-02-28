@@ -23,8 +23,7 @@ MarkupSafe==3.0.2
 minio==7.2.9
 packaging==25.0
 pluggy==1.6.0
-psycopg2==2.9.10
-psycopg2-binary==2.9.10
+psycopg[binary]==3.3.2
 pycparser==2.22
 pycryptodome==3.22.0
 pydantic==2.9.2
@@ -50,3 +49,6 @@ itsdangerous==2.2.0
 git+https://github.com/ArchiveLabs/pyopds2.git
 git+https://github.com/ArchiveLabs/pyopds2_openlibrary.git
 git+https://github.com/ArchiveLabs/pyopds2_lenny.git
+
+PyJWT==2.8.0
+slowapi==0.1.9

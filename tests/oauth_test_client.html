@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lenny OAuth PKCE Test Client</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f0f14;
+      --surface: rgba(255,255,255,0.04);
+      --surface-hover: rgba(255,255,255,0.07);
+      --border: rgba(255,255,255,0.08);
+      --text: #e4e4e7;
+      --text-dim: #a1a1aa;
+      --accent: #818cf8;
+      --accent-glow: rgba(129,140,248,0.25);
+      --green: #34d399;
+      --red: #f87171;
+      --orange: #fbbf24;
+      --radius: 14px;
+      --font: 'Inter', -apple-system, sans-serif;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+      line-height: 1.6;
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: .25rem;
+      background: linear-gradient(135deg, var(--accent), #c084fc);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle { color: var(--text-dim); font-size: .875rem; margin-bottom: 2rem; }
+
+    /* ── Config Card ── */
+    .card {
+      width: 100%;
+      max-width: 720px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      margin-bottom: 1.25rem;
+      backdrop-filter: blur(12px);
+      transition: border-color .2s;
+    }
+    .card:hover { border-color: rgba(255,255,255,0.12); }
+    .card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; gap: .5rem; }
+    .card h2 .icon { font-size: 1.1rem; }
+
+    label { display: block; font-size: .8rem; font-weight: 500; color: var(--text-dim); margin-bottom: .35rem; }
+    input, select {
+      width: 100%;
+      padding: .6rem .85rem;
+      font-family: var(--font);
+      font-size: .85rem;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      outline: none;
+      transition: border-color .2s;
+      margin-bottom: .85rem;
+    }
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+
+    /* ── Steps indicator ── */
+    .steps { display: flex; gap: .5rem; margin-bottom: 1.25rem; flex-wrap: wrap; }
+    .step {
+      font-size: .7rem;
+      font-weight: 600;
+      padding: .35rem .75rem;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      transition: all .3s;
+      white-space: nowrap;
+    }
+    .step.active { border-color: var(--accent); color: var(--accent); background: var(--accent-glow); }
+    .step.done   { border-color: var(--green); color: var(--green); background: rgba(52,211,153,0.12); }
+    .step.error  { border-color: var(--red); color: var(--red); background: rgba(248,113,113,0.12); }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: .4rem;
+      font-family: var(--font);
+      font-size: .85rem;
+      font-weight: 600;
+      padding: .65rem 1.4rem;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      transition: all .2s;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--accent), #a78bfa);
+      color: #fff;
+      box-shadow: 0 4px 16px var(--accent-glow);
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 24px var(--accent-glow); }
+    .btn-primary:disabled { opacity: .45; pointer-events: none; }
+    .btn-secondary {
+      background: var(--surface-hover);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.1); }
+
+    .btn-group { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .75rem; }
+
+    /* ── Output blocks ── */
+    .output {
+      background: rgba(0,0,0,0.35);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: .78rem;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      word-break: break-all;
+      overflow-x: auto;
+      margin-top: .75rem;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .output:empty { display: none; }
+
+    .tag {
+      display: inline-block;
+      font-size: .7rem;
+      font-weight: 600;
+      padding: .2rem .55rem;
+      border-radius: 6px;
+      margin-right: .35rem;
+    }
+    .tag-ok    { background: rgba(52,211,153,0.15); color: var(--green); }
+    .tag-err   { background: rgba(248,113,113,0.15); color: var(--red); }
+    .tag-info  { background: rgba(129,140,248,0.15); color: var(--accent); }
+    .tag-warn  { background: rgba(251,191,36,0.15); color: var(--orange); }
+
+    .hidden { display: none !important; }
+
+    /* ── JWT decoded ── */
+    .jwt-claims { display: grid; grid-template-columns: auto 1fr; gap: .25rem .75rem; margin-top: .5rem; }
+    .jwt-claims dt { font-weight: 600; color: var(--accent); font-size: .78rem; }
+    .jwt-claims dd { font-size: .78rem; color: var(--text-dim); }
+
+    @media (max-width: 600px) {
+      body { padding: 1rem .5rem; }
+      .card { padding: 1rem; }
+      h1 { font-size: 1.35rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🔐 Lenny OAuth PKCE Test</h1>
+  <p class="subtitle">End-to-end PKCE Authorization Code flow tester</p>
+
+  <!-- Step Indicators -->
+  <div class="steps" id="steps">
+    <span class="step active" data-step="1">1 · Configure</span>
+    <span class="step" data-step="2">2 · PKCE</span>
+    <span class="step" data-step="3">3 · Authorize</span>
+    <span class="step" data-step="4">4 · Callback</span>
+    <span class="step" data-step="5">5 · Token</span>
+    <span class="step" data-step="6">6 · Done ✓</span>
+  </div>
+
+  <!-- Config -->
+  <div class="card" id="card-config">
+    <h2><span class="icon">⚙️</span> Configuration</h2>
+    <label for="server-url">Lenny Server URL</label>
+    <input id="server-url" value="http://localhost:8080" placeholder="http://localhost:8080">
+    <label for="client-id">Client ID</label>
+    <input id="client-id" value="oauth-test-client" placeholder="oauth-test-client">
+    <label for="redirect-uri">Redirect URI (must match this page's URL)</label>
+    <input id="redirect-uri" value="" placeholder="Auto-detected from current URL">
+    <label for="scope">Scope</label>
+    <input id="scope" value="openid" placeholder="openid">
+    <div class="btn-group">
+      <button class="btn btn-primary" id="btn-start" onclick="startFlow()">🚀 Start OAuth Flow</button>
+    </div>
+  </div>
+
+  <!-- PKCE -->
+  <div class="card hidden" id="card-pkce">
+    <h2><span class="icon">🔑</span> PKCE Parameters</h2>
+    <div id="pkce-output" class="output"></div>
+  </div>
+
+  <!-- Callback -->
+  <div class="card hidden" id="card-callback">
+    <h2><span class="icon">📨</span> Authorization Callback</h2>
+    <div id="callback-output" class="output"></div>
+  </div>
+
+  <!-- Token -->
+  <div class="card hidden" id="card-token">
+    <h2><span class="icon">🎫</span> Token Response</h2>
+    <div id="token-output" class="output"></div>
+    <div class="btn-group">
+      <button class="btn btn-secondary hidden" id="btn-refresh" onclick="refreshToken()">🔄 Refresh Token</button>
+      <button class="btn btn-secondary hidden" id="btn-reset" onclick="resetFlow()">↩ Reset</button>
+    </div>
+  </div>
+
+  <!-- JWT -->
+  <div class="card hidden" id="card-jwt">
+    <h2><span class="icon">📋</span> Decoded JWT Claims</h2>
+    <dl class="jwt-claims" id="jwt-claims"></dl>
+  </div>
+
+<script>
+// ─── Helpers ────────────────────────────────────────────────────
+function bufToBase64url(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+async function generatePKCE() {
+  const arr = new Uint8Array(32);
+  crypto.getRandomValues(arr);
+  const verifier = bufToBase64url(arr);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const challenge = bufToBase64url(digest);
+  return { verifier, challenge };
+}
+
+function randomState() {
+  return bufToBase64url(crypto.getRandomValues(new Uint8Array(16)));
+}
+
+function decodeJWT(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return payload;
+  } catch { return null; }
+}
+
+function setStep(n, status) {
+  document.querySelectorAll('.step').forEach(el => {
+    const s = parseInt(el.dataset.step);
+    el.classList.remove('active', 'done', 'error');
+    if (s < n) el.classList.add('done');
+    else if (s === n) el.classList.add(status || 'active');
+  });
+}
+
+function show(id) { document.getElementById(id).classList.remove('hidden'); }
+function hide(id) { document.getElementById(id).classList.add('hidden'); }
+
+// ─── State ──────────────────────────────────────────────────────
+let currentVerifier = null;
+let currentState = null;
+let currentRefreshToken = null;
+
+// ─── Auto-detect redirect URI ───────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  const uriInput = document.getElementById('redirect-uri');
+  // Use current page URL without hash/search
+  const base = window.location.origin + window.location.pathname;
+  uriInput.value = base;
+
+  // Check if this is a callback (has ?code= in URL)
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('code')) {
+    handleCallback(params);
+  }
+});
+
+// ─── Flow: Start ────────────────────────────────────────────────
+async function startFlow() {
+  const serverUrl = document.getElementById('server-url').value.replace(/\/+$/, '');
+  const clientId = document.getElementById('client-id').value;
+  const redirectUri = document.getElementById('redirect-uri').value;
+  const scope = document.getElementById('scope').value;
+
+  // Generate PKCE
+  const pkce = await generatePKCE();
+  currentVerifier = pkce.verifier;
+  currentState = randomState();
+
+  // Store in sessionStorage so we survive the redirect
+  sessionStorage.setItem('pkce_verifier', currentVerifier);
+  sessionStorage.setItem('pkce_state', currentState);
+  sessionStorage.setItem('oauth_server', serverUrl);
+  sessionStorage.setItem('oauth_client_id', clientId);
+  sessionStorage.setItem('oauth_redirect_uri', redirectUri);
+  sessionStorage.setItem('oauth_scope', scope);
+
+  // Show PKCE card
+  setStep(2);
+  show('card-pkce');
+  document.getElementById('pkce-output').innerHTML =
+    `<span class="tag tag-info">VERIFIER</span> ${pkce.verifier}\n\n` +
+    `<span class="tag tag-info">CHALLENGE</span> ${pkce.challenge}\n\n` +
+    `<span class="tag tag-info">STATE</span> ${currentState}\n\n` +
+    `<span class="tag tag-warn">METHOD</span> S256`;
+
+  // Build authorize URL
+  const authorizeUrl = `${serverUrl}/v1/oauth/authorize?` + new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    state: currentState,
+    code_challenge: pkce.challenge,
+    code_challenge_method: 'S256',
+    scope: scope,
+  }).toString();
+
+  // Small delay so user can see the PKCE values
+  await new Promise(r => setTimeout(r, 800));
+  setStep(3);
+
+  // Redirect to Lenny authorization endpoint
+  window.location.href = authorizeUrl;
+}
+
+// ─── Flow: Handle Callback ──────────────────────────────────────
+async function handleCallback(params) {
+  const code = params.get('code');
+  const state = params.get('state');
+
+  // Restore stored values
+  const storedVerifier = sessionStorage.getItem('pkce_verifier');
+  const storedState = sessionStorage.getItem('pkce_state');
+  const serverUrl = sessionStorage.getItem('oauth_server');
+  const clientId = sessionStorage.getItem('oauth_client_id');
+  const redirectUri = sessionStorage.getItem('oauth_redirect_uri');
+
+  setStep(4);
+  show('card-callback');
+
+  // State validation
+  const stateMatch = state === storedState;
+  const stateTag = stateMatch
+    ? '<span class="tag tag-ok">STATE ✓</span> Matches stored state'
+    : '<span class="tag tag-err">STATE ✗</span> MISMATCH! Possible CSRF attack';
+
+  document.getElementById('callback-output').innerHTML =
+    `<span class="tag tag-ok">CODE</span> ${code}\n\n` +
+    `<span class="tag tag-info">STATE</span> ${state}\n\n` +
+    stateTag;
+
+  if (!stateMatch) {
+    setStep(4, 'error');
+    return;
+  }
+
+  if (!storedVerifier || !serverUrl || !clientId || !redirectUri) {
+    document.getElementById('callback-output').innerHTML +=
+      '\n\n<span class="tag tag-err">ERROR</span> Missing stored session data. Did you start the flow from this page?';
+    setStep(4, 'error');
+    return;
+  }
+
+  // Clean up URL (remove code/state from address bar)
+  window.history.replaceState({}, '', window.location.pathname);
+
+  // Exchange code for token
+  await exchangeToken(serverUrl, clientId, redirectUri, code, storedVerifier);
+}
+
+// ─── Flow: Exchange Token ───────────────────────────────────────
+async function exchangeToken(serverUrl, clientId, redirectUri, code, verifier) {
+  setStep(5);
+  show('card-token');
+
+  const tokenOutput = document.getElementById('token-output');
+  tokenOutput.innerHTML = '<span class="tag tag-info">⏳</span> Exchanging code for tokens...';
+
+  try {
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: code,
+      redirect_uri: redirectUri,
+      client_id: clientId,
+      code_verifier: verifier,
+    });
+
+    const resp = await fetch(`${serverUrl}/v1/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body,
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      tokenOutput.innerHTML =
+        `<span class="tag tag-err">ERROR ${resp.status}</span>\n\n` +
+        JSON.stringify(data, null, 2);
+      setStep(5, 'error');
+      return;
+    }
+
+    // Success!
+    currentRefreshToken = data.refresh_token;
+    sessionStorage.setItem('refresh_token', currentRefreshToken);
+
+    tokenOutput.innerHTML =
+      `<span class="tag tag-ok">SUCCESS</span> Tokens received!\n\n` +
+      `<span class="tag tag-info">ACCESS TOKEN</span>\n${data.access_token}\n\n` +
+      `<span class="tag tag-info">REFRESH TOKEN</span>\n${data.refresh_token}\n\n` +
+      `<span class="tag tag-info">TYPE</span> ${data.token_type}\n` +
+      `<span class="tag tag-info">EXPIRES IN</span> ${data.expires_in}s\n` +
+      `<span class="tag tag-info">SCOPE</span> ${data.scope}`;
+
+    // Show decoded JWT
+    const claims = decodeJWT(data.access_token);
+    if (claims) {
+      show('card-jwt');
+      const claimsEl = document.getElementById('jwt-claims');
+      claimsEl.innerHTML = '';
+      for (const [k, v] of Object.entries(claims)) {
+        let displayVal = v;
+        if (k === 'exp' || k === 'iat') {
+          displayVal = `${v}  →  ${new Date(v * 1000).toLocaleString()}`;
+        }
+        claimsEl.innerHTML += `<dt>${k}</dt><dd>${displayVal}</dd>`;
+      }
+    }
+
+    // Show action buttons
+    show('btn-refresh');
+    show('btn-reset');
+    setStep(6, 'done');
+
+    // Clean session storage (except refresh token)
+    sessionStorage.removeItem('pkce_verifier');
+    sessionStorage.removeItem('pkce_state');
+
+  } catch (err) {
+    tokenOutput.innerHTML =
+      `<span class="tag tag-err">NETWORK ERROR</span>\n\n${err.message}\n\n` +
+      `Make sure CORS is enabled on the Lenny server,\nor that this page is served from the same origin.`;
+    setStep(5, 'error');
+  }
+}
+
+// ─── Flow: Refresh Token ────────────────────────────────────────
+async function refreshToken() {
+  const serverUrl = sessionStorage.getItem('oauth_server');
+  const clientId = sessionStorage.getItem('oauth_client_id');
+  const refresh = currentRefreshToken || sessionStorage.getItem('refresh_token');
+
+  if (!refresh) {
+    alert('No refresh token available');
+    return;
+  }
+
+  const tokenOutput = document.getElementById('token-output');
+  tokenOutput.innerHTML += '\n\n<span class="tag tag-warn">⏳</span> Refreshing tokens...';
+
+  try {
+    const resp = await fetch(`${serverUrl}/v1/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        refresh_token: refresh,
+      }),
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      tokenOutput.innerHTML +=
+        `\n\n<span class="tag tag-err">REFRESH FAILED ${resp.status}</span>\n` +
+        JSON.stringify(data, null, 2);
+      return;
+    }
+
+    currentRefreshToken = data.refresh_token;
+    sessionStorage.setItem('refresh_token', currentRefreshToken);
+
+    tokenOutput.innerHTML +=
+      `\n\n<span class="tag tag-ok">REFRESHED ✓</span>\n\n` +
+      `<span class="tag tag-info">NEW ACCESS TOKEN</span>\n${data.access_token}\n\n` +
+      `<span class="tag tag-info">NEW REFRESH TOKEN</span>\n${data.refresh_token}\n\n` +
+      `<span class="tag tag-info">EXPIRES IN</span> ${data.expires_in}s`;
+
+    // Update JWT
+    const claims = decodeJWT(data.access_token);
+    if (claims) {
+      const claimsEl = document.getElementById('jwt-claims');
+      claimsEl.innerHTML = '';
+      for (const [k, v] of Object.entries(claims)) {
+        let displayVal = v;
+        if (k === 'exp' || k === 'iat') {
+          displayVal = `${v}  →  ${new Date(v * 1000).toLocaleString()}`;
+        }
+        claimsEl.innerHTML += `<dt>${k}</dt><dd>${displayVal}</dd>`;
+      }
+    }
+
+  } catch (err) {
+    tokenOutput.innerHTML +=
+      `\n\n<span class="tag tag-err">NETWORK ERROR</span> ${err.message}`;
+  }
+}
+
+// ─── Reset ──────────────────────────────────────────────────────
+function resetFlow() {
+  sessionStorage.clear();
+  currentVerifier = null;
+  currentState = null;
+  currentRefreshToken = null;
+  window.location.href = window.location.pathname;
+}
+</script>
+
+</body>
+</html>

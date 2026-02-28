@@ -38,6 +38,8 @@
 - [Endpoints](#endpoints)
 - [Getting Started](#getting-started)
 - [Development Setup](#development-setup)
+- [Importing Test Books](#importing-test-books)
+- [OAuth Client Registration](#oauth-client-registration)
 - [Testing Readium Server](#testing-readium-server)
 - [Rebuilding](#rebuilding)
 - [FAQs](#faqs)
@@ -200,6 +202,41 @@ make addbook olid=60638966 filepath=./books/mybook.epub
 If you get a "File not found" or permission error, make sure:
 1. The file is copied into your lenny project directory.
 2. You're using a relative path from the project root (e.g., `./books/mybook.epub`)
+
+---
+
+## OAuth Client Registration
+
+To use Lenny's OAuth PKCE authentication flow, you need to register a client with allowed redirect URIs.
+
+### Register a Client (Interactive)
+
+```sh
+make oauth-register
+```
+
+This prompts you for a **Client ID** (auto-generates one if left blank) and **Redirect URIs** (comma-separated).
+
+### Register a Client (Non-Interactive) Example
+
+```sh
+docker compose exec api python3 scripts/register_client.py \
+  --client-id "my-app" \
+  --redirect-uris "http://localhost:3000/callback,opds://callback"
+```
+
+### Test the Full PKCE Flow
+
+A built-in test client is available at `tests/oauth_test_client.html`:
+
+1. Serve it locally:
+   ```sh
+   python3 -m http.server 5500 -d tests
+   ```
+2. Open `http://localhost:5500/oauth_test_client.html`
+3. Click **Start OAuth Flow** — this redirects to Lenny's login, then back with tokens
+
+> **Note**: The test client `oauth-test-client` must be registered first (see above). A default registration is included with redirect URIs for `localhost:5500` and `localhost:8000`.
 
 ---
 

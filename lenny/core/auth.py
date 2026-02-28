@@ -3,10 +3,11 @@ import hmac
 import logging
 import time
 import httpx
+import jwt as pyjwt
 from datetime import datetime, timedelta
 from typing import Optional
 from itsdangerous import URLSafeTimedSerializer, BadSignature
-from lenny.configs import SEED, OTP_SERVER
+from lenny.configs import LENNY_SEED, OTP_SERVER
 from lenny.core.exceptions import RateLimitError
 
 logging.basicConfig(
@@ -34,7 +35,7 @@ def _get_serializer():
     """Get or initialize the SERIALIZER lazily."""
     global SERIALIZER
     if SERIALIZER is None:
-        SERIALIZER = URLSafeTimedSerializer(SEED, salt="auth-cookie")
+        SERIALIZER = URLSafeTimedSerializer(LENNY_SEED, salt="auth-cookie")
     return SERIALIZER
 
 def create_session_cookie(email: str, ip: str = None) -> str:
@@ -49,36 +50,46 @@ def create_session_cookie(email: str, ip: str = None) -> str:
         return serializer.dumps(email)
 
 def get_authenticated_email(session) -> Optional[str]:
-    """Retrieves and verifies email from signed cookie."""
+    """Retrieves and verifies email from signed cookie or JWT access token."""
     try:
         serializer = _get_serializer()
         data = serializer.loads(session, max_age=COOKIE_TTL)
         if isinstance(data, dict):
-            # New format with IP
             return data.get("email")
         else:
-            # Old format, just email
             return data
     except BadSignature:
+        # Fallback: try JWT (PKCE access token)
+        return _extract_email_from_jwt(session)
+
+def _extract_email_from_jwt(token: str) -> Optional[str]:
+    """Try decoding a JWT access token (from PKCE flow) and extract the email."""
+    try:
+        payload = pyjwt.decode(token, LENNY_SEED, algorithms=["HS256"], audience="lenny-api", options={"require": ["sub", "exp"]})
+        return payload.get("sub")
+    except (pyjwt.InvalidTokenError, Exception):
         return None
 
+
 def verify_session_cookie(session, client_ip: str = None):
-    """Retrieves and verifies data from signed cookie, optionally checking IP."""
+    """Retrieves and verifies data from signed cookie or JWT access token, optionally checking IP."""
     try:
         if not session:
             return None
         serializer = _get_serializer()
         data = serializer.loads(session, max_age=COOKIE_TTL)
         if isinstance(data, dict):
-            # New format with IP verification
             stored_ip = data.get("ip")
             if client_ip and stored_ip and client_ip != stored_ip:
-                return None  # IP mismatch
+                return None
             return data
         else:
-            # Old format, just email (no IP verification possible)
             return data
     except BadSignature:
+        # Fallback: try JWT (PKCE access token)
+        email = _extract_email_from_jwt(session)
+        if email:
+            return {"email": email}
         return None
         
 class OTP:
@@ -96,7 +107,7 @@ class OTP:
             issued_minute = datetime.now().minute
         
         # Create a simple deterministic OTP for testing
-        otp_string = f"{email}{SEED}{issued_minute}"
+        otp_string = f"{email}{LENNY_SEED}{issued_minute}"
         return hashlib.sha256(otp_string.encode()).hexdigest()[:6]
 
     @classmethod

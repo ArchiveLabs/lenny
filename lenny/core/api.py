@@ -37,6 +37,7 @@ def _make_url(path):
     return f"{url}{path}"
 
 LennyDataProvider.BASE_URL = _make_url("/v1/api/")
+LennyDataProvider.OAUTH_URL = _make_url("/v1/oauth/")
 
 class LennyAPI:
 

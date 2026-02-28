@@ -1,110 +1,326 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
     <title>{% block title %}Lenny{% endblock %}</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <meta charset="utf-8">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+      :root {
+        --bg-primary: #0c0a14;
+        --bg-card: rgba(255,255,255,0.04);
+        --bg-card-hover: rgba(255,255,255,0.06);
+        --bg-input: rgba(0,0,0,0.4);
+        --border: rgba(255,255,255,0.08);
+        --border-focus: #7c3aed;
+        --text: #f0eef5;
+        --text-dim: #8b8697;
+        --accent: #7c3aed;
+        --accent-light: #a78bfa;
+        --success: #10b981;
+        --success-dark: #059669;
+        --error: #ef4444;
+        --blue: #3b82f6;
+        --radius: 14px;
+        --radius-sm: 10px;
+      }
+
       * { box-sizing: border-box; margin: 0; padding: 0; }
+
       body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: var(--bg-primary);
         min-height: 100vh;
+        min-height: 100dvh;
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
-        padding: 20px;
-        color: #e4e4e7;
+        padding: 24px 16px;
+        color: var(--text);
+        overflow-x: hidden;
       }
-      .card {
-        background: rgba(255,255,255,0.05);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255,255,255,0.1);
+
+      /* Ambient glow */
+      body::before {
+        content: '';
+        position: fixed;
+        top: -40%;
+        left: -20%;
+        width: 60%;
+        height: 80%;
+        background: radial-gradient(ellipse, rgba(124,58,237,0.12) 0%, transparent 70%);
+        pointer-events: none;
+        z-index: 0;
+      }
+      body::after {
+        content: '';
+        position: fixed;
+        bottom: -30%;
+        right: -15%;
+        width: 50%;
+        height: 70%;
+        background: radial-gradient(ellipse, rgba(59,130,246,0.08) 0%, transparent 70%);
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      /* Logo / Brand */
+      .brand {
+        text-align: center;
+        margin-bottom: 32px;
+        z-index: 1;
+      }
+      .brand-icon {
+        width: 56px;
+        height: 56px;
+        background: linear-gradient(135deg, var(--accent) 0%, #6d28d9 100%);
         border-radius: 16px;
-        padding: 40px;
-        max-width: 400px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
+        margin-bottom: 12px;
+        box-shadow: 0 8px 24px rgba(124,58,237,0.25);
+      }
+      .brand-name {
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--text);
+        letter-spacing: -0.3px;
+      }
+
+      /* Card */
+      .card {
+        background: var(--bg-card);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 36px 32px;
+        max-width: 420px;
         width: 100%;
+        z-index: 1;
+        position: relative;
+        animation: fadeUp 0.5s ease-out;
       }
       .card--wide { max-width: 480px; text-align: center; }
-      h1 { font-size: 24px; margin-bottom: 8px; color: #fff; text-align: center; }
-      .subtitle { color: #a1a1aa; text-align: center; margin-bottom: 24px; }
-      .email { color: #3b82f6; font-weight: 600; }
-      .email--success { color: #10b981; }
-      .error { background: rgba(239,68,68,0.2); border: 1px solid #ef4444; color: #fca5a5; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
-      label { display: block; font-size: 14px; color: #a1a1aa; margin-bottom: 6px; }
-      input[type="email"], input[type="text"] {
-        width: 100%;
-        padding: 12px 16px;
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 8px;
-        background: rgba(0,0,0,0.3);
+
+      @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(12px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      /* Typography */
+      h1 {
+        font-size: 22px;
+        font-weight: 700;
+        margin-bottom: 6px;
         color: #fff;
-        font-size: 16px;
+        text-align: center;
+        letter-spacing: -0.4px;
+      }
+      .subtitle {
+        color: var(--text-dim);
+        text-align: center;
+        margin-bottom: 28px;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .email { color: var(--accent-light); font-weight: 600; }
+      .email--success { color: var(--success); }
+
+      /* Badge */
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 14px;
+        border-radius: 20px;
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
         margin-bottom: 20px;
       }
-      input:focus { outline: none; border-color: #3b82f6; }
+      .badge--oauth {
+        background: rgba(124,58,237,0.12);
+        color: var(--accent-light);
+        border: 1px solid rgba(124,58,237,0.25);
+      }
+      .badge--direct {
+        background: rgba(16,185,129,0.1);
+        color: #34d399;
+        border: 1px solid rgba(16,185,129,0.2);
+      }
+
+      /* Error */
+      .error {
+        background: rgba(239,68,68,0.1);
+        border: 1px solid rgba(239,68,68,0.25);
+        color: #fca5a5;
+        padding: 12px 16px;
+        border-radius: var(--radius-sm);
+        margin-bottom: 20px;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      /* Form */
+      label {
+        display: block;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-dim);
+        margin-bottom: 8px;
+      }
+      input[type="email"],
+      input[type="text"] {
+        width: 100%;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--bg-input);
+        color: #fff;
+        font-family: inherit;
+        font-size: 15px;
+        margin-bottom: 24px;
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+      input:focus {
+        outline: none;
+        border-color: var(--border-focus);
+        box-shadow: 0 0 0 3px rgba(124,58,237,0.15);
+      }
+      input::placeholder { color: rgba(255,255,255,0.2); }
+
+      .otp-input {
+        font-size: 24px;
+        letter-spacing: 8px;
+        text-align: center;
+        font-weight: 600;
+        font-family: 'SF Mono', 'Fira Code', monospace;
+      }
+
+      /* Buttons */
       .btn {
         width: 100%;
         padding: 14px 24px;
         border: none;
-        border-radius: 8px;
-        font-size: 16px;
-        font-weight: 500;
+        border-radius: var(--radius-sm);
+        font-family: inherit;
+        font-size: 15px;
+        font-weight: 600;
         cursor: pointer;
-        transition: transform 0.2s, box-shadow 0.2s;
+        transition: transform 0.15s, box-shadow 0.2s, opacity 0.2s;
         color: #fff;
         text-decoration: none;
-        display: inline-block;
-        text-align: center;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
       }
-      .btn:hover { transform: translateY(-2px); }
-      .btn--primary { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
-      .btn--primary:hover { box-shadow: 0 4px 12px rgba(59,130,246,0.4); }
-      .btn--success { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
-      .btn--success:hover { box-shadow: 0 4px 12px rgba(16,185,129,0.4); }
+      .btn:hover { transform: translateY(-1px); }
+      .btn:active { transform: translateY(0); }
+
+      .btn--primary {
+        background: linear-gradient(135deg, var(--accent) 0%, #6d28d9 100%);
+        box-shadow: 0 2px 8px rgba(124,58,237,0.25);
+      }
+      .btn--primary:hover { box-shadow: 0 6px 20px rgba(124,58,237,0.35); }
+
+      .btn--success {
+        background: linear-gradient(135deg, var(--success) 0%, var(--success-dark) 100%);
+        box-shadow: 0 2px 8px rgba(16,185,129,0.25);
+      }
+      .btn--success:hover { box-shadow: 0 6px 20px rgba(16,185,129,0.35); }
+
+      /* Success icon */
       .success-icon {
-        width: 64px;
-        height: 64px;
-        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        width: 72px;
+        height: 72px;
+        background: linear-gradient(135deg, var(--success), var(--success-dark));
         border-radius: 50%;
         display: flex;
         align-items: center;
         justify-content: center;
         margin: 0 auto 24px;
-        font-size: 32px;
+        font-size: 36px;
+        color: #fff;
+        box-shadow: 0 8px 24px rgba(16,185,129,0.3);
+        animation: popIn 0.4s ease-out;
       }
+      @keyframes popIn {
+        0% { transform: scale(0.5); opacity: 0; }
+        70% { transform: scale(1.08); }
+        100% { transform: scale(1); opacity: 1; }
+      }
+
+      /* Token info block */
       .token-info {
-        background: rgba(0,0,0,0.3);
-        border-radius: 8px;
+        background: rgba(0,0,0,0.4);
+        border-radius: var(--radius-sm);
         padding: 16px;
         margin: 24px 0;
         text-align: left;
         font-size: 12px;
-        font-family: 'SF Mono', Monaco, monospace;
+        font-family: 'SF Mono', 'Fira Code', Monaco, monospace;
         word-break: break-all;
-        color: #a1a1aa;
-        border: 1px solid rgba(255,255,255,0.05);
+        color: var(--text-dim);
+        border: 1px solid var(--border);
+        line-height: 1.6;
       }
-      .token-info strong { color: #e4e4e7; }
-      .otp-input {
-        font-size: 20px;
-        letter-spacing: 4px;
+      .token-info strong { color: var(--text); }
+
+      /* Footer */
+      .footer {
+        margin-top: 24px;
         text-align: center;
+        z-index: 1;
       }
-      .badge {
-        display: inline-block;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-bottom: 16px;
+      .footer a {
+        color: var(--text-dim);
+        text-decoration: none;
+        font-size: 13px;
+        transition: color 0.2s;
       }
-      .badge--oauth { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
-      .badge--direct { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+      .footer a:hover { color: var(--accent-light); }
+
+      /* ── Responsive ── */
+      @media (max-width: 480px) {
+        body { padding: 16px 12px; }
+        .card { padding: 28px 20px; border-radius: 12px; }
+        h1 { font-size: 20px; }
+        .brand-icon { width: 48px; height: 48px; font-size: 24px; border-radius: 14px; }
+        .brand-name { font-size: 18px; }
+        .otp-input { font-size: 20px; letter-spacing: 6px; }
+      }
+
+      @media (min-width: 768px) {
+        .card { padding: 44px 40px; }
+      }
+
+      /* Reduced motion */
+      @media (prefers-reduced-motion: reduce) {
+        .card, .success-icon { animation: none; }
+        .btn { transition: none; }
+      }
     </style>
   </head>
   <body>
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+        </svg>
+      </div>
+      <div class="brand-name">Lenny</div>
+    </div>
     {% block content %}{% endblock %}
+    <div class="footer">
+      <a href="/v1/api/opds">← Back to Catalog</a>
+    </div>
   </body>
 </html>

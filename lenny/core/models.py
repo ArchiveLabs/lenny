@@ -24,6 +24,13 @@ from lenny.core.exceptions import (
 )
 import enum
 import datetime
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHashError
+
+import logging as _models_logging
+_models_logger = _models_logging.getLogger(__name__)
+
+ph = PasswordHasher()
 
 class FormatEnum(enum.Enum):
     EPUB = 1
@@ -103,7 +110,11 @@ class Item(Base):
 
     @classmethod
     def exists(cls, olid):
-        return db.query(Item).filter(Item.openlibrary_edition == olid).first()
+        try:
+            olid_int = int(olid)
+        except (ValueError, TypeError):
+            return None
+        return db.query(Item).filter(Item.openlibrary_edition == olid_int).first()
 
     def unborrow(self, email: str):
         if not self.is_login_required:
@@ -189,12 +200,182 @@ class Loan(Base):
             raise DatabaseInsertError(f"Failed to create loan record: {str(e)}.")
     def finalize(self):
         try:
-            self.returned_at = datetime.datetime.utcnow()
+            self.returned_at = datetime.datetime.now(datetime.timezone.utc)
             db.add(self)
             db.commit()
             return self
         except Exception as e:
             db.rollback()
             raise DatabaseInsertError(f"Failed to return loan: {str(e)}.")
+
+## OAuth Models
+class Client(Base):
+    __tablename__ = 'clients'
+    
+    client_id = Column(String, primary_key=True)
+    client_secret_hash = Column(String, nullable=True) # For confidential clients, hashed
+    redirect_uris = Column(String, nullable=False) # Comma-separated list (also supports JSON array)
+    is_confidential = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+    def set_secret(self, secret):
+        """Hashes and sets the client secret."""
+        self.client_secret_hash = ph.hash(secret)
+    
+    def verify_secret(self, secret):
+        """Verifies the client secret against the hash."""
+        if not self.client_secret_hash:
+            return False
+        try:
+            return ph.verify(self.client_secret_hash, secret)
+        except VerifyMismatchError:
+            return False
+        except (VerificationError, InvalidHashError) as e:
+            _models_logger.error(
+                f"Hash integrity error for client '{self.client_id}': {type(e).__name__}: {e}"
+            )
+            return False
+
+    @classmethod
+    def get_by_id(cls, client_id):
+        return db.query(cls).filter(cls.client_id == client_id).first()
+
+    def is_valid_redirect_uri(self, redirect_uri):
+        if not self.redirect_uris:
+            return False
+        
+        uris_str = self.redirect_uris.strip()
+        if uris_str.startswith('['):
+            try:
+                import json
+                allowed_uris = [u.strip() for u in json.loads(uris_str)]
+            except (json.JSONDecodeError, TypeError):
+                allowed_uris = [uri.strip() for uri in uris_str.split(',')]
+        else:
+            allowed_uris = [uri.strip() for uri in uris_str.split(',')]
+        return redirect_uri in allowed_uris
+
+class AuthCode(Base):
+    __tablename__ = 'auth_codes'
+    __table_args__ = (
+        Index('idx_auth_codes_client_id', 'client_id'),
+        Index('idx_auth_codes_expires_at', 'expires_at'),
+    )
+    
+    code = Column(String, primary_key=True)
+    client_id = Column(String, ForeignKey('clients.client_id'), nullable=False)
+    redirect_uri = Column(String, nullable=False)
+    email_encrypted = Column(String, nullable=False) # Encrypted
+    scope = Column(String, default="openid")
+    state = Column(String, nullable=False) # CSRF Token
+    code_challenge = Column(String, nullable=False)
+    code_challenge_method = Column(String, nullable=False) # Must be S256
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+    
+    client = relationship('Client')
+
+    @classmethod
+    def get_by_code(cls, code):
+        return db.query(cls).filter(cls.code == code).first()
+
+    @classmethod
+    def create(cls, **kwargs):
+        try:
+            auth_code = cls(**kwargs)
+            db.add(auth_code)
+            db.commit()
+            return auth_code
+        except Exception as e:
+            db.rollback()
+            raise DatabaseInsertError(f"Failed to create auth code: {str(e)}")
+
+    @classmethod
+    def mark_as_used(cls, code):
+        """Atomic update to mark code as used and prevent race conditions."""
+        try:
+            rows_updated = db.query(cls).filter(
+                cls.code == code,
+                cls.used.is_(False)
+            ).update({"used": True})
+            db.commit()
+            return rows_updated > 0
+        except Exception:
+            db.rollback()
+            return False
+
+    @classmethod
+    def cleanup_expired(cls):
+        """Delete auth codes that are expired or used."""
+        try:
+            now = datetime.datetime.now(datetime.timezone.utc)
+            deleted = db.query(cls).filter(
+                (cls.expires_at < now) | (cls.used.is_(True))
+            ).delete(synchronize_session=False)
+            db.commit()
+            return deleted
+        except Exception:
+            db.rollback()
+            return 0
+
+class RefreshToken(Base):
+    __tablename__ = 'refresh_tokens'
+    __table_args__ = (
+        Index('idx_refresh_tokens_client_id', 'client_id'),
+    )
+
+    token = Column(String, primary_key=True)
+    client_id = Column(String, ForeignKey('clients.client_id'), nullable=False)
+    email_encrypted = Column(String, nullable=False)
+    scope = Column(String, default="openid")
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+    client = relationship('Client')
+
+    @classmethod
+    def create(cls, **kwargs):
+        try:
+            token = cls(**kwargs)
+            db.add(token)
+            db.commit()
+            return token
+        except Exception as e:
+            db.rollback()
+            raise DatabaseInsertError(f"Failed to create refresh token: {str(e)}")
+
+    @classmethod
+    def get_by_token(cls, token):
+        return db.query(cls).filter(cls.token == token).first()
+
+    @classmethod
+    def revoke(cls, token):
+        """Atomic revoke to prevent race conditions."""
+        try:
+            rows_updated = db.query(cls).filter(
+                cls.token == token,
+                cls.revoked.is_(False)
+            ).update({"revoked": True})
+            db.commit()
+            return rows_updated > 0
+        except Exception:
+            db.rollback()
+            return False
+
+    @classmethod
+    def cleanup_expired(cls):
+        """Delete refresh tokens that are expired or revoked."""
+        try:
+            now = datetime.datetime.now(datetime.timezone.utc)
+            deleted = db.query(cls).filter(
+                (cls.expires_at < now) | (cls.revoked.is_(True))
+            ).delete(synchronize_session=False)
+            db.commit()
+            return deleted
+        except Exception:
+            db.rollback()
+            return 0
 
 Item.loans = relationship('Loan', back_populates='item', cascade='all, delete-orphan')

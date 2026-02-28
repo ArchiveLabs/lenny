@@ -8,8 +8,8 @@ from lenny.core import auth
 def test_cookie_basic_functionality():
     """Test basic cookie functionality without IP verification (backward compatibility)"""
     # Setup test environment
-    auth.SEED = b"123"
-    auth.SERIALIZER = URLSafeTimedSerializer(auth.SEED, salt="auth-cookie")
+    auth.LENNY_SEED = b"123"
+    auth.SERIALIZER = URLSafeTimedSerializer(auth.LENNY_SEED, salt="auth-cookie")
     email = "example@archive.org"
     expected_prefix = "ImV4YW1wbGVAYXJjaGl2ZS5vcmci"
     
@@ -22,8 +22,8 @@ def test_cookie_basic_functionality():
 def test_cookie_with_ip_verification():
     """Test cookie functionality with IP verification"""
     # Setup test environment
-    auth.SEED = b"123"
-    auth.SERIALIZER = URLSafeTimedSerializer(auth.SEED, salt="auth-cookie")
+    auth.LENNY_SEED = b"123"
+    auth.SERIALIZER = URLSafeTimedSerializer(auth.LENNY_SEED, salt="auth-cookie")
     email = "example@archive.org"
     ip = "192.168.1.100"
     
@@ -49,8 +49,8 @@ def test_cookie_with_ip_verification():
 def test_otp_authenticate_with_ip():
     """Test OTP authentication with IP verification"""
     # Setup test environment
-    auth.SEED = b"123"
-    auth.SERIALIZER = URLSafeTimedSerializer(auth.SEED, salt="auth-cookie")
+    auth.LENNY_SEED = b"123"
+    auth.SERIALIZER = URLSafeTimedSerializer(auth.LENNY_SEED, salt="auth-cookie")
     email = "test@example.com"
     ip = "10.0.0.1"
     

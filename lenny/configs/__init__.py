@@ -20,7 +20,8 @@ HOST = os.environ.get('LENNY_HOST', 'localhost')
 PORT = int(os.environ.get('LENNY_PORT', 8080))
 WORKERS = int(os.environ.get('LENNY_WORKERS', 1))
 DEBUG = bool(int(os.environ.get('LENNY_DEBUG', 0)))
-SEED = os.environ.get('LENNY_SEED')
+LENNY_SEED = os.environ.get('LENNY_SEED')
+LENNY_EMAIL_ENCRYPTION_SALT = os.environ.get('LENNY_EMAIL_ENCRYPTION_SALT')
 LOG_LEVEL = os.environ.get('LENNY_LOG_LEVEL', 'info')
 SSL_CRT = os.environ.get('LENNY_SSL_CRT')
 SSL_KEY = os.environ.get('LENNY_SSL_KEY')
@@ -32,7 +33,6 @@ READER_PORT = int(os.environ.get('READER_PORT', 3000))
 READIUM_PORT = int(os.environ.get('READIUM_PORT', 15080))
 READIUM_BASE_URL = f"http://lenny_readium:{READIUM_PORT}"
 
-LENNY_SEED = os.environ.get('LENNY_SEED')
 LOAN_LIMIT = int(os.environ.get('LENNY_LOAN_LIMIT', 10))
 
 OPTIONS = {
@@ -58,7 +58,7 @@ DB_CONFIG = {
 # Database configuration
 DB_URI = (
     "sqlite:///:memory:" if TESTING else
-    'postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}'.format(**DB_CONFIG)
+    'postgresql+psycopg://{user}:{password}@{host}:{port}/{dbname}'.format(**DB_CONFIG)
 )            
 
 # MinIO configuration
@@ -69,4 +69,4 @@ S3_CONFIG = {
     'secure': os.environ.get('S3_SECURE', 'false').lower() == 'true',
 }
 
-__all__ = ['SCHEME', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG','S3_CONFIG', 'TESTING']
+__all__ = ['SCHEME', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG','S3_CONFIG', 'TESTING', 'LENNY_SEED', 'LENNY_EMAIL_ENCRYPTION_SALT']

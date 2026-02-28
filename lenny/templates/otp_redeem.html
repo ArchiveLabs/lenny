@@ -7,23 +7,23 @@
   {% if auth_mode == 'direct' %}
   <div style="text-align: center;"><span class="badge badge--direct">Direct Auth</span></div>
   {% else %}
-  <div style="text-align: center;"><span class="badge badge--oauth">OAuth Mode</span></div>
+  <div style="text-align: center;"><span class="badge badge--oauth">OAuth PKCE</span></div>
   {% endif %}
   <h1>Check your email</h1>
-  <p class="subtitle">We sent a one-time password to <span class="email">{{ email }}</span></p>
+  <p class="subtitle">We sent a one-time password to<br><span class="email">{{ email }}</span></p>
   {% if error %}
   <div class="error">{{ error }}</div>
   {% endif %}
   <form action="{{ post_url }}" method="POST">
     <label for="otp">One-Time Password</label>
-    <input type="text" id="otp" name="otp" class="otp-input" required placeholder="Enter OTP" maxlength="6" autocomplete="one-time-code"/>
+    <input type="text" id="otp" name="otp" class="otp-input" required placeholder="••••••" maxlength="6" autocomplete="one-time-code" inputmode="numeric" autofocus/>
     <input type="hidden" name="email" value="{{ email }}"/>
     <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
     <input type="hidden" name="state" value="{{ state or '' }}"/>
     <input type="hidden" name="book_id" value="{{ book_id }}"/>
     <input type="hidden" name="action" value="{{ action }}"/>
     <input type="hidden" name="next" value="{{ next }}"/>
-    <button type="submit" class="btn btn--success">Verify &amp; Sign In</button>
+    <button type="submit" class="btn btn--success">Verify & Sign In</button>
   </form>
 </div>
 {% endblock %}

@@ -71,6 +71,10 @@ stop:
 	@bash docker/utils/lenny.sh --stop
 	@$(MAKE) untunnel
 
+.PHONY: oauth-register
+oauth-register:
+	@bash docker/utils/register_client.sh
+
 
 .PHONY: addbook
 addbook:

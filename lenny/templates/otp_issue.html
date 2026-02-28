@@ -7,7 +7,7 @@
   {% if auth_mode == 'direct' %}
   <div style="text-align: center;"><span class="badge badge--direct">Direct Auth</span></div>
   {% else %}
-  <div style="text-align: center;"><span class="badge badge--oauth">OAuth Mode</span></div>
+  <div style="text-align: center;"><span class="badge badge--oauth">OAuth PKCE</span></div>
   {% endif %}
   <h1>Sign in to Lenny</h1>
   <p class="subtitle">Enter your email to receive a one-time password.</p>
@@ -16,14 +16,14 @@
   {% endif %}
   <form action="{{ post_url }}" method="POST">
     <label for="email">Email address</label>
-    <input type="email" id="email" name="email" required placeholder="you@example.com"/>
+    <input type="email" id="email" name="email" required placeholder="you@example.com" autocomplete="email" autofocus/>
     <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
     <input type="hidden" name="state" value="{{ state or '' }}"/>
     <input type="hidden" name="client_id" value="{{ client_id or '' }}"/>
     <input type="hidden" name="book_id" value="{{ book_id }}"/>
     <input type="hidden" name="action" value="{{ action }}"/>
     <input type="hidden" name="next" value="{{ next }}"/>
-    <button type="submit" class="btn btn--primary">Send OTP</button>
+    <button type="submit" class="btn btn--primary">Send OTP →</button>
   </form>
 </div>
 {% endblock %}
