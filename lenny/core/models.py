@@ -105,6 +105,12 @@ class Item(Base):
     def exists(cls, olid):
         return db.query(Item).filter(Item.openlibrary_edition == olid).first()
 
+    @classmethod
+    def get_all(cls):
+        """Return all items as {openlibrary_edition: Item} mapping."""
+        items = db.query(cls).all()
+        return {item.openlibrary_edition: item for item in items}
+
     def unborrow(self, email: str):
         if not self.is_login_required:
             raise LoanNotRequiredError

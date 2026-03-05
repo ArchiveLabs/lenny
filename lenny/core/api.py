@@ -47,6 +47,8 @@ class LennyAPI:
         ".pdf": FormatEnum.PDF,
         ".epub": FormatEnum.EPUB
     }
+    SEARCH_BATCH_SIZE = 250
+    SEARCH_MAX_RESULTS = 100
     Item = Item
     
     @classmethod
@@ -199,6 +201,99 @@ class LennyAPI:
                 lenny_ids.append(int(olid) if isinstance(olid, int) else None)
         total = len(lenny_ids)
         return query, lenny_ids, total
+
+    @classmethod
+    def search_feed(cls, query=None, limit=None, auth_mode_direct=None):
+        """
+        Search Lenny's catalog via OpenLibrary, constrained to local edition IDs.
+
+        Chunks all local edition IDs into batches, queries OL with
+        '{query} AND edition_key:(OL1M OR OL2M OR ...)' per batch,
+        and stops once enough results are collected.
+        """
+        use_direct = auth_mode_direct if auth_mode_direct is not None else AUTH_MODE_DIRECT
+        limit = min(limit or cls.DEFAULT_LIMIT, cls.SEARCH_MAX_RESULTS)
+
+        if not query or not query.strip():
+            return LennyDataProvider.empty_catalog(
+                title="Search results", auth_mode_direct=use_direct
+            )
+
+        query = query.strip()
+        all_items = Item.get_all()
+        if not all_items:
+            return LennyDataProvider.empty_catalog(
+                title=f"Search results for: {query}", auth_mode_direct=use_direct
+            )
+
+        olid_list = list(all_items.keys())
+        batches = [
+            olid_list[i:i + cls.SEARCH_BATCH_SIZE]
+            for i in range(0, len(olid_list), cls.SEARCH_BATCH_SIZE)
+        ]
+
+        collected = []
+        for batch in batches:
+            edition_keys = " OR ".join(f"OL{olid}M" for olid in batch)
+            ol_query = f"{query} AND edition_key:({edition_keys})"
+
+            for record in OpenLibrary.search(query=ol_query, limit=cls.SEARCH_BATCH_SIZE):
+                collected.append(record)
+                if len(collected) >= limit:
+                    break
+
+            if len(collected) >= limit:
+                break
+
+        if not collected:
+            return LennyDataProvider.empty_catalog(
+                title=f"Search results for: {query}", auth_mode_direct=use_direct
+            )
+
+        matched_query_parts = []
+        lenny_ids_map = {}
+        encryption_map = {}
+        borrowable_map = {}
+
+        for record in collected:
+            try:
+                olid_int = int(record.olid)
+            except (AttributeError, ValueError, TypeError):
+                continue
+
+            item = all_items.get(olid_int)
+            if not item:
+                continue
+
+            matched_query_parts.append(f"OL{olid_int}M")
+            lenny_ids_map[olid_int] = olid_int
+            encryption_map[olid_int] = item.encrypted
+            borrowable_map[olid_int] = item.is_borrowable
+
+        if not matched_query_parts:
+            return LennyDataProvider.empty_catalog(
+                title=f"Search results for: {query}", auth_mode_direct=use_direct
+            )
+
+        # Re-query via LennyDataProvider to get properly structured records
+        provider_query = f"edition_key:({' OR '.join(matched_query_parts)})"
+        search_response = LennyDataProvider.search(
+            query=provider_query,
+            limit=limit,
+            lenny_ids=lenny_ids_map,
+            encryption_map=encryption_map,
+            borrowable_map=borrowable_map,
+        )
+
+        for record in search_response.records:
+            if isinstance(record, LennyDataRecord):
+                record.auth_mode_direct = use_direct
+
+        return LennyDataProvider.build_catalog(
+            search_response,
+            title=f"Search results for: {query}",
+            auth_mode_direct=use_direct,
+        )
 
     @classmethod
     def encrypt_file(cls, f, method="lcp"):
