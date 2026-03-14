@@ -14,11 +14,13 @@ LENNY_PROXY="${LENNY_PROXY:-$(get_tunnel)}"
 READER_WAS_RUNNING=$(docker ps -q -f name=lenny_reader 2>/dev/null)
 
 if [[ "$1" == "--rebuild" ]]; then
+    echo "[!] WARNING: --rebuild wipes the database volume and all data."
     docker compose down --volumes --remove-orphans
     docker compose build --no-cache
 fi
 
 if [[ "$1" == "--build" ]]; then
+    echo "[!] WARNING: --build wipes the database volume and all data."
     docker compose down --volumes --remove-orphans
     docker compose build
 fi
@@ -27,10 +29,15 @@ if [[ "$1" == "--start" || "$1" == "--rebuild" || "$1" == "--build" || "$1" == "
     docker compose -p lenny up -d
 elif [[ "$1" == "--restart" ]]; then
     docker compose -p lenny up -d --force-recreate --no-deps api
+elif [[ "$1" == "--redeploy" ]]; then
+    # Rebuilds API image and applies migrations — database and data are preserved.
+    echo "[+] Redeploying API (data preserved)..."
+    docker compose -p lenny up -d --build api
+    echo "[+] Redeploy complete."
 elif [[ "$1" == "--stop" ]]; then
     docker compose -p lenny stop
 else
-    echo "Usage: $0 --start | --build | --rebuild | --restart | --stop"
+    echo "Usage: $0 --start | --build | --rebuild | --redeploy | --restart | --stop"
     exit 1
 fi
 
