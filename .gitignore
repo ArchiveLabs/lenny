@@ -176,3 +176,5 @@ cython_debug/
 .pypirc
 
 pyopds2_lenny
+.lenny-version
+backups/
