@@ -39,7 +39,7 @@ OPTIONS = {
     'host': HOST,
     'port': PORT,
     'log_level': LOG_LEVEL,
-    'reload': DEBUG,
+    'reload': os.environ.get('LENNY_PRODUCTION', 'true').lower() == 'false',
     'workers': WORKERS,
 }
 if SSL_CRT and SSL_KEY:

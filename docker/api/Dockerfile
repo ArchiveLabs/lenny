@@ -13,6 +13,7 @@ ENV PYTHONPATH=/app
 # XXX These ports should be variables to reflect compose.yml
 EXPOSE 8080 5432 9000 9001 3000 15080
 
+COPY ./VERSION /app/VERSION
 COPY ./lenny/ /app/lenny/
 COPY ./alembic/ /app/alembic/
 COPY ./alembic.ini /app/alembic.ini
@@ -31,4 +32,4 @@ COPY ./docker/nginx/conf.d/lenny.conf /etc/nginx/conf.d/lenny.conf
 COPY ./docker/utils/migrate.sh /app/docker/utils/migrate.sh
 RUN chmod +x /app/docker/utils/migrate.sh
 
-CMD ["sh", "-c", "sh /app/docker/utils/migrate.sh && python -m uvicorn lenny.app:app --host 0.0.0.0 --port 1337 --workers=${LENNY_WORKERS:-1} --log-level=${LENNY_LOG_LEVEL:-info} ${LENNY_RELOAD:+--reload} & exec nginx"]
+CMD ["sh", "-c", "sh /app/docker/utils/migrate.sh && python -m uvicorn lenny.app:app --host 0.0.0.0 --port 1337 --workers=${LENNY_WORKERS:-1} --log-level=${LENNY_LOG_LEVEL:-info} $([ \"${LENNY_PRODUCTION:-true}\" = \"false\" ] && echo --reload) & exec nginx"]

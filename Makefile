@@ -104,6 +104,16 @@ url:
 	echo "[+] OPDS Feed: $$OPDS_URL"; \
 	echo "[+] Reader URL: $$READER_URL"
 
+# Update to latest version
+.PHONY: update
+update:
+	@bash docker/utils/update.sh
+
+# Run environment diagnostics
+.PHONY: doctor
+doctor:
+	@bash docker/utils/doctor.sh
+
 # Database Migrations
 
 # Run pending migrations inside container

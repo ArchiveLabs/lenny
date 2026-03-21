@@ -38,6 +38,9 @@
 - [Endpoints](#endpoints)
 - [Getting Started](#getting-started)
 - [Development Setup](#development-setup)
+- [Updating](#updating)
+- [Database Migrations](#database-migrations)
+- [Health Check](#health-check)
 - [Testing Readium Server](#testing-readium-server)
 - [Rebuilding](#rebuilding)
 - [FAQs](#faqs)
@@ -100,7 +103,8 @@ To switch back to OAuth mode, simply visit the root feed without the parameter (
 - **Minio** API for storing digital assets  
 - **YAML** for configuring library-level rules  
 - **PostgreSQL** for the database  
-- **SQLAlchemy** as the Python ORM  
+- **SQLAlchemy** as the Python ORM
+- **Alembic** for database migrations
 - **Readium LCP** for DRM  
 - **Readium Web SDK** for a secure web reading experience  
 - **OPDS** for syndicating holdings  
@@ -137,8 +141,17 @@ make all
 
 - This will generate a `.env` file with reasonable defaults (if not present).
 - Navigate to `localhost:8080` (or your `$LENNY_PORT`).
-- Enter the API container with:  
+- Enter the API container with:
   `docker exec -it lenny_api bash`
+
+### Dev vs Production Mode
+
+Lenny defaults to **production mode** — uvicorn serves requests without watching for file changes. For development with hot-reload:
+
+1. Set `LENNY_PRODUCTION=false` in your `.env`
+2. Restart: `make redeploy`
+
+Now any code change is picked up immediately by uvicorn. To switch back to production mode, set `LENNY_PRODUCTION=true` and run `make redeploy`.
 
 ---
 
@@ -213,11 +226,76 @@ curl "http://localhost:15080/$BOOK/manifest.json"
 
 ---
 
+## Updating
+
+To update an existing Lenny installation to the latest version:
+
+```sh
+make update
+```
+
+This single command handles everything automatically:
+- Pulls the latest code (`git pull --ff-only`)
+- Syncs new environment variables (never overwrites your existing config)
+- Pulls updated Docker images
+- Backs up your database before rebuilding
+- Rebuilds and restarts containers
+- Applies database migrations automatically on startup
+
+Your data (database, books, S3 storage) is preserved across updates. A database backup is saved to `backups/` before every update. If anything goes wrong, re-run `make update` — every step is idempotent.
+
+### First-time upgrade (existing installations)
+
+If your Lenny installation predates the update engine (no `make update` command yet), you need a one-time manual bootstrap:
+
+```sh
+git pull              # get the update engine code (one-time only)
+make update           # from here, the engine takes over
+```
+
+After this, all future updates are just `make update` — it handles `git pull` and everything else for you.
+
+> **Note:** Do not run `make configure` during an upgrade — it would overwrite your `.env` with new credentials. The update engine syncs new variables safely without touching your existing configuration.
+
+For details on the update engine architecture, see [docs/plans/update-engine.md](docs/plans/update-engine.md).
+
+---
+
+## Database Migrations
+
+Lenny uses [Alembic](https://alembic.sqlalchemy.org/) for database migrations. Migrations run automatically on container startup — no manual steps needed during normal use.
+
+```sh
+make migrate            # Run pending migrations
+make migrate-status     # Show current migration state
+make migration msg="add new table"  # Generate a new migration (developers only)
+make migrate-rollback   # Rollback last migration (use with caution)
+```
+
+For full details, see [docs/MIGRATIONS.md](docs/MIGRATIONS.md).
+
+---
+
+## Health Check
+
+Run diagnostics on your Lenny environment:
+
+```sh
+make doctor
+```
+
+Checks Docker, `.env` configuration, database connectivity, disk space, and version status.
+
+---
+
 ## Rebuilding
 
 ```sh
-docker compose -p lenny down
-docker compose -p lenny up -d --build
+# Rebuild API image and restart (preserves data)
+make redeploy
+
+# Full rebuild from scratch (WARNING: wipes database)
+make rebuild
 ```
 
 ---
@@ -299,12 +377,18 @@ pytest
 ```text
 /
 ├── lenny/                # Core application code
+│   ├── configs/          # App configuration (reads from .env)
+│   ├── core/             # Database models, ORM, business logic
 │   └── routes/           # API route definitions and docs
-├── scripts/              # Utility scripts (e.g. load_open_books.py)
-├── tests/                # Automated tests
+├── alembic/              # Database migration scripts
+│   └── versions/         # Individual migration files
 ├── docker/               # Docker configuration
+│   └── utils/            # Utility scripts (lenny.sh, update.sh, doctor.sh)
+├── scripts/              # Utility scripts (e.g. preload.py)
+├── tests/                # Automated tests
 ├── Makefile              # Make commands for setup/maintenance
 ├── install.sh            # Production install script
+├── VERSION               # Current release version
 ├── .env                  # Environment variables (generated)
 └── README.md             # Project documentation
 ```
