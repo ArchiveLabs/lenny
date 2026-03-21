@@ -56,6 +56,7 @@ setup(
         'uvicorn==0.32.0',
         'pydantic==2.9.2',
         'SQLAlchemy==2.0.39',
+        'alembic==1.15.1',
         'psycopg2-binary==2.9.10',
         'pyyaml==6.0.2',
         'httpx[http2]==0.28.1',

@@ -12,6 +12,12 @@ services:
         condition: service_healthy
       s3:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:1337/v1/api/opds || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     env_file: .env
     environment:
       - S3_ENDPOINT=s3:9000

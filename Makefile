@@ -44,6 +44,7 @@ teardown:
 log:
 	@docker compose logs -f
 
+# WARNING: wipes database volume and all data.
 .PHONY: resetdb
 resetdb:
 	@docker compose -p lenny down -v
@@ -57,14 +58,22 @@ restart:
 	@bash docker/utils/lenny.sh --restart
 
 # Build and start containers (uses cache)
+# WARNING: wipes database volume. Use 'make redeploy' to preserve data.
 .PHONY: build
 build:
 	@bash docker/utils/lenny.sh --build
 
 # Rebuild and start containers (recreate with no cache)
+# WARNING: wipes database volume. Use 'make redeploy' to preserve data.
 .PHONY: rebuild
 rebuild:
 	@bash docker/utils/lenny.sh --rebuild
+
+# Rebuild API image and apply migrations WITHOUT wiping data (safe for updates)
+# Use this when pulling new code changes, migrations, or dependency updates.
+.PHONY: redeploy
+redeploy:
+	@bash docker/utils/lenny.sh --redeploy
 
 .PHONY: stop
 stop:
@@ -94,3 +103,62 @@ url:
 	READER_URL="https://reader.archive.org/?opds=$$ENCODED_OPDS"; \
 	echo "[+] OPDS Feed: $$OPDS_URL"; \
 	echo "[+] Reader URL: $$READER_URL"
+
+# Update to latest version
+.PHONY: update
+update:
+	@bash docker/utils/update.sh
+
+# Run environment diagnostics
+.PHONY: doctor
+doctor:
+	@bash docker/utils/doctor.sh
+
+# Database Migrations
+
+# Run pending migrations inside container
+.PHONY: migrate
+migrate: ifup
+	@docker exec $(container) alembic upgrade head
+
+# Show current migration status
+.PHONY: migrate-status
+migrate-status: ifup
+	@docker exec $(container) alembic current
+	@docker exec $(container) alembic history
+
+# Generate a new migration from model changes (developers only)
+# Usage: make migration msg="add pkce tables"
+.PHONY: migration
+migration: ifup
+	@if [ -z "$(msg)" ]; then \
+		echo "Error: Missing migration message."; \
+		echo "Usage: make migration msg=\"describe your changes\""; \
+		exit 1; \
+	fi
+	@docker exec $(container) alembic revision --autogenerate -m "$(msg)"
+
+# Rollback last migration (use with caution)
+.PHONY: migrate-rollback
+migrate-rollback: ifup
+	@echo "WARNING: This will rollback the last migration."
+	@echo "Press Ctrl+C to cancel, or Enter to continue..."
+	@read _
+	@docker exec $(container) alembic downgrade -1
+
+# Stamp current DB as up-to-date (for existing databases adopting Alembic)
+.PHONY: migrate-stamp
+migrate-stamp: ifup
+	@docker exec $(container) alembic stamp head
+	@echo "Database stamped as up-to-date."
+
+# Squash all migrations into a new baseline (major releases only)
+# Usage: make squash-migrations
+.PHONY: squash-migrations
+squash-migrations: ifup
+	@echo "WARNING: This will squash all migrations into a new baseline."
+	@echo "Only do this on major releases. Press Ctrl+C to cancel, or Enter to continue..."
+	@read _
+	@rm -f alembic/versions/*.py
+	@docker exec $(container) alembic revision --autogenerate -m "squashed baseline"
+	@echo "New baseline created. Existing databases must run: make migrate-stamp"
