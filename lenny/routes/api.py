@@ -49,7 +49,6 @@ from lenny.core.exceptions import (
 from lenny.core.readium import ReadiumAPI
 from lenny.core.models import Item
 from urllib.parse import quote
-
 COOKIES_MAX_AGE = 604800  # 1 week
 
 def extract_session(request: Request, session: Optional[str] = None) -> Optional[str]:
@@ -144,6 +143,21 @@ async def get_opds_catalog(request: Request, offset: Optional[int]=None, limit: 
     return Response(
         content=json.dumps(
             LennyAPI.opds_feed(offset=offset, limit=limit, auth_mode_direct=is_direct_auth_mode(auth_mode, beta), email=email)
+        ),
+        media_type="application/opds+json"
+    )
+
+@router.get("/opds/search")
+async def opds_search(request: Request, query: Optional[str] = "", auth_mode: Optional[str] = None, beta: bool = False):
+    """
+    OPDS 2.0 search endpoint. Public — no authentication required.
+    """
+    return Response(
+        content=json.dumps(
+            LennyAPI.search_feed(
+                query=query,
+                auth_mode_direct=is_direct_auth_mode(auth_mode, beta),
+            )
         ),
         media_type="application/opds+json"
     )
