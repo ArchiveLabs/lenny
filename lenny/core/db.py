@@ -21,9 +21,9 @@ class LennyBase:
 Base = declarative_base(cls=LennyBase)
 
 def init():
-    try:
-        
-        Base.metadata.create_all(bind=engine)
-        return session
-    except Exception as e:
-        logger.warning(f"[WARNING] Database initialization failed: {e}")        
+    """Initialize database session.
+
+    Schema creation is handled by Alembic migrations.
+    Run `alembic upgrade head` to apply migrations.
+    """
+    return session

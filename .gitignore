@@ -174,4 +174,7 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
 pyopds2_lenny
+.lenny-version
+backups/
