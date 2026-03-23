@@ -76,10 +76,8 @@ services:
       dockerfile: docker/reader/Dockerfile
       args:
         NODE_ENV: ${NODE_ENV:-production}
-        NEXT_PUBLIC_ENABLE_MANIFEST_ROUTE: ${NEXT_PUBLIC_ENABLE_MANIFEST_ROUTE:-true}
-        NEXT_PUBLIC_MANIFEST_FORCE_ENABLE: ${NEXT_PUBLIC_MANIFEST_FORCE_ENABLE:-true}
-        NEXT_PUBLIC_MANIFEST_ALLOWED_DOMAINS: ${NEXT_PUBLIC_MANIFEST_ALLOWED_DOMAINS:-127.0.0.1,localhost,*.trycloudflare.com}
         MANIFEST_ROUTE_FORCE_ENABLE: ${MANIFEST_ROUTE_FORCE_ENABLE:-true}
+        MANIFEST_ALLOWED_DOMAINS: ${MANIFEST_ALLOWED_DOMAINS:-127.0.0.1,localhost,*.trycloudflare.com}
     env_file: reader.env
     ports:
       - "${READER_PORT:-3000}"
