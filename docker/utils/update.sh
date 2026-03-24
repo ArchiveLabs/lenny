@@ -95,7 +95,22 @@ ok "Pre-flight checks passed."
 # ── Step 2: Git Pull + Version Detection ─────────────────────────────
 
 info "[Step 2/4] Pulling latest code..."
-if ! git -C "$LENNY_ROOT" pull --ff-only; then
+
+# Detect the remote to pull from (prefer 'upstream', fall back to 'origin')
+LENNY_REMOTE="origin"
+if git -C "$LENNY_ROOT" remote | grep -q '^upstream$'; then
+    LENNY_REMOTE="upstream"
+fi
+
+# Detect the main branch name
+LENNY_MAIN_BRANCH="main"
+if git -C "$LENNY_ROOT" rev-parse --verify "$LENNY_REMOTE/master" >/dev/null 2>&1 \
+   && ! git -C "$LENNY_ROOT" rev-parse --verify "$LENNY_REMOTE/main" >/dev/null 2>&1; then
+    LENNY_MAIN_BRANCH="master"
+fi
+
+info "Pulling from ${LENNY_REMOTE}/${LENNY_MAIN_BRANCH}..."
+if ! git -C "$LENNY_ROOT" pull --ff-only "$LENNY_REMOTE" "$LENNY_MAIN_BRANCH"; then
     error "git pull --ff-only failed. Your local branch has diverged."
     error "Resolve manually (e.g., git rebase) then re-run: make update"
     exit 1
