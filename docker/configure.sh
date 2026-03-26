@@ -23,7 +23,7 @@ else
   LENNY_SSL_CRT="${LENNY_SSL_CRT:-}"
   LENNY_SSL_KEY="${LENNY_SSL_KEY:-}"
   LENNY_SEED="${LENNY_SEED:-$(genpass 32)}"
-  OTP_SERVER="${OTP_SERVER:-https://staging.openlibrary.org}"
+  OTP_SERVER="${OTP_SERVER:-https://openlibrary.org}"
   LENNY_LOAN_LIMIT="${LENNY_LOAN_LIMIT:-10}"
 
   READER_PORT="${READER_PORT:-3000}"
