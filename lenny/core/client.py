@@ -29,6 +29,9 @@ class LennyClient:
                     timeout=timeout
                 )
                 logger.info(f"Upload response (OLID: {olid}): {response.content}")
+                if response.status_code == 409:
+                    logger.info(f"Skipping OLID {olid}: already exists")
+                    return True
                 response.raise_for_status()
                 return True
         except httpx.HTTPError as e:
