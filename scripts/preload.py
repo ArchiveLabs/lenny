@@ -26,15 +26,14 @@ logger = logging.getLogger(__name__)
 
 class StandardEbooks:
 
-    BASE_URL = "https://standardebooks.org/ebooks"
-    HTTP_TIMEOUT = 5
+    BASE_URL = "https://archive.org/download/lenny-open-access-preloads"
+    HTTP_TIMEOUT = 15
     EPUB_HEADER = b'PK\x03\x04'
 
     @classmethod
     def construct_download_url(cls, identifier: str) -> str:
-        identifier_path = identifier
         identifier_file = identifier.replace("/", "_")
-        return f"{cls.BASE_URL}/{identifier_path}/downloads/{identifier_file}.epub?source=download"
+        return f"{cls.BASE_URL}/{identifier_file}.epub"
 
     @classmethod
     def verify_download(cls, content):
