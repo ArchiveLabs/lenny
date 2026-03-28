@@ -1,8 +1,8 @@
-"""add unlogged cache table
+"""add cache table
 
-Revision ID: f132daa4029f
+Revision ID: c6b7da6debc2
 Revises: 001_baseline
-Create Date: 2026-03-28 13:50:01.133285
+Create Date: 2026-03-28 18:58:54.334094
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'f132daa4029f'
+revision: str = 'c6b7da6debc2'
 down_revision: Union[str, None] = '001_baseline'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

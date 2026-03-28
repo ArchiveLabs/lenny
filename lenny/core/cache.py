@@ -1,8 +1,8 @@
 """
-    PostgreSQL-backed cache system for Lenny.
+    PostgreSQL-backed cache for Lenny.
 
-    Provides a shared cache across multiple Uvicorn workers using
-    the existing PostgreSQL database and SQLAlchemy ORM.
+    Used for OTP email-based rate limiting across multiple Uvicorn workers.
+    IP-based rate limiting is handled by nginx (limit_req).
 
     :copyright: (c) 2015 by AUTHORS
     :license: see LICENSE for more details
@@ -12,16 +12,20 @@ import logging
 import random
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Request, HTTPException
 from sqlalchemy import Column, String, BigInteger, DateTime, Index
 from sqlalchemy.sql import func
 
 from lenny.core.db import session as db, Base
 from lenny.core.exceptions import DatabaseInsertError
+from lenny import configs
 
 logger = logging.getLogger(__name__)
 
 PURGE_PROBABILITY = 0.01  # 1-in-100 chance per rate limit check
+
+# UNLOGGED tables skip WAL for faster writes — ideal for ephemeral cache.
+# SQLite (used in tests) doesn't support UNLOGGED, so we only apply it on PostgreSQL.
+_cache_table_opts = {'prefixes': ['UNLOGGED']} if not configs.TESTING else {}
 
 
 class CacheEntry(Base):
@@ -29,7 +33,7 @@ class CacheEntry(Base):
     __table_args__ = (
         Index('idx_cache_scope_key_expires', 'scope', 'key', 'expires_at'),
         Index('idx_cache_expires', 'expires_at'),
-        {'prefixes': ['UNLOGGED']},
+        _cache_table_opts,
     )
 
     id = Column(BigInteger, primary_key=True)
@@ -65,11 +69,13 @@ class Cache:
         """Count unexpired entries for a given scope and key."""
         try:
             now = datetime.now(timezone.utc)
-            return db.query(CacheEntry).filter(
+            count = db.query(CacheEntry).filter(
                 CacheEntry.scope == scope,
                 CacheEntry.key == key,
                 CacheEntry.expires_at > now,
             ).count()
+            db.rollback()
+            return count
         except Exception as e:
             db.rollback()
             logger.warning(f"Cache count failed: {str(e)}")
@@ -97,44 +103,6 @@ class Cache:
         return current_count >= limit
 
     @classmethod
-    def get(cls, scope, key):
-        """Return the most recent unexpired entry's value, or None."""
-        try:
-            now = datetime.now(timezone.utc)
-            entry = db.query(CacheEntry).filter(
-                CacheEntry.scope == scope,
-                CacheEntry.key == key,
-                CacheEntry.expires_at > now,
-            ).order_by(CacheEntry.created_at.desc()).first()
-            return entry.value if entry else None
-        except Exception as e:
-            db.rollback()
-            logger.warning(f"Cache get failed: {str(e)}")
-            return None
-
-    @classmethod
-    def set(cls, scope, key, value, ttl):
-        """Set a single-value cache entry, replacing any existing ones."""
-        try:
-            now = datetime.now(timezone.utc)
-            db.query(CacheEntry).filter(
-                CacheEntry.scope == scope,
-                CacheEntry.key == key,
-            ).delete()
-            entry = CacheEntry(
-                scope=scope,
-                key=key,
-                value=value,
-                expires_at=now + timedelta(seconds=ttl),
-            )
-            db.add(entry)
-            db.commit()
-            return entry
-        except Exception as e:
-            db.rollback()
-            raise DatabaseInsertError(f"Failed to set cache entry: {str(e)}")
-
-    @classmethod
     def purge(cls):
         """Delete all expired cache entries."""
         try:
@@ -148,32 +116,3 @@ class Cache:
         except Exception as e:
             db.rollback()
             logger.warning(f"Cache purge failed: {str(e)}")
-
-
-class RateGuard:
-    """FastAPI dependency for IP-based rate limiting.
-
-    Usage:
-        @router.get("/endpoint", dependencies=[Depends(RateGuard("api", limit=10, ttl=60))])
-        async def endpoint():
-            ...
-    """
-
-    def __init__(self, scope: str, limit: int, ttl: int):
-        self.scope = scope
-        self.limit = limit
-        self.ttl = ttl
-
-    def __call__(self, request: Request):
-        client_ip = (
-            request.headers.get("X-Real-IP")
-            or request.headers.get("X-Forwarded-For", "").split(",")[0].strip().split(":")[0]
-            or (request.client.host if request.client else None)
-        )
-        if not client_ip:
-            return
-        if Cache.is_throttled(self.scope, client_ip, self.limit, self.ttl):
-            raise HTTPException(
-                status_code=429,
-                detail="Too many requests. Please try again later.",
-            )
