@@ -1,12 +1,11 @@
 import hashlib
-import hmac
 import logging
-import time
 import httpx
 from datetime import datetime, timedelta
 from typing import Optional
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from lenny.configs import SEED, OTP_SERVER
+from lenny.core.cache import Cache
 from lenny.core.exceptions import RateLimitError
 
 logging.basicConfig(
@@ -83,9 +82,6 @@ def verify_session_cookie(session, client_ip: str = None):
         
 class OTP:
 
-    _attempts = {}
-    _send_attempts = {}
-
     @classmethod
     def generate(cls, email: str, issued_minute: int = None) -> str:
         """
@@ -112,11 +108,9 @@ class OTP:
     @classmethod
     def is_send_rate_limited(cls, email: str) -> bool:
         """Limit OTP send requests: 5 emails per 5 minutes per email."""
-        now = time.time()
-        attempts = cls._send_attempts.get(email, [])
-        attempts = [ts for ts in attempts if now - ts < EMAIL_WINDOW_SECONDS]
-        cls._send_attempts[email] = attempts + [now]
-        return len(attempts) >= EMAIL_REQUEST_LIMIT
+        return Cache.is_throttled(
+            "otp:send", email, EMAIL_REQUEST_LIMIT, EMAIL_WINDOW_SECONDS
+        )
 
     @classmethod
     def issue(cls, email: str, ip_address: str) -> dict:
@@ -139,15 +133,10 @@ class OTP:
 
     @classmethod
     def is_rate_limited(cls, email: str) -> bool:
-        """Updates attempts within timeframe for email and
-        returns True if the user is making too many attempts.
-        """
-        now = time.time()
-        attempts = cls._attempts.get(email, [])
-        # Keep only recent attempts
-        attempts = [ts for ts in attempts if now - ts < ATTEMPT_WINDOW_SECONDS]
-        cls._attempts[email] = attempts + [now]
-        return len(attempts) >= ATTEMPT_LIMIT
+        """Returns True if the user is making too many OTP verification attempts."""
+        return Cache.is_throttled(
+            "otp:verify", email, ATTEMPT_LIMIT, ATTEMPT_WINDOW_SECONDS
+        )
 
     @classmethod
     def authenticate(cls, email: str, otp: str, ip: str = None) -> Optional[str]:
