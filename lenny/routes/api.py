@@ -15,6 +15,7 @@ from typing import Optional, Generator, List
 from urllib.parse import urlencode
 from fastapi import (
     APIRouter,
+    Depends,
     Request,
     UploadFile,
     File,
@@ -46,6 +47,7 @@ from lenny.core.exceptions import (
     UploaderNotAllowedError,
     BookUnavailableError,
 )
+from lenny.core.cache import RateGuard
 from lenny.core.readium import ReadiumAPI
 from lenny.core.models import Item
 from urllib.parse import quote
@@ -90,7 +92,10 @@ def is_direct_auth_mode(auth_mode: Optional[str] = None, beta: bool = False) -> 
     return (auth_mode == "direct") or beta or configs.AUTH_MODE_DIRECT
 
 
-router = APIRouter()
+# RateGuard(scope, limit, ttl) — IP-based rate limiter backed by PostgreSQL.
+# scope: bucket name, limit: max requests, ttl: window in seconds.
+# Router-level applies to all routes. Per-route overrides with tighter limits.
+router = APIRouter(dependencies=[Depends(RateGuard("api", limit=30, ttl=60))])
 
 def requires_item_auth(do_function=None):
     """
@@ -208,7 +213,7 @@ async def proxy_readium(request: Request, book_id: str, readium_path: str, forma
         return Response(content=r.content, media_type=content_type)
 
 
-@router.api_route('/items/{book_id}/borrow', methods=["GET", "POST"])
+@router.api_route('/items/{book_id}/borrow', methods=["GET", "POST"], dependencies=[Depends(RateGuard("auth", limit=10, ttl=60))])
 async def borrow_item(request: Request, response: Response, book_id: int, format: str=".epub", session: Optional[str] = Cookie(None), beta: bool = False, auth_mode: Optional[str] = None):
     """
     Unified Borrow Endpoint.
@@ -333,7 +338,7 @@ async def return_item(request: Request, book_id: int, format: str=".epub", sessi
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post('/upload', status_code=status.HTTP_200_OK)
+@router.post('/upload', status_code=status.HTTP_200_OK, dependencies=[Depends(RateGuard("upload", limit=5, ttl=60))])
 async def upload(
     request: Request,
     openlibrary_edition: int = Form(
@@ -439,7 +444,7 @@ async def oauth_implicit(request: Request):
         media_type="application/opds-authentication+json"
     )
 
-@router.api_route("/oauth/authorize", methods=["GET", "POST"])
+@router.api_route("/oauth/authorize", methods=["GET", "POST"], dependencies=[Depends(RateGuard("auth", limit=10, ttl=60))])
 async def oauth_authorize(
     request: Request, 
     response: Response,
