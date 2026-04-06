@@ -579,5 +579,3 @@ async def admin_verify(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     return JSONResponse({"valid": True})
-
-    return request.app.templates.TemplateResponse("otp_issue.html", context)
