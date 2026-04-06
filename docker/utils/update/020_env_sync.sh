@@ -91,7 +91,7 @@ sync_env_file() {
 
         # If the value is a shell variable reference ($VAR or ${VAR...}),
         # resolve the default from its assignment in configure.sh.
-        # Generated values (passwords/keys using $(genpass)) stay empty.
+        # Generated values (passwords/keys using $(genpass)) are auto-generated.
         value=$(echo "$value" | sed 's/^[[:space:]]*//')
         if echo "$value" | grep -qE '^\$'; then
             local ref_var
@@ -101,10 +101,10 @@ sync_env_file() {
                 | sed "s/.*:-\(.*\)}\".*/\1/" | head -1) || true
             if [ -n "$default" ] && ! echo "$default" | grep -qE '^\$\('; then
                 value="$default"
-            elif echo "$default" | grep -qE '^\$\(genpass( [0-9]+)?\)'; then
-                local len
-                len=$(echo "$default" | sed 's/\$\(genpass\( \([0-9]*\)\)\?\)/\3/')
-                value=$(genpass "${len:-32}")
+            elif echo "$default" | grep -qE '^\$\(genpass'; then
+                local genpass_len
+                genpass_len=$(echo "$default" | grep -oE '[0-9]+' | head -1)
+                value=$(genpass "${genpass_len:-32}")
             else
                 value=""
             fi
