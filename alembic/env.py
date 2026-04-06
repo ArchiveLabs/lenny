@@ -15,6 +15,7 @@ from lenny.core.db import Base
 
 # Import models so Base.metadata has all table definitions registered
 import lenny.core.models  # noqa: F401
+import lenny.core.cache  # noqa: F401
 
 # Alembic Config object — access to alembic.ini values
 config = context.config

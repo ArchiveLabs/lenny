@@ -90,6 +90,8 @@ def is_direct_auth_mode(auth_mode: Optional[str] = None, beta: bool = False) -> 
     return (auth_mode == "direct") or beta or configs.AUTH_MODE_DIRECT
 
 
+# All IP-based rate limiting is handled by nginx (limit_req zones).
+# OTP email-based rate limiting remains in auth.py via Cache.is_throttled.
 router = APIRouter()
 
 def requires_item_auth(do_function=None):
@@ -127,6 +129,10 @@ def requires_item_auth(do_function=None):
 async def home(request: Request):
     kwargs = {"request": request}
     return request.app.templates.TemplateResponse("index.html", kwargs)
+
+@router.get('/health', status_code=status.HTTP_200_OK)
+async def health():
+    return {"status": "ok"}
 
 @router.get("/items")
 async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limit: Optional[int]=None):

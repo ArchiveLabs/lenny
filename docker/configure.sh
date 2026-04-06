@@ -17,7 +17,7 @@ else
   # Use environment variables if they are set, otherwise provide defaults or generate secure values
   LENNY_HOST="localhost"
   LENNY_PORT="${LENNY_PORT:-8080}"
-  LENNY_WORKERS="${LENNY_WORKERS:-1}"
+  LENNY_WORKERS="${LENNY_WORKERS:-3}"
   LENNY_LOG_LEVEL="${LENNY_LOG_LEVEL:-debug}"
   LENNY_PRODUCTION="${LENNY_PRODUCTION:-true}"
   LENNY_SSL_CRT="${LENNY_SSL_CRT:-}"
@@ -95,4 +95,28 @@ MANIFEST_ALLOWED_DOMAINS=$MANIFEST_ALLOWED_DOMAINS
 NODE_ENV=$NODE_ENV
 
 EOF
+fi
+
+# Install 'lenny' CLI command if not already available
+LENNY_PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if ! command -v lenny &>/dev/null; then
+  INSTALL_DIR="$HOME/.local/bin"
+  mkdir -p "$INSTALL_DIR"
+  cat > "$INSTALL_DIR/lenny" <<SCRIPT
+#!/bin/sh
+make -C "$LENNY_PROJECT_DIR" "\$@"
+SCRIPT
+  chmod +x "$INSTALL_DIR/lenny"
+
+  case ":$PATH:" in
+    *":$INSTALL_DIR:"*)
+      echo "[lenny] CLI installed. You can now use: lenny start, lenny stop, etc."
+      ;;
+    *)
+      echo "[lenny] CLI installed to $INSTALL_DIR/lenny"
+      echo "[lenny] Add to PATH: echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
+      ;;
+  esac
+else
+  echo "Skipping CLI install: 'lenny' command already available."
 fi
