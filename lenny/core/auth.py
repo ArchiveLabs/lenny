@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import logging
 import httpx
 from datetime import datetime, timedelta
