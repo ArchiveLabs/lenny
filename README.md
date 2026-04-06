@@ -46,6 +46,7 @@
 - [FAQs](#faqs)
 - [Tests](#tests)
 - [Project Structure](#project-structure)
+- [Admin Dashboard](#admin-dashboard)
 - [Contributing](#contributing)
 - [Pilot](#pilot)
 - [Open Topics](#open-topics)
@@ -89,6 +90,8 @@ To switch back to OAuth mode, simply visit the root feed without the parameter (
 - **Readium Integration**: Secure, browser-based reading experience.
 - **Flexible Storage**: S3, Internet Archive, or local file support.
 - **Database-backed**: Uses PostgreSQL and SQLAlchemy.
+- **Admin UI**: Secure admin dashboard served at `/admin`, isolated from public API access.
+- **Encrypted/Unencrypted Item Filtering**: Filter catalog items by encryption status via API.
 
 ---
 ## OPDS 2.0 Feed
@@ -118,6 +121,7 @@ To switch back to OAuth mode, simply visit the root feed without the parameter (
 - `/v{1}/read`
 - `/v{1}/opds`
 - `/v{1}/stats`
+- `/admin` — Admin UI (internal only, proxied to `lenny_admin:4000`)
 
 ---
 
@@ -169,6 +173,22 @@ make url
 
 ---
 
+
+---
+
+## Admin Dashboard
+
+Lenny includes a secure admin interface at `/admin` for managing the library.
+
+### Setup
+
+Change these variables in your `.env` or it will use system generated credentials:
+
+```env
+ADMIN_USERNAME=your-username
+ADMIN_PASSWORD=your-secure-password
+```
+
 ## Adding Books encrypted or unencrypted
 
 To add a book to Lenny, you must provide an OpenLibrary Edition ID (OLID). Books without an OLID cannot be uploaded.
@@ -183,7 +203,7 @@ https://openlibrary.org/books/add
 
 navigate to the above link and add all the details.
 
-### Usage
+### Usage using CLI 
 
 ```sh
 make addbook olid=OL123456M filepath=/path/to/book.epub [encrypted=true]

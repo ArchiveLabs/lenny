@@ -4,7 +4,7 @@ import httpx
 from datetime import datetime, timedelta
 from typing import Optional
 from itsdangerous import URLSafeTimedSerializer, BadSignature
-from lenny.configs import SEED, OTP_SERVER
+from lenny.configs import SEED, OTP_SERVER, ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_INTERNAL_SECRET, ADMIN_SALT
 from lenny.core.cache import Cache
 from lenny.core.exceptions import RateLimitError
 
@@ -18,6 +18,43 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("hpack").setLevel(logging.WARNING)
 logging.getLogger("multipart").setLevel(logging.WARNING)
+
+ADMIN_TOKEN_TTL = 86400  # 24 hours
+ADMIN_SERIALIZER = None  # Initialized lazily
+
+def _get_admin_serializer():
+    global ADMIN_SERIALIZER
+    if ADMIN_SERIALIZER is None:
+        ADMIN_SERIALIZER = URLSafeTimedSerializer(SEED, salt=ADMIN_SALT)
+    return ADMIN_SERIALIZER
+
+def verify_admin_internal_secret(secret: str) -> bool:
+    """Constant-time comparison to validate the internal shared secret."""
+    if not ADMIN_INTERNAL_SECRET or not secret:
+        return False
+    return hmac.compare_digest(ADMIN_INTERNAL_SECRET, secret)
+
+def authenticate_admin(username: str, password: str) -> Optional[str]:
+    """Validates admin username + password and returns a signed token on success."""
+    if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+        return None
+    username_ok = hmac.compare_digest(ADMIN_USERNAME, username)
+    password_ok = hmac.compare_digest(ADMIN_PASSWORD, password)
+    if not (username_ok and password_ok):
+        return None
+    serializer = _get_admin_serializer()
+    return serializer.dumps({"admin": True})
+
+def verify_admin_token(token: str) -> bool:
+    """Validates a signed admin token. Returns True if valid and not expired."""
+    try:
+        if not token:
+            return False
+        serializer = _get_admin_serializer()
+        data = serializer.loads(token, max_age=ADMIN_TOKEN_TTL)
+        return isinstance(data, dict) and data.get("admin") is True
+    except BadSignature:
+        return False
 
 ATTEMPT_LIMIT = 5
 ATTEMPT_WINDOW_SECONDS = 60

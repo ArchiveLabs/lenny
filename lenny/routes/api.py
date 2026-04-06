@@ -135,10 +135,10 @@ async def health():
     return {"status": "ok"}
 
 @router.get("/items")
-async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limit: Optional[int]=None):
+async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limit: Optional[int]=None, encrypted: Optional[bool]=None):
     fields = fields.split(",") if fields else None
     return LennyAPI.get_enriched_items(
-        fields=fields, offset=offset, limit=limit
+        fields=fields, offset=offset, limit=limit, encrypted=encrypted
     )
 
 @router.get("/opds")
@@ -362,7 +362,7 @@ async def upload(
             content="File uploaded successfully."
         )
     except UploaderNotAllowedError as e:
-        raise HTTPException(status_code=503, details=str(e))
+        raise HTTPException(status_code=503, detail=str(e))
     except ItemExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except InvalidFileError as e:
@@ -541,5 +541,43 @@ async def oauth_authorize(
         except Exception:
             context["error"] = "Failed to issue OTP. Please try again."
             return request.app.templates.TemplateResponse("otp_issue.html", context)
+
+    return request.app.templates.TemplateResponse("otp_issue.html", context)
+
+@router.post("/admin/auth", status_code=status.HTTP_200_OK)
+async def admin_auth(request: Request, body: dict = Body(...)):
+    """
+    Validates the admin key and internal secret, returns a signed token.
+    Called server-side from lenny-app; never exposed through nginx.
+    """
+    internal_secret = request.headers.get("X-Admin-Internal-Secret", "")
+    if not auth.verify_admin_internal_secret(internal_secret):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    username = body.get("username", "")
+    password = body.get("password", "")
+    token = auth.authenticate_admin(username, password)
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid admin key")
+
+    return JSONResponse({"token": token})
+
+
+@router.get("/admin/verify", status_code=status.HTTP_200_OK)
+async def admin_verify(request: Request):
+    """
+    Verifies a signed admin token passed as a Bearer token.
+    Called server-side from lenny-app middleware; never exposed through nginx.
+    """
+    internal_secret = request.headers.get("X-Admin-Internal-Secret", "")
+    if not auth.verify_admin_internal_secret(internal_secret):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    authorization = request.headers.get("Authorization", "")
+    token = authorization.removeprefix("Bearer ").strip()
+    if not auth.verify_admin_token(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    return JSONResponse({"valid": True})
 
     return request.app.templates.TemplateResponse("otp_issue.html", context)

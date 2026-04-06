@@ -21,6 +21,10 @@ PORT = int(os.environ.get('LENNY_PORT', 8080))
 WORKERS = int(os.environ.get('LENNY_WORKERS', 1 if TESTING else 3))
 DEBUG = bool(int(os.environ.get('LENNY_DEBUG', 0)))
 SEED = os.environ.get('LENNY_SEED')
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
+ADMIN_INTERNAL_SECRET = os.environ.get('ADMIN_INTERNAL_SECRET')
+ADMIN_SALT = os.environ.get('ADMIN_SALT')
 LOG_LEVEL = os.environ.get('LENNY_LOG_LEVEL', 'info')
 SSL_CRT = os.environ.get('LENNY_SSL_CRT')
 SSL_KEY = os.environ.get('LENNY_SSL_KEY')
@@ -69,4 +73,5 @@ S3_CONFIG = {
     'secure': os.environ.get('S3_SECURE', 'false').lower() == 'true',
 }
 
-__all__ = ['SCHEME', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG','S3_CONFIG', 'TESTING']
+__all__ = ['SCHEME', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG', 'S3_CONFIG', 'TESTING',
+           'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'ADMIN_INTERNAL_SECRET', 'ADMIN_SALT']

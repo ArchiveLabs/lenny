@@ -23,6 +23,15 @@ else
   LENNY_SSL_CRT="${LENNY_SSL_CRT:-}"
   LENNY_SSL_KEY="${LENNY_SSL_KEY:-}"
   LENNY_SEED="${LENNY_SEED:-$(genpass 32)}"
+  ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+  ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(genpass 32)}"
+  ADMIN_INTERNAL_SECRET="${ADMIN_INTERNAL_SECRET:-$(genpass 32)}"
+  ADMIN_SALT="${ADMIN_SALT:-$(genpass 32)}"
+  # Public URL of the Lenny API as seen by the browser.
+  # Use a relative path (/v1/api) when the admin UI is served behind the same
+  # nginx, or set an absolute URL (https://library.example.com/v1/api) for
+  # external/custom-domain deployments.
+  NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-/v1/api}"
   OTP_SERVER="${OTP_SERVER:-https://openlibrary.org}"
   LENNY_LOAN_LIMIT="${LENNY_LOAN_LIMIT:-10}"
 
@@ -57,6 +66,12 @@ LENNY_PRODUCTION=$LENNY_PRODUCTION
 LENNY_SSL_CRT=$LENNY_SSL_CRT
 LENNY_SSL_KEY=$LENNY_SSL_KEY
 OTP_SERVER=$OTP_SERVER
+ADMIN_USERNAME=$ADMIN_USERNAME
+ADMIN_PASSWORD=$ADMIN_PASSWORD
+ADMIN_INTERNAL_SECRET=$ADMIN_INTERNAL_SECRET
+ADMIN_SALT=$ADMIN_SALT
+# Set to an absolute URL for custom-domain deployments, e.g. https://library.example.com/v1/api
+NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
 # Loan Limit
 LENNY_LOAN_LIMIT=$LENNY_LOAN_LIMIT

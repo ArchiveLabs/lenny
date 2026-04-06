@@ -3,6 +3,7 @@ from typing import Optional
 from fastapi import UploadFile, Request
 from botocore.exceptions import ClientError
 import socket
+import ipaddress
 from pyopds2_lenny import LennyDataProvider, LennyDataRecord, build_post_borrow_publication
 from pyopds2 import Catalog, Metadata
 from pyopds2.models import Link, Navigation
@@ -121,14 +122,14 @@ class LennyAPI:
         return {}
     
     @classmethod
-    def get_enriched_items(cls, olid=None, fields=None, offset=None, limit=None):
+    def get_enriched_items(cls, olid=None, fields=None, offset=None, limit=None, encrypted=None):
         """Returns a dict whose keys are int `olid` Open Library
-        edition IDs and whose values are OpenLibraryRecords wwith an
+        edition IDs and whose values are OpenLibraryRecords with an
         additional `lenny` field containing Lenny's record for this
         item in the LennyDB
         """
         limit = limit or cls.DEFAULT_LIMIT
-        items = [Item.exists(olid)] if olid else Item.get_many(offset=offset, limit=limit)
+        items = [Item.exists(olid)] if olid else Item.get_many(offset=offset, limit=limit, encrypted=encrypted)
         return cls._enrich_items(items, fields=fields)
 
     @classmethod
@@ -312,6 +313,13 @@ class LennyAPI:
     def is_allowed_uploader(cls, client_ip: str) -> bool:
         if client_ip in ("127.0.0.1", "::1"):
             return True
+
+        # Allow Docker internal network (admin container proxies uploads server-side)
+        try:
+            if ipaddress.ip_address(client_ip).is_private:
+                return True
+        except ValueError:
+            pass
 
         if host := cls._resolve_ip_to_hostname(client_ip):
             for allowed_host in ["localhost", "openlibrary.press"]:
