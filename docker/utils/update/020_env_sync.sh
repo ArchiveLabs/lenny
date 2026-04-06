@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+genpass() {
+    local len=${1:-32}
+    dd if=/dev/urandom bs=1 count=$((len * 2)) 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | head -c "$len"
+}
+
 # Sync new environment variables from configure.sh into .env and reader.env
 #
 # Safety guarantees:
@@ -96,6 +101,10 @@ sync_env_file() {
                 | sed "s/.*:-\(.*\)}\".*/\1/" | head -1) || true
             if [ -n "$default" ] && ! echo "$default" | grep -qE '^\$\('; then
                 value="$default"
+            elif echo "$default" | grep -qE '^\$\(genpass( [0-9]+)?\)'; then
+                local len
+                len=$(echo "$default" | sed 's/\$\(genpass\( \([0-9]*\)\)\?\)/\3/')
+                value=$(genpass "${len:-32}")
             else
                 value=""
             fi
