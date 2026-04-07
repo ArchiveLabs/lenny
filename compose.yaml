@@ -5,6 +5,7 @@ services:
       context: .
       dockerfile: docker/api/Dockerfile
     container_name: lenny_api
+    restart: on-failure
     ports:
       - "${LENNY_PORT:-8080}:80"
     depends_on:
@@ -81,6 +82,26 @@ services:
     env_file: reader.env
     ports:
       - "${READER_PORT:-3000}"
+    networks:
+      - lenny_network
+
+  admin:
+    build:
+      context: .
+      dockerfile: docker/lenny-app/Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
+    container_name: lenny_admin
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-}
+      - LENNY_INTERNAL_API_URL=http://lenny_api:1337/v1/api
+      - ADMIN_INTERNAL_SECRET=${ADMIN_INTERNAL_SECRET}
+    depends_on:
+      api:
+        condition: service_healthy
     networks:
       - lenny_network
 

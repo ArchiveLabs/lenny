@@ -102,6 +102,13 @@ class Item(Base):
         return True
 
     @classmethod
+    def get_many(cls, offset=None, limit=None, encrypted=None):
+        q = db.query(cls)
+        if encrypted is not None:
+            q = q.filter(cls.encrypted == encrypted)
+        return q.offset(offset).limit(limit).all()
+
+    @classmethod
     def exists(cls, olid):
         return db.query(Item).filter(Item.openlibrary_edition == olid).first()
 

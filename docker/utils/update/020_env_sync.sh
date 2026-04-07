@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+genpass() {
+    local len=${1:-32}
+    dd if=/dev/urandom bs=1 count=$((len * 2)) 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | head -c "$len"
+}
+
 # Sync new environment variables from configure.sh into .env and reader.env
 #
 # Safety guarantees:
@@ -86,7 +91,7 @@ sync_env_file() {
 
         # If the value is a shell variable reference ($VAR or ${VAR...}),
         # resolve the default from its assignment in configure.sh.
-        # Generated values (passwords/keys using $(genpass)) stay empty.
+        # Generated values (passwords/keys using $(genpass)) are auto-generated.
         value=$(echo "$value" | sed 's/^[[:space:]]*//')
         if echo "$value" | grep -qE '^\$'; then
             local ref_var
@@ -96,6 +101,10 @@ sync_env_file() {
                 | sed "s/.*:-\(.*\)}\".*/\1/" | head -1) || true
             if [ -n "$default" ] && ! echo "$default" | grep -qE '^\$\('; then
                 value="$default"
+            elif echo "$default" | grep -qE '^\$\(genpass'; then
+                local genpass_len
+                genpass_len=$(echo "$default" | grep -oE '[0-9]+' | head -1)
+                value=$(genpass "${genpass_len:-32}")
             else
                 value=""
             fi
