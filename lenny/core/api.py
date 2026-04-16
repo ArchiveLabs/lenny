@@ -43,7 +43,7 @@ class LennyAPI:
 
     DEFAULT_LIMIT = 50
     OPDS_TITLE = "Lenny Catalog"
-    MAX_FILE_SIZE = 50 * 1024 * 1024
+    MAX_FILE_SIZE = 100 * 1024 * 1024
     VALID_EXTS = {
         ".pdf": FormatEnum.PDF,
         ".epub": FormatEnum.EPUB
