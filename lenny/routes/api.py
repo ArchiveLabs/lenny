@@ -32,6 +32,9 @@ from fastapi.responses import (
 )
 from lenny.core import auth
 from lenny.core.api import LennyAPI
+from lenny.core import ol_bootstrap
+from lenny.core.cache import Cache
+from lenny.core.openlibrary import ol_auth_status
 from lenny import configs
 from pyopds2_lenny import LennyDataProvider, build_post_borrow_publication, LennyDataRecord
 from lenny.core.exceptions import (
@@ -46,6 +49,7 @@ from lenny.core.exceptions import (
     UploaderNotAllowedError,
     BookUnavailableError,
 )
+from lenny.schemas.ol import OLLoginRequest
 from lenny.core.readium import ReadiumAPI
 from lenny.core.models import Item
 from urllib.parse import quote
@@ -579,3 +583,181 @@ async def admin_verify(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     return JSONResponse({"valid": True})
+
+
+# ─── Open Library / Internet Archive auth bootstrap ──────────────────────
+# These routes let the admin UI log Lenny into archive.org and persist the
+# returned IA S3 keys to .env. They mirror `docker/utils/ol_configure.sh` so
+# an operator can log in either from the UI or from a shell.
+#
+# Every /admin/ol/* route requires BOTH X-Admin-Internal-Secret (server-side
+# shared secret — proxied by lenny-app, never reachable through nginx) AND a
+# valid admin Bearer token (proof the admin user is signed in). This matches
+# the /admin/auth + /admin/verify pair already exposed on this router.
+
+OL_ENV_PATH = "/app/.env"
+OL_LOGIN_RATE_LIMIT = 5
+OL_LOGIN_RATE_WINDOW = 300
+
+
+def _require_admin(request: Request) -> None:
+    """Enforce the internal-secret + admin-token pair used by every /admin/ol/* route."""
+    internal_secret = request.headers.get("X-Admin-Internal-Secret", "")
+    if not auth.verify_admin_internal_secret(internal_secret):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    authorization = request.headers.get("Authorization", "")
+    token = authorization.removeprefix("Bearer ").strip()
+    if not auth.verify_admin_token(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+def _apply_ol_env_in_process(
+    access: Optional[str],
+    secret: Optional[str],
+    username: Optional[str],
+    lending_enabled: Optional[bool] = None,
+) -> None:
+    """Update lenny.configs so the running worker uses new credentials
+    without a container restart. `ol_auth_headers()` reads these at call-time."""
+    configs.OL_S3_ACCESS_KEY = access or None
+    configs.OL_S3_SECRET_KEY = secret or None
+    configs.OL_USERNAME = username or None
+    if lending_enabled is not None:
+        configs.LENDING_ENABLED = lending_enabled
+
+
+@router.get("/admin/ol/status", status_code=status.HTTP_200_OK)
+async def admin_ol_status(request: Request):
+    """Current Lenny ↔ OL auth state. Used by the admin UI to render the
+    "Logged in as …" banner and decide whether to show the login form."""
+    _require_admin(request)
+    return JSONResponse(ol_auth_status())
+
+
+@router.post("/admin/ol/login", status_code=status.HTTP_200_OK)
+async def admin_ol_login(request: Request, body: OLLoginRequest = Body(...)):
+    """Exchange IA email/password for S3 keys and persist them to .env.
+
+    Rate-limited by (client IP, email) to 5 attempts / 5 minutes. Refuses
+    to overwrite an existing login unless `replace=true` is sent — matches
+    the shell `ol-configure` re-login confirmation flow.
+    """
+    _require_admin(request)
+
+    client_ip = request.client.host if request.client else "unknown"
+    throttle_key = f"{client_ip}:{body.email.lower()}"
+    if Cache.is_throttled(
+        "ol:login", throttle_key, OL_LOGIN_RATE_LIMIT, OL_LOGIN_RATE_WINDOW
+    ):
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "rate_limited",
+                "message": "Too many attempts. Try again in a few minutes.",
+            },
+        )
+
+    if configs.OL_S3_ACCESS_KEY and configs.OL_USERNAME and not body.replace:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "already_logged_in",
+                "message": (
+                    f"Already logged in as {configs.OL_USERNAME}. "
+                    "Send replace=true to overwrite these credentials."
+                ),
+                "username": configs.OL_USERNAME,
+            },
+        )
+
+    try:
+        access, secret, screenname = ol_bootstrap.acquire_keys(body.email, body.password)
+    except ol_bootstrap.OLBootstrapError as err:
+        mapping = {
+            "INVALID_CREDENTIALS": (401, "invalid_credentials", "Email or password is incorrect."),
+            "BAD_EMAIL":           (400, "bad_email",            "Email must be a valid address."),
+            "BAD_PASSWORD":        (400, "bad_password",         "Password must not be empty."),
+            "IA_UNREACHABLE":      (502, "ia_unreachable",       "Could not reach archive.org. Check network."),
+            "NO_KEYS":             (500, "no_keys",              "archive.org did not return S3 keys for this account."),
+            "MISSING_DEP":         (500, "missing_dep",          "Server is missing the 'internetarchive' package. Run 'make redeploy'."),
+        }
+        status_code, code, message = mapping.get(
+            err.code, (500, "unknown", "Login failed. Please try again.")
+        )
+        return JSONResponse(status_code=status_code, content={"error": code, "message": message})
+
+    try:
+        ol_bootstrap.update_env_file(
+            OL_ENV_PATH,
+            {
+                "OL_S3_ACCESS_KEY": access,
+                "OL_S3_SECRET_KEY": secret,
+                "OL_USERNAME": body.email,
+                "LENNY_LENDING_ENABLED": "true",
+            },
+        )
+    except OSError as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "env_write_failed",
+                "message": f"Authenticated but could not persist credentials: {exc}",
+            },
+        )
+
+    _apply_ol_env_in_process(access, secret, body.email, lending_enabled=True)
+
+    return JSONResponse(
+        {
+            "logged_in": True,
+            "username": body.email,
+            "screenname": screenname,
+            "lending_enabled": True,
+            "message": f"Logged in as {screenname or body.email}.",
+        }
+    )
+
+
+@router.post("/admin/ol/logout", status_code=status.HTTP_200_OK)
+async def admin_ol_logout(request: Request):
+    """Clear the IA S3 keys from .env (and from the running process).
+
+    Leaves `LENNY_LENDING_ENABLED` alone — that's an operator-intent toggle
+    set separately. Callers wanting to fully disable lending should follow
+    up with a config change.
+    """
+    _require_admin(request)
+
+    previous_user = configs.OL_USERNAME
+
+    try:
+        ol_bootstrap.update_env_file(
+            OL_ENV_PATH,
+            {
+                "OL_S3_ACCESS_KEY": "",
+                "OL_S3_SECRET_KEY": "",
+                "OL_USERNAME": "",
+            },
+        )
+    except OSError as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "env_write_failed",
+                "message": f"Could not clear credentials from .env: {exc}",
+            },
+        )
+
+    _apply_ol_env_in_process(None, None, None)
+
+    return JSONResponse(
+        {
+            "logged_in": False,
+            "previous_username": previous_user,
+            "message": (
+                f"Logged out of {previous_user}." if previous_user
+                else "No credentials were configured."
+            ),
+        }
+    )

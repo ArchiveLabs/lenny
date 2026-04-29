@@ -109,6 +109,13 @@ url:
 update:
 	@bash docker/utils/update.sh
 
+# Authenticate against archive.org/openlibrary.org and store IA S3 keys in .env.
+# Idempotent — safe to re-run. Use to log in, re-login with a different account,
+# or recover from a failed lending setup.
+.PHONY: ol-configure
+ol-configure: ifup
+	@bash docker/utils/ol_configure.sh
+
 # Run environment diagnostics
 .PHONY: doctor
 doctor:

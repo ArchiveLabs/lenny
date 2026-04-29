@@ -35,6 +35,15 @@ else
   OTP_SERVER="${OTP_SERVER:-https://openlibrary.org}"
   LENNY_LOAN_LIMIT="${LENNY_LOAN_LIMIT:-10}"
 
+  # Open Library / Internet Archive credentials.
+  # Populated by `lenny ol-configure` (see docker/utils/ol_configure.sh).
+  # Empty by default — the API degrades gracefully to anonymous OL calls.
+  OL_S3_ACCESS_KEY="${OL_S3_ACCESS_KEY:-}"
+  OL_S3_SECRET_KEY="${OL_S3_SECRET_KEY:-}"
+  OL_USERNAME="${OL_USERNAME:-}"
+  LENNY_LENDING_ENABLED="${LENNY_LENDING_ENABLED:-false}"
+  LENNY_OL_INDEXED="${LENNY_OL_INDEXED:-false}"
+
   READER_PORT="${READER_PORT:-3000}"
   READIUM_PORT="${READIUM_PORT:-15080}"
 
@@ -70,6 +79,14 @@ ADMIN_USERNAME=$ADMIN_USERNAME
 ADMIN_PASSWORD=$ADMIN_PASSWORD
 ADMIN_INTERNAL_SECRET=$ADMIN_INTERNAL_SECRET
 ADMIN_SALT=$ADMIN_SALT
+
+# Open Library Authentication (IA S3 keys)
+# Populated by `lenny ol-configure`; empty values mean anonymous OL access.
+OL_S3_ACCESS_KEY=$OL_S3_ACCESS_KEY
+OL_S3_SECRET_KEY=$OL_S3_SECRET_KEY
+OL_USERNAME=$OL_USERNAME
+LENNY_LENDING_ENABLED=$LENNY_LENDING_ENABLED
+LENNY_OL_INDEXED=$LENNY_OL_INDEXED
 # Set to an absolute URL for custom-domain deployments, e.g. https://library.example.com/v1/api
 NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
@@ -96,6 +113,9 @@ S3_PROVIDER=minio
 S3_SECURE=false
 
 EOF
+  # .env holds secrets (admin password, DB password, S3 keys, IA S3 keys).
+  # Restrict to owner-only read/write.
+  chmod 600 "$LENNY_ENV_FILE"
 fi
 
 # Exit if the file already exists
