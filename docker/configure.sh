@@ -27,11 +27,11 @@ else
   ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(genpass 32)}"
   ADMIN_INTERNAL_SECRET="${ADMIN_INTERNAL_SECRET:-$(genpass 32)}"
   ADMIN_SALT="${ADMIN_SALT:-$(genpass 32)}"
-  # Public URL of the Lenny API as seen by the browser.
-  # Use a relative path (/v1/api) when the admin UI is served behind the same
-  # nginx, or set an absolute URL (https://library.example.com/v1/api) for
+  # Base URL of the Lenny instance as seen by the browser (no /v1/api suffix —
+  # the admin UI appends that itself). Leave empty for same-origin deployments
+  # behind nginx, or set an absolute URL (https://library.example.com) for
   # external/custom-domain deployments.
-  NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-/v1/api}"
+  NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-}"
   OTP_SERVER="${OTP_SERVER:-https://openlibrary.org}"
   LENNY_LOAN_LIMIT="${LENNY_LOAN_LIMIT:-10}"
 

@@ -4,6 +4,10 @@ from fastapi import UploadFile, Request
 from botocore.exceptions import ClientError
 import socket
 import ipaddress
+import requests as _requests
+import logging
+
+logger = logging.getLogger(__name__)
 from pyopds2_lenny import LennyDataProvider, LennyDataRecord, build_post_borrow_publication
 from pyopds2 import Catalog, Metadata
 from pyopds2.models import Link, Navigation
@@ -171,14 +175,18 @@ class LennyAPI:
             except (AttributeError, TypeError, ValueError):
                 continue
 
-        search_response = LennyDataProvider.search(
-            query=query,
-            limit=limit,
-            offset=offset,
-            lenny_ids=lenny_ids_arg,
-            encryption_map=encryption_map,
-            borrowable_map=borrowable_map,
-        )
+        try:
+            search_response = LennyDataProvider.search(
+                query=query,
+                limit=limit,
+                offset=offset,
+                lenny_ids=lenny_ids_arg,
+                encryption_map=encryption_map,
+                borrowable_map=borrowable_map,
+            )
+        except (_requests.exceptions.SSLError, _requests.exceptions.ConnectionError, _requests.exceptions.Timeout) as e:
+            logger.warning(f"Open Library unreachable during OPDS feed build: {e}")
+            return LennyDataProvider.empty_catalog(limit=limit, auth_mode_direct=use_direct)
 
         for record in search_response.records:
             if isinstance(record, LennyDataRecord):

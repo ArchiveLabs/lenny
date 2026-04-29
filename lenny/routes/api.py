@@ -48,6 +48,7 @@ from lenny.core.exceptions import (
     S3UploadError,
     UploaderNotAllowedError,
     BookUnavailableError,
+    LendingNotConfiguredError,
 )
 from lenny.schemas.ol import OLLoginRequest
 from lenny.core.readium import ReadiumAPI
@@ -149,11 +150,14 @@ async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limi
 async def get_opds_catalog(request: Request, offset: Optional[int]=None, limit: Optional[int]=None, beta: bool = False, auth_mode: Optional[str] = None, session: Optional[str] = Cookie(None)):
     session = extract_session(request, session)
     email = get_authenticated_email(request, session)
-    
+
+    try:
+        feed = LennyAPI.opds_feed(offset=offset, limit=limit, auth_mode_direct=is_direct_auth_mode(auth_mode, beta), email=email)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Could not build OPDS feed: {e}")
+
     return Response(
-        content=json.dumps(
-            LennyAPI.opds_feed(offset=offset, limit=limit, auth_mode_direct=is_direct_auth_mode(auth_mode, beta), email=email)
-        ),
+        content=json.dumps(feed),
         media_type="application/opds+json"
     )
 
@@ -287,12 +291,16 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
 
     if request.method == "POST":
         if post_email and post_otp:
-            session_cookie = auth.OTP.authenticate(post_email, post_otp, client_ip)
+            try:
+                session_cookie = auth.OTP.authenticate(post_email, post_otp, client_ip)
+            except LendingNotConfiguredError as e:
+                context["error"] = str(e)
+                return request.app.templates.TemplateResponse("otp_issue.html", context)
             if not session_cookie:
                 context["error"] = "Authentication failed. Invalid OTP."
                 context["email"] = post_email
                 return request.app.templates.TemplateResponse("otp_redeem.html", context)
-            
+
             response = RedirectResponse(url=post_url, status_code=302)
             response.set_cookie(
                 key="session", value=session_cookie, max_age=auth.COOKIE_TTL,
@@ -305,10 +313,13 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
                 auth.OTP.issue(post_email, client_ip)
                 context["email"] = post_email
                 return request.app.templates.TemplateResponse("otp_redeem.html", context)
-            except Exception as e:
-                context["error"] = f"Failed to issue OTP: {str(e)}"
+            except LendingNotConfiguredError as e:
+                context["error"] = str(e)
                 return request.app.templates.TemplateResponse("otp_issue.html", context)
-    
+            except Exception:
+                context["error"] = "Failed to issue OTP. Please try again."
+                return request.app.templates.TemplateResponse("otp_issue.html", context)
+
     return request.app.templates.TemplateResponse("otp_issue.html", context)
 
 @router.api_route('/items/{book_id}/return', methods=['GET', 'POST'], status_code=status.HTTP_200_OK)
@@ -504,7 +515,11 @@ async def oauth_authorize(
     }
 
     if request.method == "POST" and post_email and post_otp:
-        session_cookie = auth.OTP.authenticate(post_email, post_otp, client_ip)
+        try:
+            session_cookie = auth.OTP.authenticate(post_email, post_otp, client_ip)
+        except LendingNotConfiguredError as e:
+            context["error"] = str(e)
+            return request.app.templates.TemplateResponse("otp_issue.html", context)
         if not session_cookie:
             context["error"] = "Authentication failed. Invalid OTP."
             context["email"] = post_email
@@ -544,6 +559,9 @@ async def oauth_authorize(
             auth.OTP.issue(post_email, client_ip)
             context["email"] = post_email
             return request.app.templates.TemplateResponse("otp_redeem.html", context)
+        except LendingNotConfiguredError as e:
+            context["error"] = str(e)
+            return request.app.templates.TemplateResponse("otp_issue.html", context)
         except Exception:
             context["error"] = "Failed to issue OTP. Please try again."
             return request.app.templates.TemplateResponse("otp_issue.html", context)
