@@ -148,16 +148,16 @@ sudo -E env LENNY_LENDING_ENABLED="$LENNY_LENDING_ENABLED" LENNY_OL_INDEXED="$LE
 # ─── Post-rebuild: Open Library auth (if lending enabled) ────────────
 # The ol_configure script authenticates against archive.org, writes the
 # returned IA S3 keys into .env, and restarts lenny_api so they're picked
-# up. It's idempotent and supports re-running via `make ol-configure`.
+# up. It's idempotent and supports re-running via `make ol-login`.
 if [ "$LENDING" = "1" ]; then
     echo "[+] Lending enabled — configuring Open Library authentication..."
     if [ "$LENNY_DEFAULTS" = "1" ]; then
         echo "[!] Lending was enabled via LENNY_LENDING=1 but -y / LENNY_DEFAULTS=1 suppresses"
-        echo "    interactive prompts. Run 'make ol-configure' after installation to log in."
+        echo "    interactive prompts. Run 'make ol-login' after installation to log in."
     else
         sudo bash docker/utils/ol_configure.sh || {
             echo "[!] Open Library login failed or was cancelled."
-            echo "    Lenny is still installed — run 'make ol-configure' to retry."
+            echo "    Lenny is still installed — run 'make ol-login' to retry."
         }
     fi
 fi

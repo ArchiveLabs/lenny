@@ -33,7 +33,7 @@ OTP_SERVER = os.environ.get('OTP_SERVER', 'https://openlibrary.org')
 AUTH_MODE_DIRECT = False
 
 # Open Library / Internet Archive credentials.
-# Populated by `lenny ol-configure`; empty means anonymous OL access.
+# Populated by `make ol-login`; empty means anonymous OL access.
 OL_S3_ACCESS_KEY = os.environ.get('OL_S3_ACCESS_KEY') or None
 OL_S3_SECRET_KEY = os.environ.get('OL_S3_SECRET_KEY') or None
 OL_USERNAME = os.environ.get('OL_USERNAME') or None

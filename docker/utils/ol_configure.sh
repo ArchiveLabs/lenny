@@ -10,11 +10,13 @@ set -euo pipefail
 #
 # USAGE
 #   Interactive:
-#       bash docker/utils/ol_configure.sh
+#       make ol-login
 #   Scripted:
 #       OL_EMAIL=you@example.com OL_PASSWORD='…' bash docker/utils/ol_configure.sh
 #   Non-interactive re-login (replaces existing credentials):
 #       LENNY_DEFAULTS=1 OL_EMAIL=… OL_PASSWORD=… bash docker/utils/ol_configure.sh
+#   To log out and clear credentials:
+#       make ol-logout
 #
 # The password is piped to the container over stdin so it never appears in
 # argv, environment of any child process, or `docker inspect`.
@@ -27,10 +29,10 @@ CONTAINER="${LENNY_API_CONTAINER:-lenny_api}"
 COMPOSE_FILE="$LENNY_ROOT/compose.yaml"
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
-info()  { printf '%s[ol-configure]%s %s\n' "$CYAN"   "$NC" "$*"; }
-ok()    { printf '%s[ol-configure]%s %s\n' "$GREEN"  "$NC" "$*"; }
-warn()  { printf '%s[ol-configure]%s %s\n' "$YELLOW" "$NC" "$*" >&2; }
-error() { printf '%s[ol-configure]%s %s\n' "$RED"    "$NC" "$*" >&2; }
+info()  { printf '%s[ol-login]%s %s\n' "$CYAN"   "$NC" "$*"; }
+ok()    { printf '%s[ol-login]%s %s\n' "$GREEN"  "$NC" "$*"; }
+warn()  { printf '%s[ol-login]%s %s\n' "$YELLOW" "$NC" "$*" >&2; }
+error() { printf '%s[ol-login]%s %s\n' "$RED"    "$NC" "$*" >&2; }
 
 # ── Preflight
 if [ ! -f "$ENV_FILE" ]; then
@@ -192,7 +194,7 @@ chmod 600 "$ENV_FILE"
 
 # ── Restart API so the new env is picked up
 info "Restarting ${CONTAINER} so the new credentials take effect..."
-if $COMPOSE_CMD -p lenny -f "$COMPOSE_FILE" restart "$CONTAINER" >/dev/null 2>&1; then
+if $COMPOSE_CMD -p lenny -f "$COMPOSE_FILE" up -d --no-deps api >/dev/null 2>&1; then
     ok "Logged in as ${screenname:-$OL_EMAIL}. Lending is now enabled."
 else
     warn "Credentials saved, but failed to restart ${CONTAINER}. Run 'make restart' manually."

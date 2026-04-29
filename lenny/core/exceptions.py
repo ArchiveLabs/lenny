@@ -35,13 +35,13 @@ class BookUnavailableError(LennyAPIError):
 
 class LendingNotConfiguredError(LennyAPIError):
     """Raised when lending is enabled (LENNY_LENDING_ENABLED=true) but no
-    IA S3 keys are present. Operator must run `lenny ol-configure` to
+    IA S3 keys are present. Operator must run `make ol-login` to
     authenticate against Open Library before lending routes can serve OTPs."""
     pass
 
 class InvalidOLCredentialsError(LennyAPIError):
     """Raised when Internet Archive rejects the email/password pair supplied
-    to `ol-configure` (or equivalent). Callers should surface a user-safe
+    to `make ol-login` (or equivalent). Callers should surface a user-safe
     message — no original response text."""
     pass
 

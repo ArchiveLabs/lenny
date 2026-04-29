@@ -36,7 +36,7 @@ else
   LENNY_LOAN_LIMIT="${LENNY_LOAN_LIMIT:-10}"
 
   # Open Library / Internet Archive credentials.
-  # Populated by `lenny ol-configure` (see docker/utils/ol_configure.sh).
+  # Populated by `make ol-login` (see docker/utils/ol_configure.sh).
   # Empty by default — the API degrades gracefully to anonymous OL calls.
   OL_S3_ACCESS_KEY="${OL_S3_ACCESS_KEY:-}"
   OL_S3_SECRET_KEY="${OL_S3_SECRET_KEY:-}"
@@ -81,7 +81,7 @@ ADMIN_INTERNAL_SECRET=$ADMIN_INTERNAL_SECRET
 ADMIN_SALT=$ADMIN_SALT
 
 # Open Library Authentication (IA S3 keys)
-# Populated by `lenny ol-configure`; empty values mean anonymous OL access.
+# Populated by `make ol-login`; empty values mean anonymous OL access.
 OL_S3_ACCESS_KEY=$OL_S3_ACCESS_KEY
 OL_S3_SECRET_KEY=$OL_S3_SECRET_KEY
 OL_USERNAME=$OL_USERNAME

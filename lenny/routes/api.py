@@ -641,7 +641,7 @@ async def admin_ol_login(request: Request, body: OLLoginRequest = Body(...)):
 
     Rate-limited by (client IP, email) to 5 attempts / 5 minutes. Refuses
     to overwrite an existing login unless `replace=true` is sent — matches
-    the shell `ol-configure` re-login confirmation flow.
+    the shell `ol-login` re-login confirmation flow.
     """
     _require_admin(request)
 

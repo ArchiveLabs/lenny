@@ -38,6 +38,7 @@
 - [Endpoints](#endpoints)
 - [Getting Started](#getting-started)
 - [Development Setup](#development-setup)
+- [Open Library / Internet Archive Auth](#open-library--internet-archive-auth)
 - [Updating](#updating)
 - [Database Migrations](#database-migrations)
 - [Health Check](#health-check)
@@ -243,6 +244,30 @@ BOOK=$(echo -n "s3://bookshelf/32941311.epub" |  base64 | tr '/+' '_-' | tr -d '
 echo "http://localhost:15080/$BOOK/manifest.json"
 curl "http://localhost:15080/$BOOK/manifest.json"
 ```
+
+---
+
+## Open Library / Internet Archive Auth
+
+Lenny can authenticate against [archive.org](https://archive.org) to enable lending via Open Library. This stores IA S3 keys in `.env` and powers the full lending workflow.
+
+```sh
+# Log in (interactive — prompts for email and password)
+make ol-login
+
+# Re-login with a different account (prompts for confirmation)
+make ol-login
+
+# Log out — clears IA S3 keys from .env and disables lending
+make ol-logout
+```
+
+**Scripted / non-interactive login:**
+```sh
+OL_EMAIL=you@example.com OL_PASSWORD='…' LENNY_DEFAULTS=1 make ol-login
+```
+
+After logging in, lending is enabled automatically. After logging out, lending is disabled and the API container is restarted so changes take effect immediately.
 
 ---
 
