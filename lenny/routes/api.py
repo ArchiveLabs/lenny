@@ -226,6 +226,7 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
     Decides between standard OPDS 401 response (OAuth mode) or interactive OTP flow (Direct mode)
     based on configuration and authentication state.
     """
+    _require_lending()
     is_direct_mode = is_direct_auth_mode(auth_mode, beta)
 
     if not (item := Item.exists(book_id)):
@@ -462,6 +463,7 @@ async def oauth_authorize(
     If logged in, redirects to redirect_uri with access_token in fragment.
     If not logged in, handles OTP flow directly.
     """
+    _require_lending()
     session = request.cookies.get("session")
     email = get_authenticated_email(request, session)
 
@@ -598,6 +600,14 @@ async def admin_verify(request: Request):
 OL_ENV_PATH = "/app/.env"
 OL_LOGIN_RATE_LIMIT = 5
 OL_LOGIN_RATE_WINDOW = 300
+
+
+def _require_lending() -> None:
+    """Raise 503 if lending is disabled or OL credentials are not configured."""
+    if not configs.LENDING_ENABLED:
+        raise HTTPException(status_code=503, detail="Lending is not enabled on this instance.")
+    if not (configs.OL_S3_ACCESS_KEY and configs.OL_S3_SECRET_KEY):
+        raise HTTPException(status_code=503, detail="Lending is not configured: Open Library credentials are missing. Run 'make ol-login'.")
 
 
 def _require_admin(request: Request) -> None:

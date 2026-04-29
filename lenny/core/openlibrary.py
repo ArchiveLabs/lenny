@@ -35,7 +35,7 @@ def ol_auth_status() -> Dict[str, Any]:
 class OpenLibrary:
     SEARCH_URL = "https://openlibrary.org/search.json"
     HTTP_HEADERS = LENNY_HTTP_HEADERS
-    HTTP_TIMEOUT = 10
+    HTTP_TIMEOUT = 30
     DEFAULT_FIELDS = [
         'key', 'title', 'author_key', 'author_name', 'editions', 'editions.*',
     ]
@@ -93,7 +93,7 @@ class OpenLibrary:
                 return response.json()
         except (httpx.HTTPError, ValueError) as e:
             logger.error(f"Error searching Open Library: {e}")
-            return {}
+            raise
 
     
 class OpenLibraryRecord(dict):

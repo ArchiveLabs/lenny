@@ -13,6 +13,10 @@ if wait_for_docker_container "lenny_api" 15 2; then
         LIMIT=""
     fi
     echo "[+] Preloading ${PRELOAD:-ALL}/~800 book(s) from StandardEbooks (~$EST_MIN minutes)..."
-    docker exec -it lenny_api python scripts/preload.py $LIMIT
-    echo "[✓] Completed preload"
+    if docker exec -it lenny_api python scripts/preload.py $LIMIT; then
+        echo "[✓] Completed preload"
+    else
+        echo "[✗] Preload failed — check logs above"
+        exit 1
+    fi
 fi
