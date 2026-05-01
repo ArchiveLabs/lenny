@@ -404,9 +404,11 @@ def test_ol_logout_clears_credentials(ol_client, admin_ok, reset_ol_env):
             "OL_S3_ACCESS_KEY": "",
             "OL_S3_SECRET_KEY": "",
             "OL_USERNAME": "",
+            "LENNY_LENDING_ENABLED": "false",
         }
         assert configs.OL_S3_ACCESS_KEY is None
         assert configs.OL_USERNAME is None
+        assert configs.LENDING_ENABLED is False
 
 
 def test_ol_logout_requires_admin(ol_client):
