@@ -4,6 +4,10 @@ from fastapi import UploadFile, Request
 from botocore.exceptions import ClientError
 import socket
 import ipaddress
+import requests as _requests
+import logging
+
+logger = logging.getLogger(__name__)
 from pyopds2_lenny import LennyDataProvider, LennyDataRecord, build_post_borrow_publication
 from pyopds2 import Catalog, Metadata
 from pyopds2.models import Link, Navigation
@@ -15,6 +19,7 @@ from lenny.core.exceptions import (
     ItemExistsError,
     InvalidFileError,
     DatabaseInsertError,
+    DatabaseDeleteError,
     FileTooLargeError,
     S3UploadError,
     UploaderNotAllowedError,
@@ -171,14 +176,18 @@ class LennyAPI:
             except (AttributeError, TypeError, ValueError):
                 continue
 
-        search_response = LennyDataProvider.search(
-            query=query,
-            limit=limit,
-            offset=offset,
-            lenny_ids=lenny_ids_arg,
-            encryption_map=encryption_map,
-            borrowable_map=borrowable_map,
-        )
+        try:
+            search_response = LennyDataProvider.search(
+                query=query,
+                limit=limit,
+                offset=offset,
+                lenny_ids=lenny_ids_arg,
+                encryption_map=encryption_map,
+                borrowable_map=borrowable_map,
+            )
+        except (_requests.exceptions.SSLError, _requests.exceptions.ConnectionError, _requests.exceptions.Timeout) as e:
+            logger.warning(f"Open Library unreachable during OPDS feed build: {e}")
+            return LennyDataProvider.empty_catalog(limit=limit, auth_mode_direct=use_direct)
 
         for record in search_response.records:
             if isinstance(record, LennyDataRecord):
@@ -418,6 +427,26 @@ class LennyAPI:
             except Exception as e:
                 db.rollback()
                 raise DatabaseInsertError(f"Failed to add item to db: {str(e)}.")
+
+    @classmethod
+    def delete(cls, openlibrary_edition: int) -> None:
+        """Remove an item from S3 and the database (cascades to loans)."""
+        item = Item.exists(openlibrary_edition)
+        if not item:
+            raise ItemNotFoundError(f"Item '{openlibrary_edition}' not found.")
+
+        for key in s3.get_keys(prefix=str(openlibrary_edition)):
+            try:
+                s3.delete_object(Bucket=s3.BOOKSHELF_BUCKET, Key=key)
+            except ClientError as e:
+                logger.warning(f"Could not delete S3 object '{key}': {e}")
+
+        try:
+            db.delete(item)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            raise DatabaseDeleteError(f"Failed to delete item from db: {str(e)}.")
 
     @classmethod
     def get_borrowed_items(cls, email: str):

@@ -7,11 +7,35 @@ from lenny.configs import LENNY_HTTP_HEADERS
 
 logger = logging.getLogger(__name__)
 
+
+def ol_auth_headers() -> Dict[str, str]:
+    """Build headers for an OL request, adding `Authorization: LOW <access>:<secret>`
+    when IA S3 keys are configured. Returns a copy so callers can mutate safely."""
+    # Import at call time so a test that patches lenny.configs picks up the new values.
+    from lenny import configs
+    headers = dict(LENNY_HTTP_HEADERS)
+    if configs.OL_S3_ACCESS_KEY and configs.OL_S3_SECRET_KEY:
+        headers["Authorization"] = (
+            f"LOW {configs.OL_S3_ACCESS_KEY}:{configs.OL_S3_SECRET_KEY}"
+        )
+    return headers
+
+
+def ol_auth_status() -> Dict[str, Any]:
+    """Current Lenny<->OL auth state for status/UI consumption. Never returns secrets."""
+    from lenny import configs
+    return {
+        "logged_in": bool(configs.OL_S3_ACCESS_KEY and configs.OL_S3_SECRET_KEY),
+        "username": configs.OL_USERNAME,
+        "lending_enabled": configs.LENDING_ENABLED,
+        "ol_indexed": configs.OL_INDEXED,
+    }
+
+
 class OpenLibrary:
-    
     SEARCH_URL = "https://openlibrary.org/search.json"
     HTTP_HEADERS = LENNY_HTTP_HEADERS
-    HTTP_TIMEOUT = 10
+    HTTP_TIMEOUT = 30
     DEFAULT_FIELDS = [
         'key', 'title', 'author_key', 'author_name', 'editions', 'editions.*',
     ]
@@ -64,12 +88,12 @@ class OpenLibrary:
         url = cls._construct_search_url(query, fields, page, limit)
         try:
             with httpx.Client() as client:
-                response = client.get(url, headers=cls.HTTP_HEADERS, timeout=cls.HTTP_TIMEOUT)
+                response = client.get(url, headers=ol_auth_headers(), timeout=cls.HTTP_TIMEOUT)
                 response.raise_for_status()
                 return response.json()
         except (httpx.HTTPError, ValueError) as e:
             logger.error(f"Error searching Open Library: {e}")
-            return {}
+            raise
 
     
 class OpenLibraryRecord(dict):

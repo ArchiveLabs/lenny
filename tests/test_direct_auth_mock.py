@@ -37,7 +37,12 @@ def mock_otp():
         yield mock
 
 @pytest.fixture
-def mock_item_exists():
+def mock_lending():
+    with patch("lenny.routes.api._require_lending"):
+        yield
+
+@pytest.fixture
+def mock_item_exists(mock_lending):
      # Mock Item.exists to return a dummy item object
      with patch("lenny.core.models.Item.exists") as mock:
          mock_item = MagicMock()

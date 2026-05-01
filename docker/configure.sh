@@ -27,13 +27,22 @@ else
   ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(genpass 32)}"
   ADMIN_INTERNAL_SECRET="${ADMIN_INTERNAL_SECRET:-$(genpass 32)}"
   ADMIN_SALT="${ADMIN_SALT:-$(genpass 32)}"
-  # Public URL of the Lenny API as seen by the browser.
-  # Use a relative path (/v1/api) when the admin UI is served behind the same
-  # nginx, or set an absolute URL (https://library.example.com/v1/api) for
+  # Base URL of the Lenny instance as seen by the browser (no /v1/api suffix —
+  # the admin UI appends that itself). Leave empty for same-origin deployments
+  # behind nginx, or set an absolute URL (https://library.example.com) for
   # external/custom-domain deployments.
-  NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-/v1/api}"
+  NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-}"
   OTP_SERVER="${OTP_SERVER:-https://openlibrary.org}"
   LENNY_LOAN_LIMIT="${LENNY_LOAN_LIMIT:-10}"
+
+  # Open Library / Internet Archive credentials.
+  # Populated by `make ol-login` (see docker/utils/ol_configure.sh).
+  # Empty by default — the API degrades gracefully to anonymous OL calls.
+  OL_S3_ACCESS_KEY="${OL_S3_ACCESS_KEY:-}"
+  OL_S3_SECRET_KEY="${OL_S3_SECRET_KEY:-}"
+  OL_USERNAME="${OL_USERNAME:-}"
+  LENNY_LENDING_ENABLED="${LENNY_LENDING_ENABLED:-false}"
+  LENNY_OL_INDEXED="${LENNY_OL_INDEXED:-false}"
 
   READER_PORT="${READER_PORT:-3000}"
   READIUM_PORT="${READIUM_PORT:-15080}"
@@ -70,6 +79,14 @@ ADMIN_USERNAME=$ADMIN_USERNAME
 ADMIN_PASSWORD=$ADMIN_PASSWORD
 ADMIN_INTERNAL_SECRET=$ADMIN_INTERNAL_SECRET
 ADMIN_SALT=$ADMIN_SALT
+
+# Open Library Authentication (IA S3 keys)
+# Populated by `make ol-login`; empty values mean anonymous OL access.
+OL_S3_ACCESS_KEY=$OL_S3_ACCESS_KEY
+OL_S3_SECRET_KEY=$OL_S3_SECRET_KEY
+OL_USERNAME=$OL_USERNAME
+LENNY_LENDING_ENABLED=$LENNY_LENDING_ENABLED
+LENNY_OL_INDEXED=$LENNY_OL_INDEXED
 # Set to an absolute URL for custom-domain deployments, e.g. https://library.example.com/v1/api
 NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
@@ -96,6 +113,9 @@ S3_PROVIDER=minio
 S3_SECURE=false
 
 EOF
+  # .env holds secrets (admin password, DB password, S3 keys, IA S3 keys).
+  # Restrict to owner-only read/write.
+  chmod 600 "$LENNY_ENV_FILE"
 fi
 
 # Exit if the file already exists

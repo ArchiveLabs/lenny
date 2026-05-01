@@ -38,6 +38,7 @@
 - [Endpoints](#endpoints)
 - [Getting Started](#getting-started)
 - [Development Setup](#development-setup)
+- [Open Library / Internet Archive Auth](#open-library--internet-archive-auth) — enable lending via Admin UI or CLI
 - [Updating](#updating)
 - [Database Migrations](#database-migrations)
 - [Health Check](#health-check)
@@ -243,6 +244,38 @@ BOOK=$(echo -n "s3://bookshelf/32941311.epub" |  base64 | tr '/+' '_-' | tr -d '
 echo "http://localhost:15080/$BOOK/manifest.json"
 curl "http://localhost:15080/$BOOK/manifest.json"
 ```
+
+---
+
+## Open Library / Internet Archive Auth
+
+Lenny must be connected to an [Internet Archive](https://archive.org) account to enable lending. You can do this two ways: through the **Admin UI** or the **CLI**.
+
+### Option 1 — Admin UI (recommended)
+
+Open the admin dashboard at `/admin`, sign in, and navigate to **Settings → Open Library**. Enter your Internet Archive email and password and click **Log in**. Lending is enabled immediately — no restart required.
+
+To disconnect, click **Log out** on the same page. Lending is disabled immediately.
+
+### Option 2 — CLI
+
+```sh
+# Log in (interactive — prompts for email and password)
+make ol-login
+
+# Log out — clears IA S3 keys from .env and disables lending
+make ol-logout
+```
+
+**Scripted / non-interactive login** (e.g. CI):
+```sh
+OL_EMAIL=you@example.com LENNY_NONINTERACTIVE=1 make ol-login
+```
+> `LENNY_NONINTERACTIVE=1` suppresses all "are you sure?" confirmation prompts so the command can run unattended in scripts or CI pipelines.
+
+> **Security:** avoid passing `OL_PASSWORD` as an environment variable in scripts — it will appear in shell history and `ps` output. Instead, let the interactive prompt handle the password, or pipe it via stdin using a secrets manager.
+
+After logging in, lending is enabled automatically and the API container is restarted so the credentials take effect. After logging out, lending is disabled and the container restarts immediately.
 
 ---
 
