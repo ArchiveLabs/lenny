@@ -11,12 +11,11 @@ set -euo pipefail
 #   Interactive:
 #       make ol-logout
 #   Non-interactive (skip confirmation):
-#       LENNY_DEFAULTS=1 bash docker/utils/ol_logout.sh
+#       LENNY_NONINTERACTIVE=1 bash docker/utils/ol_logout.sh
 # ─────────────────────────────────────────────────────────────────────────
 
 LENNY_ROOT="${LENNY_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 ENV_FILE="$LENNY_ROOT/.env"
-BACKUP_DIR="$LENNY_ROOT/backups"
 CONTAINER="${LENNY_API_CONTAINER:-lenny_api}"
 COMPOSE_FILE="$LENNY_ROOT/compose.yaml"
 
@@ -79,7 +78,7 @@ if [ -z "$CURRENT_USER" ]; then
 fi
 
 # ── Confirm
-if [ "${LENNY_DEFAULTS:-0}" != "1" ]; then
+if [ "${LENNY_NONINTERACTIVE:-0}" != "1" ]; then
     warn "Currently logged in as: ${CURRENT_USER}"
     warn "This will clear your IA S3 keys and disable lending."
     if [ -t 0 ]; then
@@ -90,20 +89,12 @@ if [ "${LENNY_DEFAULTS:-0}" != "1" ]; then
             *) info "Aborted."; exit 0 ;;
         esac
     else
-        error "Non-interactive logout requires LENNY_DEFAULTS=1 to confirm."
+        error "Non-interactive logout requires LENNY_NONINTERACTIVE=1 to confirm."
         exit 1
     fi
 else
-    info "Logout confirmed by LENNY_DEFAULTS=1 (clearing ${CURRENT_USER})."
+    info "Logout confirmed by LENNY_NONINTERACTIVE=1 (clearing ${CURRENT_USER})."
 fi
-
-# ── Backup .env before modifying
-mkdir -p "$BACKUP_DIR"
-chmod 700 "$BACKUP_DIR" 2>/dev/null || true
-backup_file="$BACKUP_DIR/.env.$(date +%Y%m%d_%H%M%S).bak"
-cp "$ENV_FILE" "$backup_file"
-chmod 600 "$backup_file"
-info "Backed up .env → ${backup_file#${LENNY_ROOT}/}"
 
 # ── Clear credentials and disable lending
 env_set OL_S3_ACCESS_KEY ""

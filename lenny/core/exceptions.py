@@ -13,6 +13,8 @@ class InvalidFileError(LennyAPIError): pass
 
 class DatabaseInsertError(LennyAPIError): pass
 
+class DatabaseDeleteError(LennyAPIError): pass
+
 class FileTooLargeError(LennyAPIError): pass
 
 class S3UploadError(LennyAPIError): pass

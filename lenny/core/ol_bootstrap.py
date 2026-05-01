@@ -106,8 +106,8 @@ def update_env_file(env_path: str, updates: Mapping[str, str]) -> None:
         prefix=".env.", dir=os.path.dirname(os.path.abspath(env_path))
     )
     try:
-        os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)
         with os.fdopen(fd, "w") as out:
+            os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)
             try:
                 with open(env_path, "r") as src:
                     for line in src:
@@ -122,7 +122,6 @@ def update_env_file(env_path: str, updates: Mapping[str, str]) -> None:
             for key, value in remaining.items():
                 out.write(f"{key}={value}\n")
         os.replace(tmp_path, env_path)
-        os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)
     except Exception:
         try:
             os.unlink(tmp_path)

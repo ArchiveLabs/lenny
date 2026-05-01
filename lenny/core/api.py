@@ -19,6 +19,7 @@ from lenny.core.exceptions import (
     ItemExistsError,
     InvalidFileError,
     DatabaseInsertError,
+    DatabaseDeleteError,
     FileTooLargeError,
     S3UploadError,
     UploaderNotAllowedError,
@@ -426,6 +427,26 @@ class LennyAPI:
             except Exception as e:
                 db.rollback()
                 raise DatabaseInsertError(f"Failed to add item to db: {str(e)}.")
+
+    @classmethod
+    def delete(cls, openlibrary_edition: int) -> None:
+        """Remove an item from S3 and the database (cascades to loans)."""
+        item = Item.exists(openlibrary_edition)
+        if not item:
+            raise ItemNotFoundError(f"Item '{openlibrary_edition}' not found.")
+
+        for key in s3.get_keys(prefix=str(openlibrary_edition)):
+            try:
+                s3.delete_object(Bucket=s3.BOOKSHELF_BUCKET, Key=key)
+            except ClientError as e:
+                logger.warning(f"Could not delete S3 object '{key}': {e}")
+
+        try:
+            db.delete(item)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            raise DatabaseDeleteError(f"Failed to delete item from db: {str(e)}.")
 
     @classmethod
     def get_borrowed_items(cls, email: str):

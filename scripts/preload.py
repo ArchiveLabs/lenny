@@ -75,9 +75,8 @@ def import_standardebooks(limit=None, offset=0):
 
     stats = {"uploaded": 0, "skipped": 0, "not_in_set": 0, "failed": 0, "ol_error": False}
 
-    books = OpenLibrary.search('id_standard_ebooks:*', offset=offset, fields=['id_standard_ebooks'])
-
     try:
+        books = OpenLibrary.search('id_standard_ebooks:*', offset=offset, fields=['id_standard_ebooks'])
         for i, book in enumerate(books):
             try:
                 olid = int(book.olid)

@@ -25,7 +25,14 @@ class OLLoginRequest(BaseModel):
     @classmethod
     def _email_shape(cls, v: str) -> str:
         v = v.strip()
-        if "@" not in v or "." not in v.split("@", 1)[-1]:
+        if v.count("@") != 1:
+            raise ValueError("Email must be a valid address.")
+        local, domain = v.split("@")
+        if not local or not domain:
+            raise ValueError("Email must be a valid address.")
+        if "." not in domain or domain.startswith(".") or domain.endswith("."):
+            raise ValueError("Email must be a valid address.")
+        if ".." in local or ".." in domain:
             raise ValueError("Email must be a valid address.")
         return v
 

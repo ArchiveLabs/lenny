@@ -44,6 +44,7 @@ from lenny.core.exceptions import (
     ItemNotFoundError,
     LoanNotRequiredError,
     DatabaseInsertError,
+    DatabaseDeleteError,
     FileTooLargeError,
     S3UploadError,
     UploaderNotAllowedError,
@@ -391,6 +392,21 @@ async def upload(
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@router.delete("/admin/items/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_item(request: Request, book_id: int):
+    """
+    Delete an item from the catalog (S3 files + DB record, loans cascade).
+    Requires admin authentication.
+    """
+    _require_admin(request)
+    try:
+        LennyAPI.delete(book_id)
+    except ItemNotFoundError:
+        raise HTTPException(status_code=404, detail="Item not found")
+    except DatabaseDeleteError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/profile")
@@ -749,12 +765,7 @@ async def admin_ol_login(request: Request, body: OLLoginRequest = Body(...)):
 
 @router.post("/admin/ol/logout", status_code=status.HTTP_200_OK)
 async def admin_ol_logout(request: Request):
-    """Clear the IA S3 keys from .env (and from the running process).
-
-    Leaves `LENNY_LENDING_ENABLED` alone — that's an operator-intent toggle
-    set separately. Callers wanting to fully disable lending should follow
-    up with a config change.
-    """
+    """Clear the IA S3 keys from .env and disable lending."""
     _require_admin(request)
 
     previous_user = configs.OL_USERNAME
@@ -766,6 +777,7 @@ async def admin_ol_logout(request: Request):
                 "OL_S3_ACCESS_KEY": "",
                 "OL_S3_SECRET_KEY": "",
                 "OL_USERNAME": "",
+                "LENNY_LENDING_ENABLED": "false",
             },
         )
     except OSError as exc:
@@ -777,7 +789,7 @@ async def admin_ol_logout(request: Request):
             },
         )
 
-    _apply_ol_env_in_process(None, None, None)
+    _apply_ol_env_in_process(None, None, None, lending_enabled=False)
 
     return JSONResponse(
         {

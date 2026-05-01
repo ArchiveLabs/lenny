@@ -14,7 +14,7 @@ set -euo pipefail
 #   Scripted:
 #       OL_EMAIL=you@example.com OL_PASSWORD='…' bash docker/utils/ol_configure.sh
 #   Non-interactive re-login (replaces existing credentials):
-#       LENNY_DEFAULTS=1 OL_EMAIL=… OL_PASSWORD=… bash docker/utils/ol_configure.sh
+#       LENNY_NONINTERACTIVE=1 OL_EMAIL=… OL_PASSWORD=… bash docker/utils/ol_configure.sh
 #   To log out and clear credentials:
 #       make ol-logout
 #
@@ -24,7 +24,6 @@ set -euo pipefail
 
 LENNY_ROOT="${LENNY_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 ENV_FILE="$LENNY_ROOT/.env"
-BACKUP_DIR="$LENNY_ROOT/backups"
 CONTAINER="${LENNY_API_CONTAINER:-lenny_api}"
 COMPOSE_FILE="$LENNY_ROOT/compose.yaml"
 
@@ -89,7 +88,7 @@ env_set() {
 # ── Re-login detection and confirmation
 CURRENT_USER="$(env_get OL_USERNAME)"
 if [ -n "$CURRENT_USER" ]; then
-    if [ "${LENNY_DEFAULTS:-0}" != "1" ]; then
+    if [ "${LENNY_NONINTERACTIVE:-0}" != "1" ]; then
         warn "Currently logged in as: ${CURRENT_USER}"
         warn "Continuing will replace these credentials."
         if [ -t 0 ]; then
@@ -100,11 +99,11 @@ if [ -n "$CURRENT_USER" ]; then
                 *) info "Aborted."; exit 0 ;;
             esac
         else
-            error "Non-interactive re-login requires LENNY_DEFAULTS=1 to confirm."
+            error "Non-interactive re-login requires LENNY_NONINTERACTIVE=1 to confirm."
             exit 1
         fi
     else
-        info "Re-login confirmed by LENNY_DEFAULTS=1 (replacing ${CURRENT_USER})."
+        info "Re-login confirmed by LENNY_NONINTERACTIVE=1 (replacing ${CURRENT_USER})."
     fi
 fi
 
@@ -177,14 +176,7 @@ if [ -z "${access:-}" ] || [ -z "${secret:-}" ]; then
     exit 3
 fi
 
-# ── Persist to .env (backup first; atomic rewrite)
-mkdir -p "$BACKUP_DIR"
-chmod 700 "$BACKUP_DIR" 2>/dev/null || true
-backup_file="$BACKUP_DIR/.env.$(date +%Y%m%d_%H%M%S).bak"
-cp "$ENV_FILE" "$backup_file"
-chmod 600 "$backup_file"
-info "Backed up .env → ${backup_file#${LENNY_ROOT}/}"
-
+# ── Persist to .env
 env_set OL_S3_ACCESS_KEY "$access"
 env_set OL_S3_SECRET_KEY "$secret"
 env_set OL_USERNAME "$OL_EMAIL"
