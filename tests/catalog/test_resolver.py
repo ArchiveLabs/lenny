@@ -123,3 +123,185 @@ def test_create_edition_conflict_missing_id_raises():
             mock_cls.return_value.__enter__.return_value.post.return_value = mock_resp
             with pytest.raises(OLWriteError):
                 resolver.create_edition(BookMetadata(title="Book", authors=["Author"]))
+
+
+# --- OL search ---
+
+def test_search_clean_match():
+    resolver = APIResolver()
+    search_data = {
+        "docs": [{
+            "title": "Dune",
+            "author_name": ["Frank Herbert"],
+            "editions": {"docs": [{"key": "/books/OL7353218M", "publish_date": "1965"}]},
+        }]
+    }
+    with patch("httpx.Client") as mock_cls:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = search_data
+        mock_resp.raise_for_status = MagicMock()
+        mock_cls.return_value.__enter__.return_value.get.return_value = mock_resp
+        metadata = BookMetadata(title="Dune", authors=["Frank Herbert"])
+        result = resolver._search_exact(metadata)
+    assert result.status == OLStatus.OL_MATCH_CLEAN
+    assert result.olid == 7353218
+    assert result.confidence >= 0.95
+
+
+def test_search_fuzzy_match_goes_to_review():
+    resolver = APIResolver()
+    search_data = {
+        "docs": [{
+            "title": "Dune Messiah",
+            "author_name": ["Frank Herbert"],
+            "editions": {"docs": [{"key": "/books/OL9999M"}]},
+        }]
+    }
+    with patch("httpx.Client") as mock_cls:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = search_data
+        mock_resp.raise_for_status = MagicMock()
+        mock_cls.return_value.__enter__.return_value.get.return_value = mock_resp
+        metadata = BookMetadata(title="Dune", authors=["Frank Herbert"])
+        result = resolver._search_exact(metadata)
+    # "Dune" vs "Dune Messiah": title_score=0.5, author_score=1.0, combined=0.70
+    # Exactly at OL_REVIEW_THRESHOLD — lands in fuzzy/review bucket
+    assert result.status == OLStatus.OL_MATCH_FUZZY
+    assert result.needs_review is True
+
+
+def test_search_no_results_returns_not_found():
+    resolver = APIResolver()
+    with patch("httpx.Client") as mock_cls:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"docs": []}
+        mock_resp.raise_for_status = MagicMock()
+        mock_cls.return_value.__enter__.return_value.get.return_value = mock_resp
+        metadata = BookMetadata(title="Zorp Unpublished", authors=["Nobody"])
+        result = resolver._search_exact(metadata)
+    assert result.status == OLStatus.OL_NOT_FOUND
+
+
+def test_search_rate_limited_raises():
+    resolver = APIResolver()
+    with patch("httpx.Client") as mock_cls:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 429
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "429", request=MagicMock(), response=mock_resp
+        )
+        mock_cls.return_value.__enter__.return_value.get.return_value = mock_resp
+        with pytest.raises(OLRateLimited):
+            resolver._search_exact(BookMetadata(title="Dune", authors=["Frank Herbert"]))
+
+
+# --- Google Books ---
+
+def test_google_books_found():
+    resolver = APIResolver(google_books_api_key="test-key")
+    gb_data = {
+        "items": [{
+            "volumeInfo": {
+                "title": "Dune",
+                "authors": ["Frank Herbert"],
+                "publishedDate": "1965",
+                "industryIdentifiers": [{"type": "ISBN_13", "identifier": "9780441013593"}],
+            }
+        }]
+    }
+    with patch("httpx.Client") as mock_cls:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = gb_data
+        mock_resp.raise_for_status = MagicMock()
+        mock_cls.return_value.__enter__.return_value.get.return_value = mock_resp
+        metadata = BookMetadata(title="Dune", authors=["Frank Herbert"])
+        result = resolver._google_books_lookup(metadata)
+    assert result.action == ActionTaken.CREATE_FULL
+    assert result.confidence >= 0.95
+
+
+def test_google_books_no_api_key_skipped():
+    resolver = APIResolver(google_books_api_key=None)
+    metadata = BookMetadata(title="Dune", authors=["Frank Herbert"])
+    with patch.object(resolver, "_google_books_lookup") as mock_gb:
+        with patch.object(resolver, "_lookup_isbn", return_value=OLResult(status=OLStatus.OL_NOT_FOUND, confidence=0.0)):
+            with patch.object(resolver, "_search_exact", return_value=OLResult(status=OLStatus.OL_NOT_FOUND, confidence=0.0)):
+                resolver.lookup(metadata)
+    mock_gb.assert_not_called()
+
+
+def test_google_books_title_mismatch_ignored():
+    resolver = APIResolver(google_books_api_key="test-key")
+    gb_data = {"items": [{"volumeInfo": {"title": "Completely Different Book"}}]}
+    with patch("httpx.Client") as mock_cls:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = gb_data
+        mock_resp.raise_for_status = MagicMock()
+        mock_cls.return_value.__enter__.return_value.get.return_value = mock_resp
+        metadata = BookMetadata(title="Dune", authors=["Frank Herbert"])
+        result = resolver._google_books_lookup(metadata)
+    assert result.status == OLStatus.OL_NOT_FOUND
+
+
+# --- OL write: create_edition ---
+
+def test_create_edition_no_credentials_raises():
+    resolver = APIResolver()  # no credentials
+    metadata = BookMetadata(title="New Book", authors=["New Author"])
+    with pytest.raises(OLAuthRequired):
+        resolver.create_edition(metadata)
+
+
+def test_create_edition_success():
+    resolver = APIResolver(ol_session_cookie="valid-session")
+    with patch.object(resolver, "_find_or_create_author", return_value="/authors/OL123A"):
+        with patch("httpx.Client") as mock_cls:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"id": "/books/OL999M", "success": True}
+            mock_resp.raise_for_status = MagicMock()
+            mock_cls.return_value.__enter__.return_value.post.return_value = mock_resp
+            metadata = BookMetadata(title="New Book", authors=["New Author"])
+            olid = resolver.create_edition(metadata)
+    assert olid == 999
+
+
+def test_create_edition_rate_limited_raises():
+    resolver = APIResolver(ol_session_cookie="valid-session")
+    with patch.object(resolver, "_find_or_create_author", return_value="/authors/OL123A"):
+        with patch("httpx.Client") as mock_cls:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 429
+            mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "429", request=MagicMock(), response=mock_resp
+            )
+            mock_cls.return_value.__enter__.return_value.post.return_value = mock_resp
+            with pytest.raises(OLRateLimited):
+                resolver.create_edition(BookMetadata(title="Book", authors=["Author"]))
+
+
+# --- _parse_olid ---
+
+def test_parse_olid_from_full_path():
+    assert APIResolver._parse_olid("/books/OL123M") == 123
+
+
+def test_parse_olid_from_bare_key():
+    assert APIResolver._parse_olid("OL456M") == 456
+
+
+def test_parse_olid_author_key():
+    assert APIResolver._parse_olid("/authors/OL789A") == 789
+
+
+def test_parse_olid_empty_returns_none():
+    assert APIResolver._parse_olid("") is None
+
+
+def test_parse_olid_invalid_returns_none():
+    assert APIResolver._parse_olid("/books/notanid") is None
