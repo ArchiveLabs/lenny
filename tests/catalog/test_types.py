@@ -2,7 +2,7 @@ import pytest
 from lenny.catalog.types import (
     BookMetadata, OLResult, OLCandidate,
     PipelineStage, OLStatus, ActionTaken,
-    JobMode, JobStatus, Persona, EncryptionPolicy,
+    JobMode, JobStatus, Persona, EncryptionPolicy, InputMethod,
 )
 
 
@@ -77,3 +77,5 @@ def test_enums_are_string_subclass():
     assert isinstance(PipelineStage.PENDING, str)
     assert isinstance(JobStatus.RUNNING, str)
     assert isinstance(OLStatus.OL_MATCH_CLEAN, str)
+    assert isinstance(InputMethod.CSV, str)
+    assert isinstance(EncryptionPolicy.ALL_ENCRYPTED, str)

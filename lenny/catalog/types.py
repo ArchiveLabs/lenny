@@ -170,3 +170,4 @@ class OLResult:
     @property
     def needs_review(self) -> bool:
         return OL_REVIEW_THRESHOLD <= self.confidence < OL_AUTO_LINK_THRESHOLD and self.olid is not None
+
