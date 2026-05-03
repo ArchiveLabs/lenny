@@ -29,17 +29,22 @@ _BigInt = BigInteger().with_variant(Integer, "sqlite")
 
 _COUNTER_COLUMNS = {"linked", "created_ol", "needs_review", "errors", "skipped"}
 
+# PostgreSQL native enum types store the .value (lowercase), not the Python member name.
+# values_callable ensures SQLAlchemy uses .value for serialization on all dialects.
+def _pg_enum(enum_cls, name: str) -> SAEnum:
+    return SAEnum(enum_cls, name=name, values_callable=lambda obj: [e.value for e in obj])
+
 
 class ImportJob(Base):
     __tablename__ = "import_jobs"
 
     id = Column(_BigIntPK, primary_key=True, autoincrement=True)
-    status = Column(SAEnum(JobStatus, name="jobstatus"), nullable=False, default=JobStatus.PENDING)
-    mode = Column(SAEnum(JobMode, name="jobmode"), nullable=False)
-    persona = Column(SAEnum(Persona, name="persona"), nullable=False)
-    resolver_type = Column(SAEnum(ResolverType, name="resolvertype"), nullable=False, default=ResolverType.API)
-    input_method = Column(SAEnum(InputMethod, name="inputmethod"), nullable=False)
-    encryption_policy = Column(SAEnum(EncryptionPolicy, name="encryptionpolicy"), nullable=False)
+    status = Column(_pg_enum(JobStatus, "jobstatus"), nullable=False, default=JobStatus.PENDING)
+    mode = Column(_pg_enum(JobMode, "jobmode"), nullable=False)
+    persona = Column(_pg_enum(Persona, "persona"), nullable=False)
+    resolver_type = Column(_pg_enum(ResolverType, "resolvertype"), nullable=False, default=ResolverType.API)
+    input_method = Column(_pg_enum(InputMethod, "inputmethod"), nullable=False)
+    encryption_policy = Column(_pg_enum(EncryptionPolicy, "encryptionpolicy"), nullable=False)
     dry_run = Column(Boolean, nullable=False, default=False)
     gate_a_enabled = Column(Boolean, nullable=False, default=False)
     gate_b_enabled = Column(Boolean, nullable=False, default=False)
@@ -88,7 +93,7 @@ class ImportItem(Base):
     id = Column(_BigIntPK, primary_key=True, autoincrement=True)
     job_id = Column(_BigInt, sa.ForeignKey("import_jobs.id"), nullable=False)
     pipeline_stage = Column(
-        SAEnum(PipelineStage, name="pipelinestage"),
+        _pg_enum(PipelineStage, "pipelinestage"),
         nullable=False,
         default=PipelineStage.PENDING,
     )
@@ -106,10 +111,10 @@ class ImportItem(Base):
     extracted_isbn = Column(String, nullable=True)
     extracted_metadata = Column(_JSON, nullable=True)
 
-    ol_status = Column(SAEnum(OLStatus, name="olstatus"), nullable=True)
+    ol_status = Column(_pg_enum(OLStatus, "olstatus"), nullable=True)
     confidence = Column(Float, nullable=True)
     olid = Column(_BigInt, nullable=True)
-    action_taken = Column(SAEnum(ActionTaken, name="actiontaken"), nullable=True)
+    action_taken = Column(_pg_enum(ActionTaken, "actiontaken"), nullable=True)
 
     encrypted = Column(Boolean, nullable=True)
     skip_ol = Column(Boolean, nullable=False, default=False)
