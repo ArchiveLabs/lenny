@@ -6,7 +6,7 @@ from lenny.catalog.resolver import APIResolver, OLResolver
 from lenny.catalog.types import (
     BookMetadata, OLResult, OLStatus, ActionTaken,
 )
-from lenny.catalog.exceptions import OLRateLimited, OLAuthRequired
+from lenny.catalog.exceptions import OLRateLimited, OLAuthRequired, OLWriteError
 
 
 # --- Protocol conformance ---
@@ -93,3 +93,33 @@ def mock_ol_isbn_response():
         mock_resp.raise_for_status = MagicMock()
         mock_client_cls.return_value.__enter__.return_value.get.return_value = mock_resp
         yield mock_resp
+
+
+# --- create_edition ---
+
+def test_create_edition_conflict_returns_existing_olid():
+    """409 response with a parseable ID should return the existing OLID."""
+    resolver = APIResolver(ol_session_cookie="valid-session")
+    with patch.object(resolver, "_find_or_create_author", return_value="/authors/OL123A"):
+        with patch("httpx.Client") as mock_cls:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 409
+            mock_resp.json.return_value = {"id": "/books/OL456M"}
+            mock_resp.raise_for_status = MagicMock()
+            mock_cls.return_value.__enter__.return_value.post.return_value = mock_resp
+            result = resolver.create_edition(BookMetadata(title="Book", authors=["Author"]))
+    assert result == 456
+
+
+def test_create_edition_conflict_missing_id_raises():
+    """409 with no parseable ID in response body should raise OLWriteError."""
+    resolver = APIResolver(ol_session_cookie="valid-session")
+    with patch.object(resolver, "_find_or_create_author", return_value="/authors/OL123A"):
+        with patch("httpx.Client") as mock_cls:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 409
+            mock_resp.json.return_value = {"error": "conflict"}  # no "id" field
+            mock_resp.raise_for_status = MagicMock()
+            mock_cls.return_value.__enter__.return_value.post.return_value = mock_resp
+            with pytest.raises(OLWriteError):
+                resolver.create_edition(BookMetadata(title="Book", authors=["Author"]))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import re
 from typing import Optional, List, runtime_checkable, Protocol
 
 import httpx
@@ -16,6 +17,7 @@ from lenny.catalog.exceptions import OLRateLimited, OLAuthRequired, OLWriteError
 logger = logging.getLogger(__name__)
 
 _TITLE_MISMATCH_FLOOR = 0.80  # ISBN match rejected if titles diverge more than this
+_OLID_RE = re.compile(r"OL(\d+)[MAWBP]?$")
 
 
 @runtime_checkable
@@ -47,7 +49,6 @@ class APIResolver:
         google_books_api_key: Optional[str] = None,
         timeout: int = 10,
     ):
-        self._ol_cookie = ol_session_cookie
         self._ol_access = ol_access_key
         self._ol_secret = ol_secret_key
         self._google_key = google_books_api_key
@@ -88,10 +89,7 @@ class APIResolver:
                 return result
 
         # 5. Not found — caller will create OL record
-        if metadata.is_resolvable:
-            return OLResult(status=OLStatus.OL_NOT_FOUND, action=ActionTaken.CREATE_FULL)
-
-        return OLResult(status=OLStatus.INSUFFICIENT_METADATA, action=ActionTaken.NEEDS_REVIEW)
+        return OLResult(status=OLStatus.OL_NOT_FOUND, action=ActionTaken.CREATE_FULL)
 
     def create_edition(self, metadata: BookMetadata) -> int:
         """Create a new OL edition record. Returns the integer OLID."""
@@ -107,7 +105,10 @@ class APIResolver:
                     raise OLRateLimited("OL import API rate limited (429)")
                 if r.status_code == 409:
                     data = r.json()
-                    return self._parse_olid(data.get("id", ""))
+                    olid = self._parse_olid(data.get("id", ""))
+                    if not olid:
+                        raise OLWriteError(f"OL conflict response has no parseable ID: {data}")
+                    return olid
                 r.raise_for_status()
                 data = r.json()
                 olid = self._parse_olid(data.get("id", ""))
@@ -373,11 +374,9 @@ class APIResolver:
 
     @staticmethod
     def _parse_olid(key: str) -> Optional[int]:
-        """Extract integer OLID from keys like '/books/OL123M' or 'OL123M'."""
+        """Extract integer OLID from OL keys like '/books/OL123M' or 'OL123M'."""
         if not key:
             return None
         part = key.split("/")[-1]
-        try:
-            return int(part.replace("OL", "").replace("M", "").replace("A", "").replace("W", ""))
-        except (ValueError, AttributeError):
-            return None
+        m = _OLID_RE.match(part)
+        return int(m.group(1)) if m else None
