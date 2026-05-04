@@ -32,6 +32,9 @@ from fastapi.responses import (
 )
 from lenny.core import auth
 from lenny.core.api import LennyAPI
+from lenny.core import ol_bootstrap
+from lenny.core.cache import Cache
+from lenny.core.openlibrary import ol_auth_status
 from lenny import configs
 from pyopds2_lenny import LennyDataProvider, build_post_borrow_publication, LennyDataRecord
 from lenny.core.exceptions import (
@@ -41,11 +44,14 @@ from lenny.core.exceptions import (
     ItemNotFoundError,
     LoanNotRequiredError,
     DatabaseInsertError,
+    DatabaseDeleteError,
     FileTooLargeError,
     S3UploadError,
     UploaderNotAllowedError,
     BookUnavailableError,
+    LendingNotConfiguredError,
 )
+from lenny.schemas.ol import OLLoginRequest
 from lenny.core.readium import ReadiumAPI
 from lenny.core.models import Item
 from urllib.parse import quote
@@ -145,11 +151,14 @@ async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limi
 async def get_opds_catalog(request: Request, offset: Optional[int]=None, limit: Optional[int]=None, beta: bool = False, auth_mode: Optional[str] = None, session: Optional[str] = Cookie(None)):
     session = extract_session(request, session)
     email = get_authenticated_email(request, session)
-    
+
+    try:
+        feed = LennyAPI.opds_feed(offset=offset, limit=limit, auth_mode_direct=is_direct_auth_mode(auth_mode, beta), email=email)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Could not build OPDS feed: {e}")
+
     return Response(
-        content=json.dumps(
-            LennyAPI.opds_feed(offset=offset, limit=limit, auth_mode_direct=is_direct_auth_mode(auth_mode, beta), email=email)
-        ),
+        content=json.dumps(feed),
         media_type="application/opds+json"
     )
 
@@ -222,6 +231,7 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
     Decides between standard OPDS 401 response (OAuth mode) or interactive OTP flow (Direct mode)
     based on configuration and authentication state.
     """
+    _require_lending()
     is_direct_mode = is_direct_auth_mode(auth_mode, beta)
 
     if not (item := Item.exists(book_id)):
@@ -282,12 +292,16 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
 
     if request.method == "POST":
         if post_email and post_otp:
-            session_cookie = auth.OTP.authenticate(post_email, post_otp, client_ip)
+            try:
+                session_cookie = auth.OTP.authenticate(post_email, post_otp, client_ip)
+            except LendingNotConfiguredError as e:
+                context["error"] = str(e)
+                return request.app.templates.TemplateResponse("otp_issue.html", context)
             if not session_cookie:
                 context["error"] = "Authentication failed. Invalid OTP."
                 context["email"] = post_email
                 return request.app.templates.TemplateResponse("otp_redeem.html", context)
-            
+
             response = RedirectResponse(url=post_url, status_code=302)
             response.set_cookie(
                 key="session", value=session_cookie, max_age=auth.COOKIE_TTL,
@@ -300,10 +314,13 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
                 auth.OTP.issue(post_email, client_ip)
                 context["email"] = post_email
                 return request.app.templates.TemplateResponse("otp_redeem.html", context)
-            except Exception as e:
-                context["error"] = f"Failed to issue OTP: {str(e)}"
+            except LendingNotConfiguredError as e:
+                context["error"] = str(e)
                 return request.app.templates.TemplateResponse("otp_issue.html", context)
-    
+            except Exception:
+                context["error"] = "Failed to issue OTP. Please try again."
+                return request.app.templates.TemplateResponse("otp_issue.html", context)
+
     return request.app.templates.TemplateResponse("otp_issue.html", context)
 
 @router.api_route('/items/{book_id}/return', methods=['GET', 'POST'], status_code=status.HTTP_200_OK)
@@ -375,6 +392,21 @@ async def upload(
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@router.delete("/admin/items/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_item(request: Request, book_id: int):
+    """
+    Delete an item from the catalog (S3 files + DB record, loans cascade).
+    Requires admin authentication.
+    """
+    _require_admin(request)
+    try:
+        LennyAPI.delete(book_id)
+    except ItemNotFoundError:
+        raise HTTPException(status_code=404, detail="Item not found")
+    except DatabaseDeleteError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/profile")
@@ -458,6 +490,7 @@ async def oauth_authorize(
     If logged in, redirects to redirect_uri with access_token in fragment.
     If not logged in, handles OTP flow directly.
     """
+    _require_lending()
     session = request.cookies.get("session")
     email = get_authenticated_email(request, session)
 
@@ -498,7 +531,11 @@ async def oauth_authorize(
     }
 
     if request.method == "POST" and post_email and post_otp:
-        session_cookie = auth.OTP.authenticate(post_email, post_otp, client_ip)
+        try:
+            session_cookie = auth.OTP.authenticate(post_email, post_otp, client_ip)
+        except LendingNotConfiguredError as e:
+            context["error"] = str(e)
+            return request.app.templates.TemplateResponse("otp_issue.html", context)
         if not session_cookie:
             context["error"] = "Authentication failed. Invalid OTP."
             context["email"] = post_email
@@ -538,6 +575,9 @@ async def oauth_authorize(
             auth.OTP.issue(post_email, client_ip)
             context["email"] = post_email
             return request.app.templates.TemplateResponse("otp_redeem.html", context)
+        except LendingNotConfiguredError as e:
+            context["error"] = str(e)
+            return request.app.templates.TemplateResponse("otp_issue.html", context)
         except Exception:
             context["error"] = "Failed to issue OTP. Please try again."
             return request.app.templates.TemplateResponse("otp_issue.html", context)
@@ -579,3 +619,185 @@ async def admin_verify(request: Request):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     return JSONResponse({"valid": True})
+
+
+# ─── Open Library / Internet Archive auth bootstrap ──────────────────────
+# These routes let the admin UI log Lenny into archive.org and persist the
+# returned IA S3 keys to .env. They mirror `docker/utils/ol_configure.sh` so
+# an operator can log in either from the UI or from a shell.
+#
+# Every /admin/ol/* route requires BOTH X-Admin-Internal-Secret (server-side
+# shared secret — proxied by lenny-app, never reachable through nginx) AND a
+# valid admin Bearer token (proof the admin user is signed in). This matches
+# the /admin/auth + /admin/verify pair already exposed on this router.
+
+OL_ENV_PATH = "/app/.env"
+OL_LOGIN_RATE_LIMIT = 5
+OL_LOGIN_RATE_WINDOW = 300
+
+
+def _require_lending() -> None:
+    """Raise 503 if lending is disabled or OL credentials are not configured."""
+    if not configs.LENDING_ENABLED:
+        raise HTTPException(status_code=503, detail="Lending is not enabled on this instance.")
+    if not (configs.OL_S3_ACCESS_KEY and configs.OL_S3_SECRET_KEY):
+        raise HTTPException(status_code=503, detail="Lending is not configured: Open Library credentials are missing. Run 'make ol-login'.")
+
+
+def _require_admin(request: Request) -> None:
+    """Enforce the internal-secret + admin-token pair used by every /admin/ol/* route."""
+    internal_secret = request.headers.get("X-Admin-Internal-Secret", "")
+    if not auth.verify_admin_internal_secret(internal_secret):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    authorization = request.headers.get("Authorization", "")
+    token = authorization.removeprefix("Bearer ").strip()
+    if not auth.verify_admin_token(token):
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+def _apply_ol_env_in_process(
+    access: Optional[str],
+    secret: Optional[str],
+    username: Optional[str],
+    lending_enabled: Optional[bool] = None,
+) -> None:
+    """Update lenny.configs so the running worker uses new credentials
+    without a container restart. `ol_auth_headers()` reads these at call-time."""
+    configs.OL_S3_ACCESS_KEY = access or None
+    configs.OL_S3_SECRET_KEY = secret or None
+    configs.OL_USERNAME = username or None
+    if lending_enabled is not None:
+        configs.LENDING_ENABLED = lending_enabled
+
+
+@router.get("/admin/ol/status", status_code=status.HTTP_200_OK)
+async def admin_ol_status(request: Request):
+    """Current Lenny ↔ OL auth state. Used by the admin UI to render the
+    "Logged in as …" banner and decide whether to show the login form."""
+    _require_admin(request)
+    return JSONResponse(ol_auth_status())
+
+
+@router.post("/admin/ol/login", status_code=status.HTTP_200_OK)
+async def admin_ol_login(request: Request, body: OLLoginRequest = Body(...)):
+    """Exchange IA email/password for S3 keys and persist them to .env.
+
+    Rate-limited by (client IP, email) to 5 attempts / 5 minutes. Refuses
+    to overwrite an existing login unless `replace=true` is sent — matches
+    the shell `ol-login` re-login confirmation flow.
+    """
+    _require_admin(request)
+
+    client_ip = request.client.host if request.client else "unknown"
+    throttle_key = f"{client_ip}:{body.email.lower()}"
+    if Cache.is_throttled(
+        "ol:login", throttle_key, OL_LOGIN_RATE_LIMIT, OL_LOGIN_RATE_WINDOW
+    ):
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "rate_limited",
+                "message": "Too many attempts. Try again in a few minutes.",
+            },
+        )
+
+    if configs.OL_S3_ACCESS_KEY and configs.OL_USERNAME and not body.replace:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "already_logged_in",
+                "message": (
+                    f"Already logged in as {configs.OL_USERNAME}. "
+                    "Send replace=true to overwrite these credentials."
+                ),
+                "username": configs.OL_USERNAME,
+            },
+        )
+
+    try:
+        access, secret, screenname = ol_bootstrap.acquire_keys(body.email, body.password)
+    except ol_bootstrap.OLBootstrapError as err:
+        mapping = {
+            "INVALID_CREDENTIALS": (401, "invalid_credentials", "Email or password is incorrect."),
+            "BAD_EMAIL":           (400, "bad_email",            "Email must be a valid address."),
+            "BAD_PASSWORD":        (400, "bad_password",         "Password must not be empty."),
+            "IA_UNREACHABLE":      (502, "ia_unreachable",       "Could not reach archive.org. Check network."),
+            "NO_KEYS":             (500, "no_keys",              "archive.org did not return S3 keys for this account."),
+            "MISSING_DEP":         (500, "missing_dep",          "Server is missing the 'internetarchive' package. Run 'make redeploy'."),
+        }
+        status_code, code, message = mapping.get(
+            err.code, (500, "unknown", "Login failed. Please try again.")
+        )
+        return JSONResponse(status_code=status_code, content={"error": code, "message": message})
+
+    try:
+        ol_bootstrap.update_env_file(
+            OL_ENV_PATH,
+            {
+                "OL_S3_ACCESS_KEY": access,
+                "OL_S3_SECRET_KEY": secret,
+                "OL_USERNAME": body.email,
+                "LENNY_LENDING_ENABLED": "true",
+            },
+        )
+    except OSError as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "env_write_failed",
+                "message": f"Authenticated but could not persist credentials: {exc}",
+            },
+        )
+
+    _apply_ol_env_in_process(access, secret, body.email, lending_enabled=True)
+
+    return JSONResponse(
+        {
+            "logged_in": True,
+            "username": body.email,
+            "screenname": screenname,
+            "lending_enabled": True,
+            "message": f"Logged in as {screenname or body.email}.",
+        }
+    )
+
+
+@router.post("/admin/ol/logout", status_code=status.HTTP_200_OK)
+async def admin_ol_logout(request: Request):
+    """Clear the IA S3 keys from .env and disable lending."""
+    _require_admin(request)
+
+    previous_user = configs.OL_USERNAME
+
+    try:
+        ol_bootstrap.update_env_file(
+            OL_ENV_PATH,
+            {
+                "OL_S3_ACCESS_KEY": "",
+                "OL_S3_SECRET_KEY": "",
+                "OL_USERNAME": "",
+                "LENNY_LENDING_ENABLED": "false",
+            },
+        )
+    except OSError as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "env_write_failed",
+                "message": f"Could not clear credentials from .env: {exc}",
+            },
+        )
+
+    _apply_ol_env_in_process(None, None, None, lending_enabled=False)
+
+    return JSONResponse(
+        {
+            "logged_in": False,
+            "previous_username": previous_user,
+            "message": (
+                f"Logged out of {previous_user}." if previous_user
+                else "No credentials were configured."
+            ),
+        }
+    )

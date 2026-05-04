@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from lenny.configs import SEED, OTP_SERVER, ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_INTERNAL_SECRET, ADMIN_SALT
+from lenny.core.openlibrary import ol_auth_headers
+from lenny.core.exceptions import LendingNotConfiguredError
 from lenny.core.cache import Cache
 from lenny.core.exceptions import RateLimitError
 
@@ -151,21 +153,32 @@ class OTP:
         )
 
     @classmethod
+    def _check_lending_enabled(cls) -> None:
+        from lenny import configs
+        if not configs.LENDING_ENABLED:
+            raise LendingNotConfiguredError("Lending is not enabled on this instance.")
+        if not (configs.OL_S3_ACCESS_KEY and configs.OL_S3_SECRET_KEY):
+            raise LendingNotConfiguredError("Lending is not configured: Open Library credentials are missing. Run 'make ol-login'.")
+
+    @classmethod
     def issue(cls, email: str, ip_address: str) -> dict:
-        """Interim: Use OpenLibrary.org to send & rate limit otp"""
+        cls._check_lending_enabled()
         with httpx.Client(http2=True, verify=False, timeout=TIMEOUT) as client:
             return client.post(
                 f"{OTP_SERVER}/account/otp/issue",
-                params={"email": email, "ip": ip_address, "testing_access_key": "8593139480"},
+                params={"email": email, "ip": ip_address},
+                headers=ol_auth_headers(),
                 follow_redirects=False,
             ).json()
 
     @classmethod
     def redeem(cls, email: str, ip_address: str, otp: str) -> bool:
+        cls._check_lending_enabled()
         with httpx.Client(http2=True, verify=False, timeout=TIMEOUT) as client:
             return "success" in client.post(
                 f"{OTP_SERVER}/account/otp/redeem",
-                params={"email": email, "ip": ip_address, "otp": otp, "testing_access_key": "8593139480"},
+                params={"email": email, "ip": ip_address, "otp": otp},
+                headers=ol_auth_headers(),
                 follow_redirects=False
             ).json()
 
