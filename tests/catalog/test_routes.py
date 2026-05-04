@@ -190,10 +190,23 @@ def test_gate_b_ol_creation_approve(client, db_session):
 
 
 def test_gate_c_encryption_review_lists_items(client, db_session):
-    job = _make_job(db_session)
+    from lenny.catalog.models import ImportJob
+    from lenny.catalog.types import JobStatus, JobMode, Persona, ResolverType, InputMethod, EncryptionPolicy
+    # Gate C only returns items from jobs with MIXED_MANUAL encryption policy
+    job = ImportJob(
+        mode=JobMode.FULL_IMPORT, persona=Persona.LIBRARY,
+        resolver_type=ResolverType.API,
+        input_method=InputMethod.EPUB_FOLDER,
+        encryption_policy=EncryptionPolicy.MIXED_MANUAL,
+        dry_run=False, gate_a_enabled=True, gate_b_enabled=True,
+        skip_ol=False, total=1, status=JobStatus.RUNNING,
+    )
+    db_session.add(job)
+    db_session.commit()
     _make_needs_review_item(db_session, job.id)
     r = client.get(f"/v1/api/catalog/review/encryption?job_id={job.id}", headers=admin_headers())
     assert r.status_code == 200
+    assert len(r.json()) >= 1
 
 
 def test_gate_c_encryption_submit(client, db_session):
@@ -269,37 +282,24 @@ def test_manual_search_returns_candidates(client, db_session):
 
 
 def test_manual_link_creates_lenny_item(client, db_session):
-    """manual_link creates a Lenny item and returns 201 with the olid."""
-    from unittest.mock import patch, MagicMock
-
-    # Patch the manual_link handler's DB calls: no existing item, insert succeeds.
-    mock_item = MagicMock()
-    mock_item.id = 99
-
-    with patch("lenny.catalog.routes.Item") as MockItemCls, \
-         patch("lenny.catalog.routes.FormatEnum") as MockFormatEnum:
-        MockItemCls.return_value = mock_item
-        # Make db.query(MockItemCls).filter(...).first() return None (not a duplicate).
-        db_session.query = MagicMock(
-            return_value=MagicMock(
-                filter=MagicMock(
-                    return_value=MagicMock(first=MagicMock(return_value=None))
-                )
-            )
-        )
-        db_session.add = MagicMock()
-        db_session.commit = MagicMock()
-        db_session.refresh = MagicMock()
-
-        r = client.post(
-            "/v1/api/catalog/manual/link",
-            json={"olid": 12345},
-            headers=admin_headers(),
-        )
-
+    """manual_link creates a Lenny Item row and returns 201 with the olid."""
+    from lenny.core.models import Item
+    r = client.post(
+        "/v1/api/catalog/manual/link",
+        json={"olid": 12345},
+        headers=admin_headers(),
+    )
     assert r.status_code == 201
     data = r.json()
     assert data["olid"] == 12345
+    assert db_session.query(Item).filter(Item.openlibrary_edition == 12345).count() == 1
+
+
+def test_manual_link_rejects_duplicate_olid(client, db_session):
+    """manual_link returns 409 when the OLID already exists in Lenny."""
+    client.post("/v1/api/catalog/manual/link", json={"olid": 99999}, headers=admin_headers())
+    r = client.post("/v1/api/catalog/manual/link", json={"olid": 99999}, headers=admin_headers())
+    assert r.status_code == 409
 
 
 def test_ol_status_returns_logged_in_state(client, db_session):

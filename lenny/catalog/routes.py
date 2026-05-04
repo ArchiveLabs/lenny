@@ -16,7 +16,7 @@ from lenny.catalog.types import BookMetadata
 from lenny.catalog.schemas import (
     CreateJobRequest, JobResponse,
     ReviewItemResponse, MetadataReviewSubmit, OLCreationEdit,
-    EncryptionSubmit, FuzzyResolve,
+    EncryptionSubmit, FuzzyResolve, ManualCreateRequest,
 )
 from lenny.catalog.resolver import APIResolver
 from lenny.catalog.exceptions import OLWriteError
@@ -95,21 +95,29 @@ async def create_job(body: CreateJobRequest, db: Session = Depends(get_db)) -> J
 
 @router.get("/jobs/{job_id}/stream", dependencies=[Depends(require_catalog_admin)])
 async def stream_job_progress(job_id: int, db: Session = Depends(get_db)):
-    """SSE endpoint: polls import_jobs every 2 seconds and streams progress."""
-    job = db.get(ImportJob, job_id)
-    if not job:
+    """SSE endpoint: polls import_jobs every 2 seconds and streams progress.
+
+    Each iteration acquires a fresh session via _scoped_session so the pool
+    connection is released between polls rather than held for the stream lifetime.
+    The injected `db` is used only for the initial existence check.
+    """
+    if not db.get(ImportJob, job_id):
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
     async def _event_generator():
         _TERMINAL = {JobStatus.COMPLETED, JobStatus.CANCELLED, JobStatus.ERROR}
         while True:
-            db.expire(job)
-            current = db.get(ImportJob, job_id)
-            if not current:
-                break
-            payload = JobResponse.model_validate(current).model_dump(mode="json")
+            try:
+                session = _scoped_session()
+                current = session.get(ImportJob, job_id)
+                if not current:
+                    break
+                payload = JobResponse.model_validate(current).model_dump(mode="json")
+                is_terminal = current.status in _TERMINAL
+            finally:
+                _scoped_session.remove()
             yield f"data: {_json.dumps(payload)}\n\n"
-            if current.status in _TERMINAL:
+            if is_terminal:
                 break
             await asyncio.sleep(2)
 
@@ -364,29 +372,28 @@ async def manual_link(body: FuzzyResolve, db: Session = Depends(get_db)):
 
 
 @router.post("/manual/create", dependencies=[Depends(require_catalog_admin)], status_code=201)
-async def manual_create(body: dict, db: Session = Depends(get_db)):
+async def manual_create(body: ManualCreateRequest, db: Session = Depends(get_db)):
     """Create a new OL record for a book and optionally link it to Lenny."""
     from lenny.configs import GOOGLE_BOOKS_API_KEY
     if not ol_auth_status()["logged_in"]:
-        raise HTTPException(status_code=401, detail="OL not authenticated. Run `make ol-login` first.")
+        raise HTTPException(status_code=503, detail="OL not authenticated. Run `make ol-login` first.")
     meta = BookMetadata(
-        title=body.get("title"),
-        authors=body.get("authors", []),
-        isbn_13=body.get("isbn_13"),
-        isbn_10=body.get("isbn_10"),
-        publisher=body.get("publisher"),
-        publish_date=body.get("publish_date"),
-        language=body.get("language", "eng"),
+        title=body.title,
+        authors=body.authors,
+        isbn_13=body.isbn_13,
+        isbn_10=body.isbn_10,
+        publisher=body.publisher,
+        publish_date=body.publish_date,
+        language=body.language,
     )
-    if not meta.title or not meta.authors:
-        raise HTTPException(status_code=422, detail="title and authors are required")
     resolver = APIResolver(google_books_api_key=GOOGLE_BOOKS_API_KEY)
     try:
         olid = resolver.create_edition(meta)
     except OLWriteError as e:
         raise HTTPException(status_code=502, detail=f"OL write failed: {e}")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"OL write failed: {e}")
+    except Exception:
+        logger.exception("Unexpected error in manual_create")
+        raise HTTPException(status_code=500, detail="Unexpected error creating OL record")
     return {"olid": olid}
 
 

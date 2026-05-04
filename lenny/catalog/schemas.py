@@ -106,3 +106,13 @@ class ManualSearchRequest(BaseModel):
     title: Optional[str] = None
     author: Optional[str] = None
     isbn: Optional[str] = None
+
+
+class ManualCreateRequest(BaseModel):
+    title: str
+    authors: List[str]
+    isbn_13: Optional[str] = None
+    isbn_10: Optional[str] = None
+    publisher: Optional[str] = None
+    publish_date: Optional[str] = None
+    language: str = "eng"

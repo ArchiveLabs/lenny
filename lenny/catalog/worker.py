@@ -14,6 +14,8 @@ from sqlalchemy.orm import sessionmaker, Session
 
 from lenny.catalog.models import ImportJob, ImportItem
 from lenny.catalog.types import PipelineStage, JobStatus
+
+_TERMINAL_STAGES = frozenset({PipelineStage.DONE, PipelineStage.ERROR, PipelineStage.SKIPPED})
 from lenny.catalog.pipeline import process_item
 from lenny.catalog.resolver import APIResolver
 
@@ -137,21 +139,39 @@ class CatalogWorker:
         )
 
     def _check_job_completion(self, job: ImportJob, session: Session) -> None:
-        """Mark job COMPLETED if no pending items remain."""
-        remaining = (
+        """Mark job COMPLETED when all items are terminal, AWAITING_REVIEW when gated."""
+        non_terminal = (
             session.query(ImportItem)
             .filter(
                 ImportItem.job_id == job.id,
-                ImportItem.pipeline_stage == PipelineStage.PENDING,
+                ImportItem.pipeline_stage.notin_(_TERMINAL_STAGES),
             )
             .count()
         )
-        if remaining == 0:
-            job.status = JobStatus.COMPLETED
+        if non_terminal == 0:
+            new_status = JobStatus.COMPLETED
             job.completed_at = datetime.datetime.now(datetime.timezone.utc)
-            session.add(job)
+        else:
+            in_review = (
+                session.query(ImportItem)
+                .filter(
+                    ImportItem.job_id == job.id,
+                    ImportItem.pipeline_stage == PipelineStage.NEEDS_REVIEW,
+                )
+                .count()
+            )
+            if in_review < non_terminal or job.status == JobStatus.AWAITING_REVIEW:
+                return
+            new_status = JobStatus.AWAITING_REVIEW
+
+        job.status = new_status
+        session.add(job)
+        try:
             session.commit()
-            logger.info("Job %d marked COMPLETED", job.id)
+            logger.info("Job %d marked %s", job.id, new_status.value)
+        except Exception:
+            session.rollback()
+            logger.exception("Failed to update job %d status to %s", job.id, new_status.value)
 
     def _reset_stale(self, session: Session) -> int:
         from lenny.configs import CATALOG_STALE_TIMEOUT

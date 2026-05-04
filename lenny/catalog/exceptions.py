@@ -1,11 +1,3 @@
-class OLAuthRequired(Exception):
-    """Raised when an OL write is attempted without a valid session cookie."""
-
-
-class OLAuthError(Exception):
-    """Raised when OL login fails."""
-
-
 class OLRateLimited(Exception):
     """Raised on OL 429 response. Caller should back off and retry."""
 

@@ -56,7 +56,7 @@ class APIResolver:
     # ------------------------------------------------------------------
 
     def lookup(self, metadata: BookMetadata) -> OLResult:
-        """Run the full resolution cascade. Never raises — returns OLResult."""
+        """Run the full resolution cascade. Returns OLResult. Raises: OLRateLimited."""
         if not metadata.is_resolvable:
             return OLResult(
                 status=OLStatus.INSUFFICIENT_METADATA,
@@ -77,8 +77,8 @@ class APIResolver:
             if result.needs_review:
                 return result
 
-        # 4. Google Books fallback
-        if self._google_key and metadata.title:
+        # 4. Google Books fallback — also works for ISBN-only records without a title
+        if self._google_key and (metadata.title or metadata.best_isbn):
             result = self._google_books_lookup(metadata)
             if result.confidence >= OL_AUTO_LINK_THRESHOLD:
                 return result
