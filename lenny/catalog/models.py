@@ -6,7 +6,7 @@ from sqlalchemy import Column, BigInteger, Boolean, Integer, String, Float, Date
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
-from lenny.core.db import Base, session as _default_session
+from lenny.core.db import Base
 from lenny.catalog.types import (
     PipelineStage, STAGE_TRANSITIONS, STAGE_CHECKPOINTS,
     JobStatus, JobMode, Persona, ResolverType,
@@ -64,7 +64,7 @@ class ImportJob(Base):
 
     items = relationship("ImportItem", back_populates="job", cascade="all, delete-orphan")
 
-    def increment(self, counter: str, session=None) -> None:
+    def increment(self, counter: str, session) -> None:
         """Atomically increment a job counter and the `processed` total.
 
         Uses an UPDATE statement (not read-modify-write) to avoid
@@ -72,14 +72,13 @@ class ImportJob(Base):
         """
         if counter not in _COUNTER_COLUMNS:
             raise ValueError(f"Unknown counter: {counter!r}. Valid: {_COUNTER_COLUMNS}")
-        s = session or _default_session
-        s.execute(
+        session.execute(
             sa.update(ImportJob)
             .where(ImportJob.id == self.id)
             .values({counter: getattr(ImportJob, counter) + 1,
                      "processed": ImportJob.processed + 1})
         )
-        s.commit()
+        session.commit()
 
 
 class ImportItem(Base):
@@ -130,7 +129,7 @@ class ImportItem(Base):
 
     job = relationship("ImportJob", back_populates="items")
 
-    def advance_stage(self, new_stage: PipelineStage, session=None, **log_kwargs) -> None:
+    def advance_stage(self, new_stage: PipelineStage, session, **log_kwargs) -> None:
         allowed = STAGE_TRANSITIONS.get(self.pipeline_stage)
         if allowed is None:
             raise ValueError(f"No transitions defined for stage {self.pipeline_stage!r}")
@@ -139,17 +138,18 @@ class ImportItem(Base):
                 f"Invalid stage transition: {self.pipeline_stage!r} → {new_stage!r}. "
                 f"Allowed: {[s.value for s in allowed]}"
             )
-        s = session or _default_session
-        log_entry = {"stage": new_stage.value, "ts": _utcnow().isoformat(), **log_kwargs}
+        # Allowlist log_kwargs keys to prevent accidental credential/object leakage into action_log
+        _SAFE_LOG_KEYS = {"isbn", "title", "ol_status", "confidence", "olid", "action", "reason", "new_olid"}
+        safe_kwargs = {k: str(v) for k, v in log_kwargs.items() if k in _SAFE_LOG_KEYS}
+        log_entry = {"stage": new_stage.value, "ts": _utcnow().isoformat(), **safe_kwargs}
         # action_log is a list — must reassign to trigger SQLAlchemy change detection on JSON
         self.action_log = list(self.action_log or []) + [log_entry]
         self.pipeline_stage = new_stage
         self.stage_updated_at = _utcnow()
-        s.add(self)
-        s.commit()
+        session.add(self)
+        session.commit()
 
-    def mark_error(self, message: str, session=None, max_retries: int = 3) -> None:
-        s = session or _default_session
+    def mark_error(self, message: str, session, max_retries: int = 3) -> None:
         self.retry_count = (self.retry_count or 0) + 1
         self.error_message = message
         log_entry = {
@@ -170,35 +170,43 @@ class ImportItem(Base):
                 self.pipeline_stage = PipelineStage.ERROR
 
         self.stage_updated_at = _utcnow()
-        s.add(self)
-        s.commit()
+        session.add(self)
+        session.commit()
 
     @classmethod
-    def reset_stale(cls, session=None, stale_after_seconds: int = 300) -> int:
-        s = session or _default_session
+    def reset_stale(cls, session, stale_after_seconds: int = 300) -> int:
         cutoff = _utcnow() - datetime.timedelta(seconds=stale_after_seconds)
         active_stages = list(STAGE_CHECKPOINTS.keys())
         stale = (
-            s.query(cls)
+            session.query(cls)
             .filter(
                 cls.pipeline_stage.in_(active_stages),
                 cls.stage_updated_at < cutoff,
             )
             .all()
         )
+        if not stale:
+            return 0
+        now = _utcnow()
+        # Group by checkpoint so we can bulk-update stage+timestamp per transition type
+        by_checkpoint: dict = {}
         for item in stale:
             checkpoint = STAGE_CHECKPOINTS[item.pipeline_stage]
             log_entry = {
                 "stage": "reset_stale",
-                "ts": _utcnow().isoformat(),
+                "ts": now.isoformat(),
                 "from": item.pipeline_stage.value,
                 "to": checkpoint.value,
             }
             item.action_log = list(item.action_log or []) + [log_entry]
-            item.pipeline_stage = checkpoint
-            item.stage_updated_at = _utcnow()
-            s.add(item)
-        s.commit()
+            by_checkpoint.setdefault(checkpoint, []).append(item.id)
+        for checkpoint, ids in by_checkpoint.items():
+            session.execute(
+                sa.update(cls)
+                .where(cls.id.in_(ids))
+                .values(pipeline_stage=checkpoint, stage_updated_at=now)
+            )
+        session.commit()
         return len(stale)
 
     @classmethod
@@ -214,9 +222,8 @@ class ImportItem(Base):
 
     @classmethod
     def sha256_exists(cls, session, sha256: str) -> bool:
-        s = session or _default_session
         return (
-            s.query(cls)
+            session.query(cls)
             .filter(cls.sha256 == sha256, cls.pipeline_stage != PipelineStage.ERROR)
             .first()
         ) is not None

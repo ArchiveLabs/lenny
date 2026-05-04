@@ -35,6 +35,7 @@ class JobResponse(BaseModel):
     mode: JobMode
     persona: Persona
     input_method: InputMethod
+    resolver_type: ResolverType
     encryption_policy: EncryptionPolicy
     dry_run: bool
     gate_a_enabled: bool
@@ -47,7 +48,7 @@ class JobResponse(BaseModel):
     needs_review: int
     errors: int
     skipped: int
-    created_at: Optional[datetime] = None
+    created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
@@ -67,7 +68,7 @@ class ReviewItemResponse(BaseModel):
     confidence: Optional[float] = None
     olid: Optional[int] = None
     action_taken: Optional[ActionTaken] = None
-    review_candidates: Optional[list] = None
+    review_candidates: Optional[List[dict]] = None
     error_message: Optional[str] = None
 
     model_config = {"from_attributes": True}
@@ -105,8 +106,3 @@ class ManualSearchRequest(BaseModel):
     title: Optional[str] = None
     author: Optional[str] = None
     isbn: Optional[str] = None
-
-
-class OLConnectRequest(BaseModel):
-    access_key: str
-    secret_key: str

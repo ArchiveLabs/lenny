@@ -12,7 +12,8 @@ from lenny.catalog.types import (
     OLStatus, ActionTaken,
     OL_AUTO_LINK_THRESHOLD, OL_REVIEW_THRESHOLD,
 )
-from lenny.catalog.exceptions import OLRateLimited, OLAuthRequired, OLWriteError
+from lenny.catalog.exceptions import OLRateLimited, OLWriteError
+from lenny.core.openlibrary import ol_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +44,12 @@ class APIResolver:
 
     def __init__(
         self,
-        ol_session_cookie: Optional[str] = None,
-        ol_access_key: Optional[str] = None,
-        ol_secret_key: Optional[str] = None,
         google_books_api_key: Optional[str] = None,
         timeout: int = 10,
     ):
-        self._ol_access = ol_access_key
-        self._ol_secret = ol_secret_key
         self._google_key = google_books_api_key
         self._timeout = timeout
         self._headers = dict(LENNY_HTTP_HEADERS)
-        self._ol_session: Optional[str] = ol_session_cookie
 
     # ------------------------------------------------------------------
     # Public interface
@@ -93,11 +88,10 @@ class APIResolver:
 
     def create_edition(self, metadata: BookMetadata) -> int:
         """Create a new OL edition record. Returns the integer OLID."""
-        session_cookie = self._ensure_ol_session()
-        author_key = self._find_or_create_author(metadata.primary_author or "Unknown", session_cookie)
+        author_key = self._find_or_create_author(metadata.primary_author or "Unknown")
         payload = self._build_edition_payload(metadata, author_key)
 
-        headers = {**self._headers, "Cookie": f"session={session_cookie}", "Content-Type": "application/json"}
+        headers = {**ol_auth_headers(), "Content-Type": "application/json"}
         try:
             with httpx.Client(headers=headers, timeout=30) as client:
                 r = client.post(f"{self.OL_BASE}/api/import", json=payload)
@@ -288,8 +282,10 @@ class APIResolver:
         if title_score < OL_REVIEW_THRESHOLD:
             return OLResult(status=OLStatus.OL_NOT_FOUND, confidence=0.0)
 
+        # OL_WORK_ONLY: Google Books confirmed the title exists but no OL edition was found.
+        # Confidence from GB is used to decide whether to auto-create or queue for review.
         return OLResult(
-            status=OLStatus.OL_NOT_FOUND,
+            status=OLStatus.OL_WORK_ONLY,
             confidence=title_score,
             action=ActionTaken.CREATE_FULL,
         )
@@ -298,29 +294,7 @@ class APIResolver:
     # Private: OL write methods
     # ------------------------------------------------------------------
 
-    def _ensure_ol_session(self) -> str:
-        if self._ol_session:
-            return self._ol_session
-        if self._ol_access and self._ol_secret:
-            self._ol_session = self._ol_login(self._ol_access, self._ol_secret)
-            return self._ol_session
-        raise OLAuthRequired("No OL credentials provided. Pass ol_session_cookie or ol_access_key+ol_secret_key.")
-
-    def _ol_login(self, access_key: str, secret_key: str) -> str:
-        with httpx.Client(headers=self._headers, timeout=self._timeout) as client:
-            r = client.post(
-                f"{self.OL_BASE}/account/login",
-                json={"access": access_key, "secret": secret_key},
-            )
-            if r.status_code == 429:
-                raise OLRateLimited("OL login rate limited (429)")
-            r.raise_for_status()
-            session = r.cookies.get("session")
-            if not session:
-                raise OLAuthRequired("OL login succeeded but returned no session cookie")
-            return session
-
-    def _find_or_create_author(self, name: str, session_cookie: str) -> str:
+    def _find_or_create_author(self, name: str) -> str:
         try:
             with httpx.Client(headers=self._headers, timeout=self._timeout) as client:
                 r = client.get(
@@ -337,7 +311,7 @@ class APIResolver:
             logger.warning("OL author search failed for %r: %s", name, e)
 
         payload = {"name": name, "type": {"key": "/type/author"}}
-        headers = {**self._headers, "Cookie": f"session={session_cookie}", "Content-Type": "application/json"}
+        headers = {**ol_auth_headers(), "Content-Type": "application/json"}
         with httpx.Client(headers=headers, timeout=self._timeout) as client:
             r = client.post(f"{self.OL_BASE}/api/import", json=payload)
             if r.status_code == 429:
@@ -367,7 +341,7 @@ class APIResolver:
         if metadata.language:
             payload["languages"] = [{"key": f"/languages/{metadata.language}"}]
         if metadata.description:
-            payload["description"] = {"type": "/type/text", "value": metadata.description}
+            payload["description"] = {"type": "/type/text", "value": metadata.description[:2000]}
         if metadata.subjects:
             payload["subjects"] = metadata.subjects
         return payload

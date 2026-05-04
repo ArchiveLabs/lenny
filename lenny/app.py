@@ -5,6 +5,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from lenny.routes import api
+from lenny.catalog.routes import router as catalog_router
 from lenny.configs import OPTIONS
 from lenny import __version__ as VERSION
 
@@ -27,6 +28,8 @@ app.add_middleware(
 app.templates = Jinja2Templates(directory="lenny/templates")
 
 app.include_router(api.router, prefix="/v1/api")
+
+app.include_router(catalog_router, prefix="/v1/api")
 
 app.mount("/static", StaticFiles(directory="lenny/static"), name="static")
 

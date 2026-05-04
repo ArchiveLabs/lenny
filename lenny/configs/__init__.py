@@ -81,6 +81,16 @@ S3_CONFIG = {
     'secure': os.environ.get('S3_SECURE', 'false').lower() == 'true',
 }
 
+# Catalog worker configuration
+CATALOG_CONCURRENCY = int(os.environ.get('CATALOG_CONCURRENCY', 10))
+CATALOG_DUMP_THRESHOLD = int(os.environ.get('CATALOG_DUMP_THRESHOLD', 10000))
+CATALOG_DUMP_PATH = os.environ.get('CATALOG_DUMP_PATH', '/data/ol_dump.duckdb')
+CATALOG_MAX_RETRIES = int(os.environ.get('CATALOG_MAX_RETRIES', 3))
+CATALOG_STALE_TIMEOUT = int(os.environ.get('CATALOG_STALE_TIMEOUT', 300))  # seconds before an in-progress item is reset to its last checkpoint
+GOOGLE_BOOKS_API_KEY = os.environ.get('GOOGLE_BOOKS_API_KEY')  # intentionally unprefixed — may be shared with non-catalog features
+
 __all__ = ['SCHEME', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG', 'S3_CONFIG', 'TESTING',
            'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'ADMIN_INTERNAL_SECRET', 'ADMIN_SALT',
-           'OL_S3_ACCESS_KEY', 'OL_S3_SECRET_KEY', 'OL_USERNAME', 'LENDING_ENABLED', 'OL_INDEXED']
+           'OL_S3_ACCESS_KEY', 'OL_S3_SECRET_KEY', 'OL_USERNAME', 'LENDING_ENABLED', 'OL_INDEXED',
+           'CATALOG_CONCURRENCY', 'CATALOG_DUMP_THRESHOLD', 'CATALOG_DUMP_PATH',
+           'CATALOG_MAX_RETRIES', 'CATALOG_STALE_TIMEOUT', 'GOOGLE_BOOKS_API_KEY']

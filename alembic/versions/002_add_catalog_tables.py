@@ -4,6 +4,7 @@ Revision ID: 002_catalog
 Revises: 001_baseline
 Create Date: 2026-05-03
 """
+import re
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
@@ -13,9 +14,14 @@ down_revision = "c6b7da6debc2"
 branch_labels = None
 depends_on = None
 
+_SAFE_IDENT = re.compile(r'^[a-z][a-z0-9_]*$')
+
 
 def _create_enum(name: str, *values: str) -> None:
-    op.execute(f"CREATE TYPE {name} AS ENUM ({', '.join(repr(v) for v in values)})")
+    if not _SAFE_IDENT.match(name):
+        raise ValueError(f"Unsafe enum type name: {name!r}")
+    quoted = ", ".join(f"'{v}'" for v in values)
+    op.execute(sa.text(f"CREATE TYPE {name} AS ENUM ({quoted})"))
 
 
 def upgrade() -> None:
@@ -116,4 +122,4 @@ def downgrade() -> None:
     op.drop_table("import_jobs")
     for name in ("actiontaken", "olstatus", "pipelinestage", "encryptionpolicy",
                  "inputmethod", "resolvertype", "persona", "jobmode", "jobstatus"):
-        op.execute(f"DROP TYPE IF EXISTS {name}")
+        op.execute(sa.text(f"DROP TYPE IF EXISTS {name}"))

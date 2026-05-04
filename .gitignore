@@ -178,3 +178,4 @@ cython_debug/
 pyopds2_lenny
 .lenny-version
 backups/
+.worktrees/

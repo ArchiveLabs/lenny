@@ -6,7 +6,7 @@ from lenny.catalog.resolver import APIResolver, OLResolver
 from lenny.catalog.types import (
     BookMetadata, OLResult, OLStatus, ActionTaken,
 )
-from lenny.catalog.exceptions import OLRateLimited, OLAuthRequired, OLWriteError
+from lenny.catalog.exceptions import OLRateLimited, OLWriteError
 
 
 # --- Protocol conformance ---
@@ -99,7 +99,7 @@ def mock_ol_isbn_response():
 
 def test_create_edition_conflict_returns_existing_olid():
     """409 response with a parseable ID should return the existing OLID."""
-    resolver = APIResolver(ol_session_cookie="valid-session")
+    resolver = APIResolver()
     with patch.object(resolver, "_find_or_create_author", return_value="/authors/OL123A"):
         with patch("httpx.Client") as mock_cls:
             mock_resp = MagicMock()
@@ -113,7 +113,7 @@ def test_create_edition_conflict_returns_existing_olid():
 
 def test_create_edition_conflict_missing_id_raises():
     """409 with no parseable ID in response body should raise OLWriteError."""
-    resolver = APIResolver(ol_session_cookie="valid-session")
+    resolver = APIResolver()
     with patch.object(resolver, "_find_or_create_author", return_value="/authors/OL123A"):
         with patch("httpx.Client") as mock_cls:
             mock_resp = MagicMock()
@@ -250,15 +250,22 @@ def test_google_books_title_mismatch_ignored():
 
 # --- OL write: create_edition ---
 
-def test_create_edition_no_credentials_raises():
-    resolver = APIResolver()  # no credentials
-    metadata = BookMetadata(title="New Book", authors=["New Author"])
-    with pytest.raises(OLAuthRequired):
-        resolver.create_edition(metadata)
+def test_create_edition_unauthenticated_raises_write_error():
+    resolver = APIResolver()
+    with patch.object(resolver, "_find_or_create_author", return_value="/authors/OL123A"):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 403
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "403", request=MagicMock(), response=mock_resp
+        )
+        with patch("httpx.Client") as mock_cls:
+            mock_cls.return_value.__enter__.return_value.post.return_value = mock_resp
+            with pytest.raises(OLWriteError):
+                resolver.create_edition(BookMetadata(title="New Book", authors=["New Author"]))
 
 
 def test_create_edition_success():
-    resolver = APIResolver(ol_session_cookie="valid-session")
+    resolver = APIResolver()
     with patch.object(resolver, "_find_or_create_author", return_value="/authors/OL123A"):
         with patch("httpx.Client") as mock_cls:
             mock_resp = MagicMock()
@@ -272,7 +279,7 @@ def test_create_edition_success():
 
 
 def test_create_edition_rate_limited_raises():
-    resolver = APIResolver(ol_session_cookie="valid-session")
+    resolver = APIResolver()
     with patch.object(resolver, "_find_or_create_author", return_value="/authors/OL123A"):
         with patch("httpx.Client") as mock_cls:
             mock_resp = MagicMock()
