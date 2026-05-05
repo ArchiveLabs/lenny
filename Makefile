@@ -198,3 +198,9 @@ catalog-migrate: ifup
 .PHONY: catalog-status
 catalog-status:
 	@docker compose ps catalog_worker
+
+# Scale the catalog worker to N replicas (default: 1).
+# Usage: make catalog-worker-scale replicas=3
+.PHONY: catalog-worker-scale
+catalog-worker-scale:
+	@docker compose up -d --scale catalog_worker=$(replicas) --no-recreate catalog_worker

@@ -137,7 +137,6 @@ services:
     build:
       context: .
       dockerfile: docker/api/Dockerfile
-    container_name: lenny_catalog_worker
     command: python -m lenny.catalog.worker
     restart: unless-stopped
     depends_on:
@@ -153,10 +152,11 @@ services:
       - .:/app
       - catalog_dump:/data
     deploy:
+      replicas: ${CATALOG_WORKER_REPLICAS:-1}
       resources:
         limits:
-          cpus: "2.0"
-          memory: 1G
+          cpus: "${CATALOG_WORKER_CPU_LIMIT:-2.0}"
+          memory: ${CATALOG_WORKER_MEM_LIMIT:-1G}
     networks:
       - lenny_network
 

@@ -40,6 +40,7 @@
 - [Development Setup](#development-setup)
 - [Open Library / Internet Archive Auth](#open-library--internet-archive-auth) — enable lending via Admin UI or CLI
 - [Updating](#updating)
+- [Catalog Import Worker Configuration](#catalog-import-worker-configuration)
 - [Database Migrations](#database-migrations)
 - [Health Check](#health-check)
 - [Testing Readium Server](#testing-readium-server)
@@ -311,6 +312,51 @@ After this, all future updates are just `make update` — it handles `git pull` 
 > **Note:** Do not run `make configure` during an upgrade — it would overwrite your `.env` with new credentials. The update engine syncs new variables safely without touching your existing configuration.
 
 For details on the update engine architecture, see [docs/plans/update-engine.md](docs/plans/update-engine.md).
+
+---
+
+## Catalog Import Worker Configuration
+
+The catalog import worker processes book imports in the background. Three knobs control its capacity — all are set in `.env` and take effect after `make redeploy`.
+
+| Variable | Default | Controls |
+|---|---|---|
+| `CATALOG_CONCURRENCY` | `10` | Thread-pool size **per worker container**. Each thread handles one item at a time (API lookup → S3 upload → DB write). |
+| `CATALOG_WORKER_REPLICAS` | `1` | Number of worker **containers** to run in parallel. Replicas use `SELECT FOR UPDATE SKIP LOCKED` so they never process the same item twice. |
+| `CATALOG_WORKER_CPU_LIMIT` | `2.0` | CPU cap per worker container (Docker). |
+| `CATALOG_WORKER_MEM_LIMIT` | `1G` | Memory cap per worker container (Docker). |
+
+> `LENNY_WORKERS` (default `3`) controls the API server's uvicorn process count — unrelated to catalog imports.
+
+### When to tune
+
+- **Small library (< 5 000 books):** defaults are fine.
+- **Medium library (5 000 – 50 000 books):** raise `CATALOG_CONCURRENCY` to `20` and/or set `CATALOG_WORKER_REPLICAS=2`.
+- **Large library (> 50 000 books):** run multiple replicas (`CATALOG_WORKER_REPLICAS=4`) with a moderate concurrency (`CATALOG_CONCURRENCY=10`) to spread load across containers.
+
+### How to apply
+
+```sh
+# In .env
+CATALOG_CONCURRENCY=20
+CATALOG_WORKER_REPLICAS=2
+CATALOG_WORKER_CPU_LIMIT=2.0
+CATALOG_WORKER_MEM_LIMIT=2G
+
+make redeploy
+```
+
+Or scale replicas without a full redeploy:
+
+```sh
+make catalog-worker-scale replicas=3
+```
+
+Check running workers:
+
+```sh
+make catalog-status
+```
 
 ---
 
