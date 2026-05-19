@@ -62,6 +62,31 @@ else
   S3_SECRET_KEY="${MINIO_ROOT_PASSWORD:-$(genpass 40)}"
   S3_ENDPOINT="${S3_ENDPOINT:-http://s3:9000}"
 
+  # --- Catalog import worker tuning ---
+  # CATALOG_CONCURRENCY: thread-pool size inside each worker container.
+  #   Each thread processes one item at a time (API calls, S3 upload, DB write).
+  #   Good starting point: 2× the number of CPU cores assigned to the container.
+  #   Default 10 works well for a single container with 2 CPUs.
+  CATALOG_CONCURRENCY="${CATALOG_CONCURRENCY:-10}"
+  # CATALOG_WORKER_REPLICAS: number of catalog_worker containers to run.
+  #   Scale this up when the import queue grows faster than one container can drain.
+  #   Each replica maintains its own thread pool (size = CATALOG_CONCURRENCY).
+  #   Uses SKIP LOCKED so replicas never process the same item.
+  #   Default 1 is sufficient for libraries importing a few thousand books.
+  CATALOG_WORKER_REPLICAS="${CATALOG_WORKER_REPLICAS:-1}"
+  # LENNY_WORKERS: uvicorn process count for the API server (not the catalog worker).
+  #   Increase for libraries with heavy concurrent reader traffic.
+  # (already set above in the API section)
+  # CATALOG_WORKER_CPU_LIMIT / CATALOG_WORKER_MEM_LIMIT: Docker resource caps
+  #   per catalog_worker container. Memory should be at least 256M per replica.
+  CATALOG_WORKER_CPU_LIMIT="${CATALOG_WORKER_CPU_LIMIT:-2.0}"
+  CATALOG_WORKER_MEM_LIMIT="${CATALOG_WORKER_MEM_LIMIT:-1G}"
+  CATALOG_DUMP_THRESHOLD="${CATALOG_DUMP_THRESHOLD:-10000}"
+  CATALOG_MAX_RETRIES="${CATALOG_MAX_RETRIES:-3}"
+  CATALOG_STALE_TIMEOUT="${CATALOG_STALE_TIMEOUT:-300}"
+  CATALOG_DUMP_PATH="${CATALOG_DUMP_PATH:-/data/ol_dump.duckdb}"
+  GOOGLE_BOOKS_API_KEY="${GOOGLE_BOOKS_API_KEY:-}"
+
   # Write to lenny.env
   cat <<EOF > "$LENNY_ENV_FILE"
 # API
@@ -111,6 +136,17 @@ S3_SECRET_KEY=$S3_SECRET_KEY
 S3_ENDPOINT=$S3_ENDPOINT
 S3_PROVIDER=minio
 S3_SECURE=false
+
+# Catalog worker
+CATALOG_CONCURRENCY=$CATALOG_CONCURRENCY
+CATALOG_WORKER_REPLICAS=$CATALOG_WORKER_REPLICAS
+CATALOG_WORKER_CPU_LIMIT=$CATALOG_WORKER_CPU_LIMIT
+CATALOG_WORKER_MEM_LIMIT=$CATALOG_WORKER_MEM_LIMIT
+CATALOG_DUMP_THRESHOLD=$CATALOG_DUMP_THRESHOLD
+CATALOG_MAX_RETRIES=$CATALOG_MAX_RETRIES
+CATALOG_STALE_TIMEOUT=$CATALOG_STALE_TIMEOUT
+CATALOG_DUMP_PATH=$CATALOG_DUMP_PATH
+GOOGLE_BOOKS_API_KEY=$GOOGLE_BOOKS_API_KEY
 
 EOF
   # .env holds secrets (admin password, DB password, S3 keys, IA S3 keys).

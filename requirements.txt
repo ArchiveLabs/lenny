@@ -9,6 +9,7 @@ cffi==1.17.1
 charset-normalizer==3.4.2
 click==8.2.0
 dotenv==0.9.9
+ebooklib==0.18
 fastapi==0.115.4
 greenlet==3.2.2
 h11==0.16.0
@@ -36,6 +37,7 @@ python-dateutil==2.9.0.post0
 python-dotenv==1.1.0
 python-multipart==0.0.6
 PyYAML==6.0.2
+rapidfuzz==3.9.3
 requests==2.32.3
 s3transfer==0.10.4
 six==1.17.0

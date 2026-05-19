@@ -133,6 +133,33 @@ services:
     networks:
       - lenny_network
 
+  catalog_worker:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    command: python -m lenny.catalog.worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      s3:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - DB_HOST=db
+      - S3_ENDPOINT=s3:9000
+    volumes:
+      - .:/app
+      - catalog_dump:/data
+    deploy:
+      replicas: ${CATALOG_WORKER_REPLICAS:-1}
+      resources:
+        limits:
+          cpus: "${CATALOG_WORKER_CPU_LIMIT:-2.0}"
+          memory: ${CATALOG_WORKER_MEM_LIMIT:-1G}
+    networks:
+      - lenny_network
+
 networks:
   lenny_network:
     driver: bridge
@@ -141,3 +168,4 @@ volumes:
   db_data:
   s3_data:
   readium_data:
+  catalog_dump:

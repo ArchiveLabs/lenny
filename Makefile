@@ -174,3 +174,33 @@ squash-migrations: ifup
 	@rm -f alembic/versions/*.py
 	@docker exec $(container) alembic revision --autogenerate -m "squashed baseline"
 	@echo "New baseline created. Existing databases must run: make migrate-stamp"
+
+# Catalog Worker
+
+.PHONY: catalog-worker-start
+catalog-worker-start:
+	@docker compose up -d catalog_worker
+
+.PHONY: catalog-worker-stop
+catalog-worker-stop:
+	@docker compose stop catalog_worker
+
+.PHONY: catalog-worker-logs
+catalog-worker-logs:
+	@docker compose logs -f catalog_worker
+
+# Run catalog migrations (alias: migrate runs all, this scopes the message)
+.PHONY: catalog-migrate
+catalog-migrate: ifup
+	@docker exec $(container) alembic upgrade head
+
+# Show catalog worker container status
+.PHONY: catalog-status
+catalog-status:
+	@docker compose ps catalog_worker
+
+# Scale the catalog worker to N replicas (default: 1).
+# Usage: make catalog-worker-scale replicas=3
+.PHONY: catalog-worker-scale
+catalog-worker-scale:
+	@docker compose up -d --scale catalog_worker=$(replicas) --no-recreate catalog_worker
