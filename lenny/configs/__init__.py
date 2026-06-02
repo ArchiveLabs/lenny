@@ -39,6 +39,7 @@ OL_S3_SECRET_KEY = os.environ.get('OL_S3_SECRET_KEY') or None
 OL_USERNAME = os.environ.get('OL_USERNAME') or None
 LENDING_ENABLED = os.environ.get('LENNY_LENDING_ENABLED', 'false').lower() == 'true'
 OL_INDEXED = os.environ.get('LENNY_OL_INDEXED', 'false').lower() == 'true'
+IA_AUTH_ENABLED = os.environ.get('IA_AUTH_ENABLED', 'false').lower() == 'true'
 
 READER_PORT = int(os.environ.get('READER_PORT', 3000))
 READIUM_PORT = int(os.environ.get('READIUM_PORT', 15080))
@@ -83,4 +84,5 @@ S3_CONFIG = {
 
 __all__ = ['SCHEME', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG', 'S3_CONFIG', 'TESTING',
            'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'ADMIN_INTERNAL_SECRET', 'ADMIN_SALT',
-           'OL_S3_ACCESS_KEY', 'OL_S3_SECRET_KEY', 'OL_USERNAME', 'LENDING_ENABLED', 'OL_INDEXED']
+           'OL_S3_ACCESS_KEY', 'OL_S3_SECRET_KEY', 'OL_USERNAME', 'LENDING_ENABLED', 'OL_INDEXED',
+           'IA_AUTH_ENABLED']

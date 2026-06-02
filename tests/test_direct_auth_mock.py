@@ -246,3 +246,89 @@ def test_opds_links_oauth_mode():
      assert "/items/1/borrow" in borrow_links[0].href
      assert borrow_links[0].properties.get("authenticate") is not None
 
+
+# --- IA S3 auth plugin tests ---
+
+def test_ia_auth_disabled_ignores_low_header(mock_auth, mock_item_exists, monkeypatch):
+    """When IA_AUTH_ENABLED=False, LOW headers are ignored and falls through to OPDS 401."""
+    import lenny.configs as conf
+    import lenny.routes.api as routes
+    from unittest.mock import AsyncMock
+
+    mock_auth.return_value = None
+    monkeypatch.setattr(conf, "IA_AUTH_ENABLED", False)
+    monkeypatch.setattr(conf, "AUTH_MODE_DIRECT", False)
+    mock_verify = AsyncMock(return_value="testuser@archive.org")
+    monkeypatch.setattr(routes, "verify_ia_s3_keys", mock_verify)
+
+    response = client.get(
+        "/v1/api/items/123/borrow",
+        headers={"Authorization": "LOW validaccess:validsecret"},
+    )
+    assert response.status_code == 401
+    mock_verify.assert_not_called()
+
+
+def test_ia_auth_enabled_valid_keys_creates_loan_and_sets_cookie(mock_auth, mock_item_exists, monkeypatch):
+    """When IA_AUTH_ENABLED=True and valid LOW keys, loan is created and session cookie is set."""
+    import lenny.configs as conf
+    import lenny.routes.api as routes
+    import lenny.core.auth as core_auth
+    from unittest.mock import AsyncMock
+
+    mock_auth.return_value = None
+    monkeypatch.setattr(conf, "IA_AUTH_ENABLED", True)
+    monkeypatch.setattr(conf, "AUTH_MODE_DIRECT", False)  # oauth mode → 200 OPDS publication
+    mock_verify = AsyncMock(return_value="testuser@archive.org")
+    monkeypatch.setattr(routes, "verify_ia_s3_keys", mock_verify)
+    monkeypatch.setattr(core_auth, "create_session_cookie", lambda email, ip=None: "dummy-session-token")
+
+    response = client.get(
+        "/v1/api/items/123/borrow",
+        headers={"Authorization": "LOW goodaccess:goodsecret"},
+    )
+    assert response.status_code == 200
+    assert "session" in response.cookies
+    mock_verify.assert_called_once_with("goodaccess", "goodsecret")
+
+
+def test_ia_auth_enabled_invalid_keys_falls_through_to_otp(mock_auth, mock_item_exists, monkeypatch):
+    """When IA_AUTH_ENABLED=True but keys are invalid, falls through to unauthenticated flow."""
+    import lenny.configs as conf
+    import lenny.routes.api as routes
+    from unittest.mock import AsyncMock
+
+    mock_auth.return_value = None
+    monkeypatch.setattr(conf, "IA_AUTH_ENABLED", True)
+    monkeypatch.setattr(conf, "AUTH_MODE_DIRECT", False)
+    mock_verify = AsyncMock(return_value=None)
+    monkeypatch.setattr(routes, "verify_ia_s3_keys", mock_verify)
+
+    response = client.get(
+        "/v1/api/items/123/borrow",
+        headers={"Authorization": "LOW badaccess:badsecret"},
+    )
+    assert response.status_code == 401  # falls through to OPDS 401
+
+
+def test_ia_auth_case_insensitive_low_scheme(mock_auth, mock_item_exists, monkeypatch):
+    """Header scheme 'low' (lowercase) is accepted."""
+    import lenny.configs as conf
+    import lenny.routes.api as routes
+    import lenny.core.auth as core_auth
+    from unittest.mock import AsyncMock
+
+    mock_auth.return_value = None
+    monkeypatch.setattr(conf, "IA_AUTH_ENABLED", True)
+    monkeypatch.setattr(conf, "AUTH_MODE_DIRECT", False)
+    mock_verify = AsyncMock(return_value="testuser@archive.org")
+    monkeypatch.setattr(routes, "verify_ia_s3_keys", mock_verify)
+    monkeypatch.setattr(core_auth, "create_session_cookie", lambda email, ip=None: "dummy-session-token")
+
+    response = client.get(
+        "/v1/api/items/123/borrow",
+        headers={"Authorization": "low goodaccess:goodsecret"},
+    )
+    assert response.status_code == 200
+    mock_verify.assert_called_once_with("goodaccess", "goodsecret")
+

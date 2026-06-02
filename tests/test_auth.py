@@ -71,3 +71,53 @@ def test_otp_authenticate_with_ip():
         
         # Should fail with wrong IP
         assert auth.verify_session_cookie(session_cookie, "10.0.0.2") is None
+
+
+import asyncio
+import unittest.mock as mock
+
+
+class TestVerifyIaS3Keys:
+    """Tests for verify_ia_s3_keys() — mocks internetarchive.get_session to avoid real network calls."""
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def _make_session(self, status_code, json_data):
+        response = mock.MagicMock()
+        response.status_code = status_code
+        response.json.return_value = json_data
+        session = mock.MagicMock()
+        session.get.return_value = response
+        return session
+
+    def test_valid_keys_return_email(self):
+        session = self._make_session(200, {"authorized": True, "username": "testuser"})
+        with mock.patch("internetarchive.get_session", return_value=session):
+            result = self._run(auth.verify_ia_s3_keys("goodaccess", "goodsecret"))
+        assert result == "testuser@archive.org"
+
+    def test_screenname_fallback_when_no_username(self):
+        session = self._make_session(200, {"authorized": True, "username": "", "screenname": "fallbackuser"})
+        with mock.patch("internetarchive.get_session", return_value=session):
+            result = self._run(auth.verify_ia_s3_keys("access", "secret"))
+        assert result == "fallbackuser@archive.org"
+
+    def test_unauthorized_returns_none(self):
+        session = self._make_session(200, {"authorized": False, "error": "invalid key"})
+        with mock.patch("internetarchive.get_session", return_value=session):
+            result = self._run(auth.verify_ia_s3_keys("bad", "keys"))
+        assert result is None
+
+    def test_non_200_returns_none(self):
+        session = self._make_session(403, {})
+        with mock.patch("internetarchive.get_session", return_value=session):
+            result = self._run(auth.verify_ia_s3_keys("bad", "keys"))
+        assert result is None
+
+    def test_network_error_returns_none(self):
+        session = mock.MagicMock()
+        session.get.side_effect = Exception("connection refused")
+        with mock.patch("internetarchive.get_session", return_value=session):
+            result = self._run(auth.verify_ia_s3_keys("access", "secret"))
+        assert result is None

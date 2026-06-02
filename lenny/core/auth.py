@@ -119,6 +119,36 @@ def verify_session_cookie(session, client_ip: str = None):
             return data
     except BadSignature:
         return None
+
+
+IA_S3_CHECK_URL = "https://s3.us.archive.org"
+
+
+async def verify_ia_s3_keys(access_key: str, secret_key: str) -> Optional[str]:
+    """Validate IA S3 keys and return patron email (screenname@archive.org) or None.
+
+    Uses the internetarchive library's S3 session (same auth stack as the ia CLI)
+    to call s3.us.archive.org?check_auth=1 — a public S3 endpoint, not xauthn.
+    The blocking network call is offloaded to a thread so the event loop is not blocked.
+    """
+    import asyncio
+
+    def _check_sync() -> Optional[str]:
+        try:
+            import internetarchive as ia
+            session = ia.get_session({"s3": {"access": access_key, "secret": secret_key}})
+            r = session.get(IA_S3_CHECK_URL, params={"check_auth": "1"})
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("authorized"):
+                    username = data.get("username") or data.get("screenname")
+                    if username:
+                        return f"{username}@archive.org"
+        except Exception:
+            pass
+        return None
+
+    return await asyncio.to_thread(_check_sync)
         
 class OTP:
 

@@ -31,6 +31,7 @@ from fastapi.responses import (
     JSONResponse,
 )
 from lenny.core import auth
+from lenny.core.auth import verify_ia_s3_keys
 from lenny.core.api import LennyAPI
 from lenny.core import ol_bootstrap
 from lenny.core.cache import Cache
@@ -239,7 +240,20 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
 
     session = extract_session(request, session)
     email = get_authenticated_email(request, session)
-    
+    ia_session_cookie = None
+
+    # IA S3 auth plugin: when enabled, accept Authorization: LOW access:secret from patrons.
+    if not email and configs.IA_AUTH_ENABLED:
+        auth_header = request.headers.get("Authorization", "")
+        parts = auth_header.split(None, 1)  # split on any whitespace, limit 1
+        if len(parts) == 2 and parts[0].upper() == "LOW" and ":" in parts[1]:
+            ia_access, ia_secret = parts[1].split(":", 1)
+            ia_access, ia_secret = ia_access.strip(), ia_secret.strip()
+            if ia_access and ia_secret:
+                email = await verify_ia_s3_keys(ia_access, ia_secret)
+                if email:
+                    ia_session_cookie = auth.create_session_cookie(email, request.client.host)
+
     if email:
         try:
             loan = item.borrow(email)
@@ -249,17 +263,20 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
              raise HTTPException(status_code=409, detail="No copies available for borrowing")
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
-        
-        if is_direct_mode:
-            return RedirectResponse(
-                url=f"/v1/api/items/{book_id}/read", 
-                status_code=303
-            )
 
-        return Response(
-            content=json.dumps(build_post_borrow_publication(book_id, auth_mode_direct=is_direct_mode)),
-            media_type="application/opds-publication+json"
-        )
+        if is_direct_mode:
+            borrow_resp = RedirectResponse(url=f"/v1/api/items/{book_id}/read", status_code=303)
+        else:
+            borrow_resp = Response(
+                content=json.dumps(build_post_borrow_publication(book_id, auth_mode_direct=is_direct_mode)),
+                media_type="application/opds-publication+json"
+            )
+        if ia_session_cookie:
+            borrow_resp.set_cookie(
+                key="session", value=ia_session_cookie, max_age=auth.COOKIE_TTL,
+                httponly=True, secure=True, samesite="Lax", path="/"
+            )
+        return borrow_resp
     
     if not is_direct_mode:
           return JSONResponse(
