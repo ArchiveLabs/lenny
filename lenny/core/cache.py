@@ -12,7 +12,7 @@ import logging
 import random
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Column, String, BigInteger, DateTime, Index
+from sqlalchemy import Column, String, BigInteger, Integer, DateTime, Index
 from sqlalchemy.sql import func
 
 from lenny.core.db import session as db, Base
@@ -36,7 +36,9 @@ class CacheEntry(Base):
         _cache_table_opts,
     )
 
-    id = Column(BigInteger, primary_key=True)
+    # BigInteger PKs don't autoincrement on SQLite (only INTEGER aliases rowid),
+    # so inserts fail under TESTING. Postgres still gets BIGSERIAL.
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     scope = Column(String(64), nullable=False)
     key = Column(String(255), nullable=False)
     value = Column(String(1024), nullable=True)

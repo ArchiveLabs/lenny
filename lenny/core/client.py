@@ -1,9 +1,53 @@
 import httpx
 from io import BytesIO
-from lenny.configs import LENNY_HTTP_HEADERS    
+from typing import Optional
+from lenny.configs import LENNY_HTTP_HEADERS
 import logging
 
 logger = logging.getLogger(__name__)
+
+EPUB_HEADER = b'PK\x03\x04'
+HTTP_TIMEOUT = 15
+
+
+def verify_epub(content: Optional[BytesIO]) -> Optional[BytesIO]:
+    """Return `content` if it looks like an EPUB (a ZIP), else None."""
+    if not content or not content.getbuffer().nbytes:
+        return None
+    header = content.read(4)
+    content.seek(0)
+    if not header.startswith(EPUB_HEADER):
+        logger.warning(f"Downloaded file failed EPUB verification (bad magic bytes: {header!r})")
+        return None
+    return content
+
+
+def download_epub(url: str, timeout: Optional[int] = None, headers: Optional[dict] = None) -> Optional[BytesIO]:
+    """Stream an EPUB into memory. Returns None on 404, timeout, or transport error."""
+    try:
+        with httpx.Client() as client:
+            with client.stream(
+                "GET", url,
+                headers=headers or LENNY_HTTP_HEADERS,
+                follow_redirects=True,
+                timeout=timeout or HTTP_TIMEOUT,
+            ) as response:
+                if response.status_code == 404:
+                    logger.warning(f"EPUB not found (404): {url}")
+                    return None
+                response.raise_for_status()
+                content = BytesIO()
+                for chunk in response.iter_bytes(chunk_size=8192):
+                    content.write(chunk)
+                content.seek(0)
+                return content
+    except httpx.TimeoutException:
+        logger.error(f"Timed out downloading {url}")
+        return None
+    except httpx.HTTPError as e:
+        logger.error(f"Error downloading {url}: {e}")
+        return None
+
 
 class LennyClient:
 
