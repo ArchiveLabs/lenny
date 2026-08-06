@@ -50,4 +50,8 @@ watchfiles==1.0.5
 
 git+https://github.com/ArchiveLabs/pyopds2.git@7b4242461d0c2cebf83728fda79e60cc63d0fab9
 git+https://github.com/ArchiveLabs/pyopds2_openlibrary.git@e18e79f9a06afeaabe59d7dd8d50b1646db0646c
-git+https://github.com/ArchiveLabs/pyopds2_lenny.git@356518dd3d9fdd1c96d26b481f02440d83cb3688
+# ArchiveLabs/pyopds2_lenny#31 (merged 2026-09-04). Required: it keys `lenny_id`
+# off each record's own OL edition key instead of its position in the search
+# response. Without it the feed hands publications another book's borrow links
+# -- see lenny#194.
+git+https://github.com/ArchiveLabs/pyopds2_lenny.git@935cde90a369aca731d2beecea35b7e7749bf968
