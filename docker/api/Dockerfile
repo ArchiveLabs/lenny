@@ -9,9 +9,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 
-# Expose ports (FastAPI, PostgreSQL, MinIO API, MinIO Console)
+# Expose ports (FastAPI, PostgreSQL, Garage S3 API)
 # XXX These ports should be variables to reflect compose.yml
-EXPOSE 8080 5432 9000 9001 3000 15080
+EXPOSE 8080 5432 9000 3000 15080
 
 COPY ./VERSION /app/VERSION
 COPY ./lenny/ /app/lenny/

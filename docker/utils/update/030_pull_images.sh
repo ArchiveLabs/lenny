@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Pull latest versions of external Docker images (postgres, minio, readium).
+# Pull latest versions of external Docker images (postgres, garage, readium).
 # Custom-built images (api, reader, admin) are skipped — they're rebuilt in the next step.
 
 cd "$LENNY_ROOT"

@@ -5,14 +5,14 @@ import httpx
 from datetime import datetime, timedelta
 from typing import Optional
 from itsdangerous import URLSafeTimedSerializer, BadSignature
-from lenny.configs import SEED, OTP_SERVER, ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_INTERNAL_SECRET, ADMIN_SALT
+from lenny.configs import SEED, OTP_SERVER, ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_INTERNAL_SECRET, ADMIN_SALT, LOG_LEVEL
 from lenny.core.openlibrary import ol_auth_headers, _REDACT_HOOKS
 from lenny.core.exceptions import LendingNotConfiguredError
 from lenny.core.cache import Cache
 from lenny.core.exceptions import RateLimitError
 
 logging.basicConfig(
-    level=logging.DEBUG,  # Show DEBUG and higher
+    level=LOG_LEVEL.upper(),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -21,6 +21,13 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("hpack").setLevel(logging.WARNING)
 logging.getLogger("multipart").setLevel(logging.WARNING)
+# boto3/botocore DEBUG logs full request/response detail (object keys, sizes,
+# access key ID, signing internals) — noisy and exposes storage layout even
+# when it doesn't leak the actual secret key. Keep quiet regardless of LOG_LEVEL.
+logging.getLogger("boto3").setLevel(logging.WARNING)
+logging.getLogger("botocore").setLevel(logging.WARNING)
+logging.getLogger("s3transfer").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 ADMIN_TOKEN_TTL = 86400  # 24 hours
 ADMIN_SERIALIZER = None  # Initialized lazily

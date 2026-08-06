@@ -40,6 +40,15 @@ untunnel:
 teardown:
 	docker compose down --volumes --remove-orphans
 
+# Remove the orphaned pre-Garage MinIO container + volume, once you've
+# verified the migrated Garage bucket has everything (see `make update`).
+# Opt-in, run manually — never done automatically.
+.PHONY: cleanup-old-s3
+cleanup-old-s3:
+	@docker rm -f lenny_s3 lenny_s3_migration_source 2>/dev/null || true
+	@docker volume rm lenny_s3_data 2>/dev/null || true
+	@echo "Old MinIO container and volume removed."
+
 .PHONY: log
 log:
 	@docker compose logs -f
