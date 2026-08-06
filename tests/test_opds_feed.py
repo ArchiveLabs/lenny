@@ -12,6 +12,7 @@ import os
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from urllib.parse import unquote_plus
 
 import pytest
 
@@ -81,6 +82,38 @@ def count_ol_searches(payload):
     with patch("requests.get", fake_requests_get), \
          patch("httpx.Client.get", fake_httpx_get):
         yield searches
+
+
+@contextmanager
+def fake_open_library(order_for):
+    """Serve `search.json`, letting the test pick the result order per query.
+
+    Open Library ranks `{text} AND edition_key:(...)` by relevance to the text
+    and a bare `edition_key:(...)` disjunction by something else entirely, so
+    the two come back in different orders. `order_for(query)` reproduces that.
+    """
+    queries = []
+
+    def _respond(query):
+        queries.append(query)
+        payload = _ol_payload(order_for(query))
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: payload,
+            status_code=200,
+        )
+
+    def fake_requests_get(url, params=None, **_):
+        return _respond((params or {}).get("q", "") or unquote_plus(str(url)))
+
+    def fake_httpx_get(_self, url, **_kwargs):
+        # urlencode writes spaces as "+", so unquote alone would leave
+        # "AND+edition_key:" and hide the very ordering split under test.
+        return _respond(unquote_plus(str(url)))
+
+    with patch("requests.get", fake_requests_get), \
+         patch("httpx.Client.get", fake_httpx_get):
+        yield queries
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +299,128 @@ def test_opds_feed_returns_empty_catalog_when_open_library_is_unreachable():
         feed = LennyAPI.opds_feed(limit=50, auth_mode_direct=False)
 
     assert feed["publications"] == []
+
+
+# ---------------------------------------------------------------------------
+# /v1/api/opds/search — the endpoint that was mis-assigning links in production
+# ---------------------------------------------------------------------------
+#
+# The plain /opds feed got away with positional keying because both of its
+# searches sent the *identical* `edition_key:(...)` disjunction, so Open Library
+# returned the same order twice (measured live: 43/43 positions agree).
+#
+# search_feed had no such luck. Its first search was
+# `{query} AND edition_key:(...)`, ranked by relevance to the text; its second
+# was a bare disjunction over the matched subset, ranked by something else.
+# Measured live against openlibrary.org with the production catalog:
+#
+#     query='the'   6/24 positions agree   ->  18 publications mis-linked
+#     query='a'     1/41 positions agree   ->  40 publications mis-linked
+#     query='of'    0/14 positions agree   ->  14 publications mis-linked
+#
+# Confirmed against the deployed instance: 'The Awakening' was served carrying
+# lenny_id OL37044610M, which is 'The Prince and the Pauper'.
+
+# Relevance order differs from disjunction order, as it does upstream.
+SEARCH_IDS = [37044696, 37044525, 51733522, 37044731]
+RELEVANCE_ORDER = [51733522, 37044696, 37044731, 37044525]
+
+
+def _order_by_query(query):
+    """Relevance order for the text search, catalog order for a bare disjunction."""
+    return RELEVANCE_ORDER if "AND edition_key:" in query else SEARCH_IDS
+
+
+def test_search_feed_publications_keep_their_own_identity():
+    """The production regression: every search hit keeps its own lenny_id.
+
+    On the two-search implementation this fails outright — the publications are
+    ordered by relevance but the ids are assigned from a differently-ordered
+    second query, so each one is handed another book's borrow link.
+    """
+    from lenny.core.api import LennyAPI
+
+    all_items = {i: _item(i) for i in SEARCH_IDS}
+
+    with patch("lenny.core.api.Item.get_all", return_value=all_items):
+        with fake_open_library(_order_by_query):
+            feed = LennyAPI.search_feed(query="of", limit=50, auth_mode_direct=False)
+
+    publications = feed["publications"]
+    assert len(publications) == len(SEARCH_IDS)
+
+    for publication in publications:
+        title = publication["metadata"]["title"]
+        edition_id = int(title.removeprefix("Book "))
+        for link in publication["links"]:
+            if "/items/" in link["href"] or "/opds/" in link["href"]:
+                assert f"/{edition_id}" in link["href"], (
+                    f"{title} was given {link['href']}"
+                )
+
+
+def test_search_feed_issues_exactly_one_open_library_search_per_batch():
+    from lenny.core.api import LennyAPI
+
+    all_items = {i: _item(i) for i in SEARCH_IDS}
+
+    with patch("lenny.core.api.Item.get_all", return_value=all_items):
+        with count_ol_searches(_ol_payload(SEARCH_IDS)) as searches:
+            LennyAPI.search_feed(query="of", limit=50, auth_mode_direct=False)
+
+    assert len(searches) == 1, (
+        f"expected 1 outbound search.json request, got {len(searches)}"
+    )
+
+
+def test_search_feed_scopes_its_single_search_to_local_editions():
+    """The one remaining search still carries both the text and the id scope."""
+    from lenny.core.api import LennyAPI
+
+    all_items = {i: _item(i) for i in SEARCH_IDS}
+
+    with patch("lenny.core.api.Item.get_all", return_value=all_items):
+        with fake_open_library(_order_by_query) as queries:
+            LennyAPI.search_feed(query="of", limit=50, auth_mode_direct=False)
+
+    assert len(queries) == 1
+    assert queries[0].startswith("of AND edition_key:(")
+    for edition_id in SEARCH_IDS:
+        assert f"OL{edition_id}M" in queries[0]
+
+
+def test_search_feed_drops_hits_lenny_does_not_hold():
+    """A record with no lenny_id is not one of Lenny's and must not be served."""
+    from lenny.core.api import LennyAPI
+
+    held = SEARCH_IDS[:2]
+    all_items = {i: _item(i) for i in held}
+
+    # Open Library answers with two extra editions Lenny does not have.
+    with patch("lenny.core.api.Item.get_all", return_value=all_items):
+        with fake_open_library(lambda _q: RELEVANCE_ORDER):
+            feed = LennyAPI.search_feed(query="of", limit=50, auth_mode_direct=False)
+
+    served = {int(p["metadata"]["title"].removeprefix("Book "))
+              for p in feed["publications"]}
+    assert served == set(held)
+
+
+def test_search_feed_deduplicates_across_batches():
+    """Batches overlap only via OL; the same edition must not appear twice."""
+    from lenny.core.api import LennyAPI
+
+    all_items = {i: _item(i) for i in SEARCH_IDS}
+
+    with patch("lenny.core.api.Item.get_all", return_value=all_items), \
+         patch("lenny.core.api.LennyAPI.SEARCH_BATCH_SIZE", 2):
+        with fake_open_library(lambda _q: SEARCH_IDS) as queries:
+            feed = LennyAPI.search_feed(query="of", limit=50, auth_mode_direct=False)
+
+    assert len(queries) == 2, "two batches of two"
+    served = [int(p["metadata"]["title"].removeprefix("Book "))
+              for p in feed["publications"]]
+    assert len(served) == len(set(served)), f"duplicate publications: {served}"
 
 
 def test_opds_feed_skips_rows_with_an_unusable_edition_id():
