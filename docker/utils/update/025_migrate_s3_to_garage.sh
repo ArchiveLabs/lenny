@@ -6,9 +6,12 @@ set -euo pipefail
 # (no old MinIO volume exists) and on any re-run after a completed migration.
 #
 # Safety:
-# - Never touches, stops, or deletes the old s3_data volume or MinIO container.
-#   Left in place for `make cleanup-old-s3` once the admin has verified the
-#   migrated Garage bucket.
+# - Never deletes the old s3_data volume or MinIO container. If the container
+#   is still running, it's stopped (not removed) before reading, to avoid
+#   racing step 4's `up -d s3`, which recreates it as the Garage service the
+#   moment it runs regardless of whether we've read from it yet. The
+#   container object is left in place for `make cleanup-old-s3` once the
+#   admin has verified the migrated Garage bucket.
 # - Idempotent: mc mirror only copies missing/changed objects, so a retry
 #   after a failure (network blip, disk full, etc.) resumes safely.
 # - Never writes the completion marker until the mirror step exits 0.
@@ -19,6 +22,11 @@ NETWORK="${LENNY_COMPOSE_PROJECT}_lenny_network"
 OLD_VOLUME="${LENNY_COMPOSE_PROJECT}_s3_data"
 OLD_CONTAINER="lenny_s3"
 TEMP_SOURCE_CONTAINER="lenny_s3_migration_source"
+# MinIO rejects any request whose Host header contains an underscore
+# (returns 400 InvalidRequest "invalid hostname") — container/service names
+# with underscores are otherwise valid Docker DNS names, so mc needs a
+# hyphenated alias to actually reach it over S3.
+TEMP_SOURCE_ALIAS="lenny-s3-migration-source"
 
 genhex() {
     bytes=${1:-32}
@@ -65,28 +73,26 @@ fi
 
 echo "Old MinIO volume found — migrating book files to Garage..."
 
-# ── 3. Get a reachable source: reuse the running MinIO container, or start ──
-#      a temporary read-only one from its volume if it's not up.
-STARTED_TEMP_SOURCE=0
-if docker ps --format '{{.Names}}' | grep -qx "$OLD_CONTAINER"; then
-    SOURCE_URL="http://${OLD_CONTAINER}:9000"
-else
-    echo "Old MinIO container not running — starting a temporary instance from its volume..."
-    docker rm -f "$TEMP_SOURCE_CONTAINER" >/dev/null 2>&1 || true
-    docker run -d --name "$TEMP_SOURCE_CONTAINER" \
-        --network "$NETWORK" \
-        -v "$OLD_VOLUME:/data" \
-        -e MINIO_ROOT_USER="$(env_get S3_ACCESS_KEY)" \
-        -e MINIO_ROOT_PASSWORD="$(env_get S3_SECRET_KEY)" \
-        minio/minio:latest server /data >/dev/null
-    STARTED_TEMP_SOURCE=1
-    SOURCE_URL="http://${TEMP_SOURCE_CONTAINER}:9000"
-fi
+# ── 3. Read from a temp instance off the old volume, not the live container. ──
+# Step 4's `up -d s3` recreates the "s3" compose service in place (same
+# project + service key, new image/container_name) the moment it runs,
+# regardless of whether the old container is up — so reusing it as the
+# mirror source would race that teardown. Stop it first (data untouched)
+# and always read through our own temp container instead.
+docker stop "$OLD_CONTAINER" >/dev/null 2>&1 || true
+
+docker rm -f "$TEMP_SOURCE_CONTAINER" >/dev/null 2>&1 || true
+docker run -d --name "$TEMP_SOURCE_CONTAINER" \
+    --network "$NETWORK" \
+    --network-alias "$TEMP_SOURCE_ALIAS" \
+    -v "$OLD_VOLUME:/data" \
+    -e MINIO_ROOT_USER="$(env_get S3_ACCESS_KEY)" \
+    -e MINIO_ROOT_PASSWORD="$(env_get S3_SECRET_KEY)" \
+    minio/minio:latest server /data >/dev/null
+SOURCE_URL="http://${TEMP_SOURCE_ALIAS}:9000"
 
 cleanup() {
-    if [ "$STARTED_TEMP_SOURCE" -eq 1 ]; then
-        docker rm -f "$TEMP_SOURCE_CONTAINER" >/dev/null 2>&1 || true
-    fi
+    docker rm -f "$TEMP_SOURCE_CONTAINER" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

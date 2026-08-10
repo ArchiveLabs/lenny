@@ -47,7 +47,8 @@ teardown:
 cleanup-old-s3:
 	@docker rm -f lenny_s3 lenny_s3_migration_source 2>/dev/null || true
 	@docker volume rm lenny_s3_data 2>/dev/null || true
-	@echo "Old MinIO container and volume removed."
+	@docker rmi minio/minio:latest minio/mc:latest 2>/dev/null || true
+	@echo "Old MinIO container, volume, and images removed."
 
 .PHONY: log
 log:
