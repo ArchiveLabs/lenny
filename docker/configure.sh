@@ -8,13 +8,33 @@ LOAN_ENV_FILE="loan.env"
 
 genpass() {
     len=${1:-32}
-    dd if=/dev/urandom bs=1 count=$((len * 2)) 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | head -c "$len"
+    local pass
+    pass=$(dd if=/dev/urandom bs=1 count=$((len * 2)) 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | head -c "$len")
+    if [ "${#pass}" -ne "$len" ]; then
+        echo "genpass: expected $len chars, got ${#pass}" >&2
+        return 1
+    fi
+    echo "$pass"
 }
 
 # Garage's rpc_secret must be valid hex, unlike genpass()'s alphanumeric output.
+# Prefers openssl (single well-tested call) over the dd|od pipeline, and
+# validates output length instead of trusting it — this script has no
+# `set -e`, so a silent truncation here would write an invalid Garage RPC
+# secret straight into .env with nothing to catch it.
 genhex() {
     bytes=${1:-32}
-    dd if=/dev/urandom bs=1 count="$bytes" 2>/dev/null | od -An -tx1 | tr -d ' \n'
+    local hex
+    if command -v openssl >/dev/null 2>&1; then
+        hex=$(openssl rand -hex "$bytes")
+    else
+        hex=$(dd if=/dev/urandom bs=1 count="$bytes" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    fi
+    if [ "${#hex}" -ne $((bytes * 2)) ]; then
+        echo "genhex: expected $((bytes * 2)) hex chars, got ${#hex}" >&2
+        return 1
+    fi
+    echo "$hex"
 }
 
 # Exit if the file already exists
@@ -60,6 +80,13 @@ else
   S3_REGION="${S3_REGION:-garage}"
   S3_RPC_SECRET="${S3_RPC_SECRET:-$(genhex 32)}"
   S3_ADMIN_TOKEN="${S3_ADMIN_TOKEN:-$(genpass 32)}"
+  # This script has no `set -e` — a failed genhex/genpass above would
+  # otherwise write an empty secret into .env with no error at all. Garage
+  # refuses to start on an invalid RPC secret, so fail loudly here instead.
+  if [ -z "$S3_RPC_SECRET" ] || [ -z "$S3_ADMIN_TOKEN" ]; then
+      echo "configure.sh: failed to generate S3_RPC_SECRET/S3_ADMIN_TOKEN." >&2
+      exit 1
+  fi
 
   # Write to lenny.env
   cat <<EOF > "$LENNY_ENV_FILE"
