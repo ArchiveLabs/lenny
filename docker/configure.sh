@@ -11,6 +11,12 @@ genpass() {
     dd if=/dev/urandom bs=1 count=$((len * 2)) 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | head -c "$len"
 }
 
+# Garage's rpc_secret must be valid hex, unlike genpass()'s alphanumeric output.
+genhex() {
+    bytes=${1:-32}
+    dd if=/dev/urandom bs=1 count="$bytes" 2>/dev/null | od -An -tx1 | tr -d ' \n'
+}
+
 # Exit if the file already exists
 if [ -f "$LENNY_ENV_FILE" ]; then
   echo "Skipping configure: $LENNY_ENV_FILE already configured."
@@ -48,9 +54,12 @@ else
   DB_PASSWORD="${POSTGRES_PASSWORD:-$(genpass 32)}"
   DB_NAME="${DB_NAME:-lenny}"
 
-  S3_ACCESS_KEY="${MINIO_ROOT_USER:-$(genpass 20)}"
-  S3_SECRET_KEY="${MINIO_ROOT_PASSWORD:-$(genpass 40)}"
-  S3_ENDPOINT="${S3_ENDPOINT:-http://s3:9000}"
+  S3_ACCESS_KEY="${S3_ACCESS_KEY:-$(genpass 20)}"
+  S3_SECRET_KEY="${S3_SECRET_KEY:-$(genpass 40)}"
+  S3_ENDPOINT="${S3_ENDPOINT:-http://s3:3900}"
+  S3_REGION="${S3_REGION:-garage}"
+  S3_RPC_SECRET="${S3_RPC_SECRET:-$(genhex 32)}"
+  S3_ADMIN_TOKEN="${S3_ADMIN_TOKEN:-$(genpass 32)}"
 
   # Write to lenny.env
   cat <<EOF > "$LENNY_ENV_FILE"
@@ -85,8 +94,14 @@ DB_TYPE=postgres
 S3_ACCESS_KEY=$S3_ACCESS_KEY
 S3_SECRET_KEY=$S3_SECRET_KEY
 S3_ENDPOINT=$S3_ENDPOINT
-S3_PROVIDER=minio
+S3_REGION=$S3_REGION
+S3_RPC_SECRET=$S3_RPC_SECRET
+S3_ADMIN_TOKEN=$S3_ADMIN_TOKEN
+S3_PROVIDER=garage
 S3_SECURE=false
+# Fresh installs never had MinIO data to migrate — the update-engine's
+# migration step (025_migrate_s3_to_garage.sh) no-ops when this is set.
+S3_GARAGE_MIGRATED=true
 
 # OPDS redirect allowlist — comma-separated hostnames allowed as https:// redirect_uri
 # in the OPDS OAuth flow (e.g. my.opds.client.com). Leave empty to block all https:// redirects.

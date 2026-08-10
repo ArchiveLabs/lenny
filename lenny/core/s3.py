@@ -10,13 +10,14 @@ class LennyS3:
     BOOKSHELF_BUCKET = "bookshelf"
     
     def __init__(self):
-        # Initialize S3 client for MinIO
+        # Initialize S3 client for Garage
         self.s3 = boto3.session.Session().client(
             service_name='s3',
             aws_access_key_id=S3_CONFIG['access_key'],
             aws_secret_access_key=S3_CONFIG['secret_key'],
             endpoint_url=f"http://{S3_CONFIG['endpoint']}",
-            use_ssl=S3_CONFIG['secure']
+            use_ssl=S3_CONFIG['secure'],
+            region_name=S3_CONFIG['region']
         )
         self._initialize()
 

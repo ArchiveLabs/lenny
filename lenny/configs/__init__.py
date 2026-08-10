@@ -89,12 +89,13 @@ DB_URI = (
     'postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}'.format(**DB_CONFIG)
 )            
 
-# MinIO configuration
+# Garage S3 configuration
 S3_CONFIG = {
     'endpoint': os.environ.get('S3_ENDPOINT'),
     'access_key': os.environ.get('S3_ACCESS_KEY'),
     'secret_key': os.environ.get('S3_SECRET_KEY'),
     'secure': os.environ.get('S3_SECURE', 'false').lower() == 'true',
+    'region': os.environ.get('S3_REGION', 'garage'),
 }
 
 # External OAuth / OIDC provider (optional — loaded from auth.env)

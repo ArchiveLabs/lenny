@@ -106,7 +106,7 @@ To switch back to OTP mode from external auth, set lending mode to `ol` or `none
 - **Docker** for deployment and containerization  
 - **nginx** as a reverse proxy  
 - **FastAPI** (Python) as the web & API framework  
-- **Minio** API for storing digital assets  
+- **Garage** API for storing digital assets  
 - **YAML** for configuring library-level rules  
 - **PostgreSQL** for the database  
 - **SQLAlchemy** as the Python ORM

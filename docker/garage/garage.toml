@@ -1,0 +1,19 @@
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+# This volume's metadata was already written in sqlite format — do not
+# switch to lmdb without wiping metadata_dir first, engines don't share
+# data format and Garage will silently start a fresh empty index,
+# orphaning every existing object.
+# db_engine = "sqlite"
+
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "s3:3901"
+
+[s3_api]
+s3_region = "garage"
+api_bind_addr = "[::]:3900"
+
+[admin]
+api_bind_addr = "[::]:3903"

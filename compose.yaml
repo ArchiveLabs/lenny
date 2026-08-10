@@ -24,7 +24,8 @@ services:
       - auth.env
       - ol.env
     environment:
-      - S3_ENDPOINT=s3:9000
+      - S3_ENDPOINT=s3:3900
+      - S3_REGION=garage
       - DB_HOST=db
       - LENNY_PROXY=${LENNY_PROXY}
     volumes:
@@ -56,22 +57,27 @@ services:
       - lenny_network
 
   s3:
-    image: minio/minio:latest
-    container_name: lenny_s3
+    image: dxflrs/garage:v2.3.0
+    container_name: lenny_object_store
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9000:3900"
     volumes:
-      - s3_data:/data
+      - ./docker/garage/garage.toml:/etc/garage.toml:ro
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
     environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
-    command: server /data --console-address ":9001"
+      GARAGE_RPC_SECRET: ${S3_RPC_SECRET}
+      GARAGE_ADMIN_TOKEN: ${S3_ADMIN_TOKEN}
+      GARAGE_DEFAULT_ACCESS_KEY: ${S3_ACCESS_KEY}
+      GARAGE_DEFAULT_SECRET_KEY: ${S3_SECRET_KEY}
+      GARAGE_DEFAULT_BUCKET: bookshelf
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      test: ["CMD", "/garage", "node", "id", "-q"]
       interval: 5s
-      timeout: 2s
-      retries: 5
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     networks:
       - lenny_network
 
@@ -133,6 +139,7 @@ services:
       --s3-access-key ${S3_ACCESS_KEY}
       --s3-secret-key ${S3_SECRET_KEY}
       --s3-endpoint ${S3_ENDPOINT}
+      --s3-region garage
       --s3-use-path-style
       --address 0.0.0.0
       --scheme file
@@ -147,5 +154,6 @@ networks:
 
 volumes:
   db_data:
-  s3_data:
+  garage_meta:
+  garage_data:
   readium_data:
