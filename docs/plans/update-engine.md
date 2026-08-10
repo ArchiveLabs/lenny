@@ -118,7 +118,7 @@ docker compose -p lenny up -d
 **What's protected:**
 - Database schema and data — `pg_dump` before any migration runs
 - `.env` and `reader.env` — backed up before modification, only appends missing vars, never deletes or overwrites existing values, never removes user-added variables
-- S3/Garage object storage (books, files) — the `garage_meta`/`garage_data` volumes are never touched by the update engine. Existing installs upgrading from MinIO have their old `s3_data` volume mirrored into Garage by `025_migrate_s3_to_garage.sh` and then left untouched (not deleted) — remove it manually with `make cleanup-old-s3` once verified.
+- S3/Garage object storage (books, files) — the `garage_meta`/`garage_data` volumes are never touched by the update engine. Existing installs upgrading from MinIO have their old `s3_data` volume mirrored into Garage by `025_migrate_s3_to_garage.sh` (stopping, but never deleting, the old `lenny_s3` container first) and then left untouched — remove the container, volume, and now-unused `minio/minio`/`minio/mc` images manually with `make cleanup-old-s3` once verified.
 - All Docker volumes (`db_data`, `s3_data`, `garage_meta`, `garage_data`, `readium_data`) — the engine never runs `docker compose down -v` or `docker volume rm`
 
 **What the engine never does:**

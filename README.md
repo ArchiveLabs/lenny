@@ -376,6 +376,16 @@ After this, all future updates are just `make update` — it handles `git pull` 
 
 For details on the update engine architecture, see [docs/plans/update-engine.md](docs/plans/update-engine.md).
 
+### Cleaning up after the S3 → Garage migration
+
+If your install predates Garage, `make update` mirrors your old MinIO bucket into Garage but leaves the old container, volume, and images in place. Once you've verified the migrated Garage bucket has everything, remove them:
+
+```sh
+make cleanup-old-s3
+```
+
+Removes the old `lenny_s3` container, its `lenny_s3_data` volume, and the `minio/minio` / `minio/mc` images used only during migration. This is opt-in — it never runs automatically.
+
 ---
 
 ## Database Migrations

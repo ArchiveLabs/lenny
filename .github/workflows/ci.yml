@@ -10,6 +10,33 @@ permissions:
   contents: read
 
 jobs:
+  version-check:
+    name: Version Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure VERSION is bumped for deployable changes
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          CHANGED_FILES="$(git diff --name-only "$BASE_SHA"...HEAD)"
+
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          if echo "$CHANGED_FILES" | grep -qE '^(lenny/|docker/|alembic/versions/|compose\.yaml|configure\.sh|requirements\.txt)'; then
+            if ! echo "$CHANGED_FILES" | grep -qx 'VERSION'; then
+              echo ""
+              echo "::error::This PR changes deployable code/config but doesn't bump VERSION."
+              echo "::error::'make update' on existing installs only runs its pipeline (env sync, migrations, rebuild) when VERSION differs from the installed version — see docs/plans/releasing-updates.md."
+              echo "::error::Bump VERSION in this PR (e.g. echo \"0.0.0\" > VERSION) or confirm this change truly needs no update-pipeline run."
+              exit 1
+            fi
+          fi
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
