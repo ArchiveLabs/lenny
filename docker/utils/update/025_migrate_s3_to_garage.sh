@@ -28,35 +28,77 @@ TEMP_SOURCE_CONTAINER="lenny_s3_migration_source"
 # hyphenated alias to actually reach it over S3.
 TEMP_SOURCE_ALIAS="lenny-s3-migration-source"
 
+# Prefers openssl (single well-tested call) over the dd|od pipeline, and
+# validates output length instead of trusting it — a silent truncation here
+# writes an invalid Garage RPC secret straight into .env with no error.
 genhex() {
     bytes=${1:-32}
-    dd if=/dev/urandom bs=1 count="$bytes" 2>/dev/null | od -An -tx1 | tr -d ' \n'
+    local hex
+    if command -v openssl >/dev/null 2>&1; then
+        hex=$(openssl rand -hex "$bytes")
+    else
+        hex=$(dd if=/dev/urandom bs=1 count="$bytes" 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    fi
+    if [ "${#hex}" -ne $((bytes * 2)) ]; then
+        echo "genhex: expected $((bytes * 2)) hex chars, got ${#hex}" >&2
+        return 1
+    fi
+    echo "$hex"
 }
 
 genpass() {
     len=${1:-32}
-    dd if=/dev/urandom bs=1 count=$((len * 2)) 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | head -c "$len"
+    local pass
+    pass=$(dd if=/dev/urandom bs=1 count=$((len * 2)) 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | head -c "$len")
+    if [ "${#pass}" -ne "$len" ]; then
+        echo "genpass: expected $len chars, got ${#pass}" >&2
+        return 1
+    fi
+    echo "$pass"
 }
 
 env_get() {
     grep -E "^$1=" "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2-
 }
 
+# Treats a present-but-empty value (e.g. a prior run's genhex/genpass failure
+# that slipped through) the same as missing, so a broken secret self-heals
+# on the next run instead of being permanently stuck — grep -qE "^$1=" alone
+# would match "$1=" and skip it forever.
 env_set_if_missing() {
-    grep -qE "^$1=" "$ENV_FILE" 2>/dev/null || echo "$1=$2" >> "$ENV_FILE"
+    if ! grep -qE "^$1=." "$ENV_FILE" 2>/dev/null; then
+        sed -i.bak "/^$1=$/d" "$ENV_FILE" 2>/dev/null && rm -f "$ENV_FILE.bak"
+        echo "$1=$2" >> "$ENV_FILE"
+    fi
 }
 
-# ── 0. Backfill Garage-only secrets into .env (additive only, idempotent) ───
+# Always sets to the given value, replacing any existing line — for vars
+# whose value must change on migration (not just backfill if absent).
+env_set_or_replace() {
+    if grep -qE "^$1=" "$ENV_FILE" 2>/dev/null; then
+        sed -i.bak "s|^$1=.*|$1=$2|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+    else
+        echo "$1=$2" >> "$ENV_FILE"
+    fi
+}
+
+# ── 0. Backfill/fix Garage-only settings in .env (idempotent) ───────────────
 # Not handled by 020_env_sync.sh's generic $(genpass N) sync — hex secrets
-# and the region default need their own generation logic.
+# and provider/endpoint rewrites need their own logic.
+# Secrets computed into variables first (not inline in the call) so `set -e`
+# actually catches a genhex/genpass failure — a failing command substitution
+# used as a function argument is silently swallowed under errexit.
+s3_rpc_secret="$(genhex 32)"
+s3_admin_token="$(genpass 32)"
 env_set_if_missing S3_REGION "garage"
-env_set_if_missing S3_RPC_SECRET "$(genhex 32)"
-env_set_if_missing S3_ADMIN_TOKEN "$(genpass 32)"
-if grep -qE '^S3_PROVIDER=' "$ENV_FILE"; then
-    sed -i.bak 's/^S3_PROVIDER=.*/S3_PROVIDER=garage/' "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-else
-    echo "S3_PROVIDER=garage" >> "$ENV_FILE"
-fi
+env_set_if_missing S3_RPC_SECRET "$s3_rpc_secret"
+env_set_if_missing S3_ADMIN_TOKEN "$s3_admin_token"
+env_set_or_replace S3_PROVIDER "garage"
+# Existing installs still have the pre-Garage MinIO port (9000) here. api's
+# compose block hardcodes its own S3_ENDPOINT override, but readium's
+# doesn't — it reads this value straight from .env, so a stale port here
+# leaves readium unable to reach S3 even after a successful migration.
+env_set_or_replace S3_ENDPOINT "http://s3:3900"
 
 # ── 1. Already migrated? ─────────────────────────────────────────────────
 if [ "$(env_get "$MARKER")" = "true" ]; then
