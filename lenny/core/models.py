@@ -35,6 +35,9 @@ class Item(Base):
     __tablename__ = 'items'
     __table_args__ = (
         Index('idx_items_openlibrary_edition', 'openlibrary_edition'),
+        # Serves both the `modified_since` range scan and the (updated_at, id)
+        # sort the OPDS feed pages by. Mirrored in alembic f3a91c47b208.
+        Index('idx_items_updated_at', 'updated_at', 'id'),
     )
 
     id = Column(BigInteger, primary_key=True)
@@ -103,11 +106,40 @@ class Item(Base):
         return True
 
     @classmethod
-    def get_many(cls, offset=None, limit=None, encrypted=None):
+    def _select(cls, encrypted=None, modified_since=None):
+        """Shared filter for the catalogue queries, so `get_many` and `count`
+        can never drift apart and disagree about how many items match."""
         q = db.query(cls)
         if encrypted is not None:
             q = q.filter(cls.encrypted == encrypted)
-        return q.offset(offset).limit(limit).all()
+        if modified_since is not None:
+            q = q.filter(cls.updated_at >= modified_since)
+        return q
+
+    @classmethod
+    def get_many(cls, offset=None, limit=None, encrypted=None, modified_since=None):
+        # Ordered by `updated_at` so that incremental harvesting is coherent: a
+        # consumer paging with `modified_since` walks the catalogue oldest-change
+        # first and can stop when it has caught up. Without an ORDER BY, Postgres
+        # is free to return rows in any order, which makes offset/limit paging
+        # non-deterministic and can drop or duplicate items across pages.
+        # `id` breaks ties, since a bulk import gives many rows one timestamp.
+        return (
+            cls._select(encrypted=encrypted, modified_since=modified_since)
+            .order_by(cls.updated_at.asc(), cls.id.asc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+    @classmethod
+    def count(cls, encrypted=None, modified_since=None):
+        """Total items matching the same filters as `get_many`, ignoring paging.
+
+        Lets the feed report a real `numberOfItems` and decide whether to emit a
+        `next` link, rather than guessing from the size of the current page.
+        """
+        return cls._select(encrypted=encrypted, modified_since=modified_since).count()
 
     @classmethod
     def exists(cls, olid):
