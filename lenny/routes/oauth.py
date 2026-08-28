@@ -32,7 +32,12 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from lenny import configs
 from lenny.core import auth
 from lenny.core.api import LennyAPI
-from lenny.core.exceptions import InvalidOLCredentialsError, LendingNotConfiguredError
+from lenny.core.exceptions import (
+    InvalidOLCredentialsError,
+    LendingNotConfiguredError,
+    OTPGenerationError,
+    RateLimitError,
+)
 from lenny.core.external_auth import (
     ExternalAuthService,
     OAuthConfig,
@@ -190,6 +195,11 @@ async def oauth_authorize(
         except LendingNotConfiguredError as e:
             context["error"] = str(e)
             return request.app.templates.TemplateResponse("otp_issue.html", context)
+        except (OTPGenerationError, RateLimitError) as e:
+            # Not a wrong password — Open Library refused for its own reason.
+            context["error"] = str(e)
+            context["email"] = post_email
+            return request.app.templates.TemplateResponse("otp_redeem.html", context)
         if not session_cookie:
             context["error"] = "Authentication failed. Invalid OTP."
             context["email"] = post_email
@@ -225,16 +235,23 @@ async def oauth_authorize(
         return resp
 
     if request.method == "POST" and post_email:
+        # Advance to the "enter your code" screen only once Open Library confirms
+        # it issued one — it reports failure as HTTP 200 with a JSON error body.
         try:
             auth.OTP.issue(post_email, client_ip)
-            context["email"] = post_email
-            return request.app.templates.TemplateResponse("otp_redeem.html", context)
         except LendingNotConfiguredError as e:
             context["error"] = str(e)
             return request.app.templates.TemplateResponse("otp_issue.html", context)
+        except OTPGenerationError as e:
+            context["error"] = str(e)
+            context["email"] = post_email
+            return request.app.templates.TemplateResponse("otp_issue.html", context)
         except Exception:
+            logger.exception("Unexpected error issuing OTP")
             context["error"] = "Failed to issue OTP. Please try again."
             return request.app.templates.TemplateResponse("otp_issue.html", context)
+        context["email"] = post_email
+        return request.app.templates.TemplateResponse("otp_redeem.html", context)
 
     return request.app.templates.TemplateResponse("otp_issue.html", context)
 

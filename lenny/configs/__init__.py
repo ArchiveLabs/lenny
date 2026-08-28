@@ -69,6 +69,11 @@ OPTIONS = {
     'log_level': LOG_LEVEL,
     'reload': os.environ.get('LENNY_PRODUCTION', 'true').lower() == 'false',
     'workers': WORKERS,
+    # Keep `python -m lenny.app` behaving like the container entrypoint in
+    # docker/api/Dockerfile: trust the fronting proxy's X-Forwarded-For, so
+    # request.client.host is the patron rather than the proxy.
+    'proxy_headers': True,
+    'forwarded_allow_ips': os.environ.get('LENNY_FORWARDED_ALLOW_IPS', '*'),
 }
 if SSL_CRT and SSL_KEY:
     OPTIONS['ssl_keyfile'] = SSL_KEY
