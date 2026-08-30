@@ -28,6 +28,23 @@ Base URL: `http://localhost:8080/v1/api`
 
 - **GET /opds**
   - Returns OPDS feed.
+  - Query params:
+    - `offset` (int, optional): Items to skip. Paired with `limit`, pages the feed.
+    - `limit` (int, optional): Items per page (default 50).
+    - `modified_since` (str, optional): ISO 8601 date or timestamp
+      (`2026-08-01`, `2026-08-01T12:30:00Z`). Limits the feed to items whose
+      `updated_at` is at or after that instant. A value with no timezone is read
+      as UTC. Returns `400` if unparseable.
+  - Items are ordered oldest-change-first (`updated_at`, then `id`), so paging is
+    stable and an incremental consumer can resume where it stopped.
+  - The catalog carries a `rel=next` link while more items remain, preserving
+    `modified_since`; each publication carries `metadata.modified`.
+  - `metadata.numberOfItems` is the size of the whole matching set, not of the
+    current page.
+  - Example — everything changed since August 1st, 100 at a time:
+    ```
+    curl "http://localhost:8080/v1/api/opds?modified_since=2026-08-01&limit=100"
+    ```
   - **Query Parameters:**
     - `offset` (optional, int): Pagination offset
     - `limit` (optional, int): Pagination limit

@@ -13,7 +13,7 @@ from pyopds2_lenny import LennyDataProvider, LennyDataRecord, build_post_borrow_
 from pyopds2 import Catalog, Metadata
 from pyopds2.models import Link, Navigation
 from lenny.core import db, s3, auth
-from lenny.core.utils import hash_email
+from lenny.core.utils import hash_email, parse_modified_since, to_iso_utc
 from lenny.core.models import Item, FormatEnum, Loan
 from lenny.core.openlibrary import OpenLibrary
 from lenny.core.exceptions import (
@@ -33,7 +33,7 @@ from lenny.configs import (
     SCHEME, HOST, PORT, PROXY,
     READER_PORT, LOAN_LIMIT, AUTH_MODE_DIRECT
 )
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 def _make_url(path):
     if PROXY:
@@ -49,9 +49,42 @@ LennyDataProvider.BASE_URL = _make_url("/v1/api/")
 # pyopds2_lenny library (pinned to commit 356518d). Patch them here so
 # routes and tests can use/mock them without touching the library.
 
-def _lenny_catalog_links(base: str) -> list:
-    return [
-        Link(rel="self", href=f"{base}opds", type="application/opds+json"),
+def _opds_url(base: str, offset=None, limit=None, modified_since=None) -> str:
+    """`{base}opds`, carrying forward whichever paging/filter params are in play.
+
+    A `next` link has to reproduce the caller's filter or the consumer silently
+    walks off the filtered set and back onto the full catalogue on page two.
+    """
+    params = [
+        (key, value)
+        for key, value in (
+            ("modified_since", modified_since),
+            ("offset", offset),
+            ("limit", limit),
+        )
+        if value is not None
+    ]
+    return f"{base}opds" + (f"?{urlencode(params)}" if params else "")
+
+
+def _lenny_catalog_links(base: str, page: Optional[dict] = None) -> list:
+    """Catalog-level links. `page` (offset/limit/modified_since/total), when given,
+    makes `self` reflect the request that was actually made and adds `next` while
+    more items remain — OPDS 2.0 pagination, and the only way a harvester following
+    `rel=next` can see past the first page."""
+    page = page or {}
+    offset = page.get("offset") or 0
+    limit = page.get("limit")
+    modified_since = page.get("modified_since")
+    total = page.get("total")
+
+    links = [
+        Link(
+            rel="self",
+            href=_opds_url(base, offset=offset or None, limit=limit,
+                           modified_since=modified_since),
+            type="application/opds+json",
+        ),
         Link(
             rel="search",
             href=f"{base}opds/search{{?query}}",
@@ -62,20 +95,61 @@ def _lenny_catalog_links(base: str) -> list:
         Link(rel="profile", href=f"{base}profile", type="application/opds-profile+json"),
     ]
 
+    if limit and total is not None and (offset + limit) < total:
+        links.append(
+            Link(
+                rel="next",
+                href=_opds_url(base, offset=offset + limit, limit=limit,
+                               modified_since=modified_since),
+                type="application/opds+json",
+            )
+        )
+    return links
+
+
+def _modified_for(record, modified_map: Optional[dict]) -> Optional[str]:
+    """The ISO 8601 `modified` stamp for a record, or None.
+
+    Keyed off `lenny_id` — the same key `encryption_map`/`borrowable_map` already
+    use — so a timestamp travels with the item it belongs to rather than with a
+    position in the Open Library search response.
+    """
+    if not modified_map:
+        return None
+    lenny_id = getattr(record, "lenny_id", None)
+    return modified_map.get(lenny_id) if lenny_id is not None else None
+
+
+def _stamp_modified(pub_dict: dict, modified: Optional[str]) -> dict:
+    """Write `metadata.modified` onto an already-serialized publication.
+
+    It has to happen *after* serialization. `pyopds2.Metadata.modified` is typed
+    `datetime`, so handing pydantic an ISO string gets it parsed back into a
+    datetime object — and routes pass the result straight to `json.dumps`, which
+    cannot serialize one. Stamping the dumped dict keeps the feed JSON-safe
+    without depending on pydantic's dump mode.
+    """
+    if modified:
+        pub_dict.setdefault("metadata", {})["modified"] = modified
+    return pub_dict
+
 
 @classmethod
-def _lenny_empty_catalog(cls, limit: int = 50, auth_mode_direct: bool = False, title: str = "Lenny Catalog") -> dict:
+def _lenny_empty_catalog(cls, limit: int = 50, auth_mode_direct: bool = False, title: str = "Lenny Catalog",
+                         page: Optional[dict] = None) -> dict:
     catalog = Catalog(
         metadata=Metadata(title=title, numberOfItems=0),
-        links=_lenny_catalog_links(cls.BASE_URL),
+        links=_lenny_catalog_links(cls.BASE_URL, page=page),
         publications=[],
     )
     return catalog.model_dump(exclude_none=True)
 
 
 @classmethod
-def _lenny_build_catalog(cls, search_response, auth_mode_direct: bool = False, title: str = "Lenny Catalog") -> dict:
+def _lenny_build_catalog(cls, search_response, auth_mode_direct: bool = False, title: str = "Lenny Catalog",
+                         modified_map: Optional[dict] = None, page: Optional[dict] = None) -> dict:
     publications = []
+    stamps = []
     for record in search_response.records:
         if isinstance(record, LennyDataRecord):
             record.auth_mode_direct = auth_mode_direct
@@ -83,22 +157,42 @@ def _lenny_build_catalog(cls, search_response, auth_mode_direct: bool = False, t
         pub_dict = pub.model_dump(exclude_none=True)
         pub_dict["links"] = [lnk.model_dump(exclude_none=True) for lnk in record.links()]
         publications.append(pub_dict)
+        stamps.append(_modified_for(record, modified_map))
+
+    # `numberOfItems` is the size of the whole matching set, not of this page —
+    # a harvester uses it to know how far it still has to walk.
+    total = (page or {}).get("total")
     catalog = Catalog(
-        metadata=Metadata(title=title, numberOfItems=len(publications)),
-        links=_lenny_catalog_links(cls.BASE_URL),
+        metadata=Metadata(
+            title=title,
+            numberOfItems=len(publications) if total is None else total,
+        ),
+        links=_lenny_catalog_links(cls.BASE_URL, page=page),
         publications=publications,
     )
-    return catalog.model_dump(exclude_none=True)
+    feed = catalog.model_dump(exclude_none=True)
+
+    # Stamp after the dump: `Catalog.publications` is typed `List[Publication]`,
+    # so anything put on the dicts above is re-validated by pydantic on the way
+    # in — which would turn our ISO string back into a datetime and make the feed
+    # unserializable. `model_dump` preserves list order, so index alignment with
+    # `stamps` holds.
+    for pub_dict, modified in zip(feed.get("publications") or [], stamps):
+        _stamp_modified(pub_dict, modified)
+    return feed
 
 
 @classmethod
-def _lenny_build_publication(cls, record, auth_mode_direct: bool = False) -> dict:
+def _lenny_build_publication(cls, record, auth_mode_direct: bool = False,
+                             modified_map: Optional[dict] = None) -> dict:
     if isinstance(record, LennyDataRecord):
         record.auth_mode_direct = auth_mode_direct
     pub = record.to_publication()
+    # Safe to stamp directly: this dict is returned as-is, never fed back through
+    # a pydantic model, so the ISO string survives to json.dumps intact.
     pub_dict = pub.model_dump(exclude_none=True)
     pub_dict["links"] = [lnk.model_dump(exclude_none=True) for lnk in record.links()]
-    return pub_dict
+    return _stamp_modified(pub_dict, _modified_for(record, modified_map))
 
 
 LennyDataProvider.empty_catalog = _lenny_empty_catalog
@@ -192,22 +286,54 @@ class LennyAPI:
         return {}
     
     @classmethod
-    def get_enriched_items(cls, olid=None, fields=None, offset=None, limit=None, encrypted=None):
+    def get_enriched_items(cls, olid=None, fields=None, offset=None, limit=None, encrypted=None,
+                           modified_since=None):
         """Returns a dict whose keys are int `olid` Open Library
         edition IDs and whose values are OpenLibraryRecords with an
         additional `lenny` field containing Lenny's record for this
         item in the LennyDB
         """
         limit = limit or cls.DEFAULT_LIMIT
-        items = [Item.exists(olid)] if olid else Item.get_many(offset=offset, limit=limit, encrypted=encrypted)
+        items = [Item.exists(olid)] if olid else Item.get_many(
+            offset=offset, limit=limit, encrypted=encrypted, modified_since=modified_since
+        )
         return cls._enrich_items(items, fields=fields)
 
     @classmethod
-    def opds_feed(cls, olid=None, offset=None, limit=None, query=None, auth_mode_direct=None, email=None):
+    def _modified_map(cls, items) -> dict:
+        """{lenny edition id -> ISO 8601 UTC `updated_at`} for the enriched items.
+
+        Keyed by the same id the OPDS records carry as `lenny_id`, so publications
+        can be stamped without relying on the position of a record in the OL
+        search response.
+        """
+        modified = {}
+        for rec in items.values():
+            lenny_item = getattr(rec, "lenny", None)
+            if lenny_item is None:
+                continue
+            try:
+                edition_id = int(lenny_item.openlibrary_edition)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if stamp := to_iso_utc(getattr(lenny_item, "updated_at", None)):
+                modified[edition_id] = stamp
+        return modified
+
+    @classmethod
+    def opds_feed(cls, olid=None, offset=None, limit=None, query=None, auth_mode_direct=None, email=None,
+                  modified_since=None):
         """
         Generate an OPDS 2.0 catalog using the opds2 Catalog.create helper
         and the LennyDataProvider to transform Open Library metadata into
         OPDS Publications with Lenny borrow/return links.
+
+        `modified_since` (a datetime, or an ISO 8601 date/timestamp string) limits
+        the feed to items changed at or after that instant, oldest change first.
+        Together with the `rel=next` link and each publication's
+        `metadata.modified`, that is what lets a consumer harvest incrementally
+        instead of refetching the whole catalogue — see
+        internetarchive/openlibrary#13241.
         """
         use_direct = auth_mode_direct if auth_mode_direct is not None else AUTH_MODE_DIRECT
 
@@ -219,14 +345,29 @@ class LennyAPI:
 
         limit = limit or cls.DEFAULT_LIMIT
         offset = offset or 0
+        modified_since = parse_modified_since(modified_since)
+
+        # Paging context for the catalog links. A single-publication request is
+        # not a paged collection, so it carries none.
+        page = None if olid else {
+            "offset": offset,
+            "limit": limit,
+            "modified_since": to_iso_utc(modified_since),
+            "total": Item.count(modified_since=modified_since),
+        }
+
         try:
-            items = cls.get_enriched_items(olid=olid, offset=offset, limit=limit)
+            items = cls.get_enriched_items(
+                olid=olid, offset=offset, limit=limit, modified_since=modified_since
+            )
         except (_requests.exceptions.RequestException, _httpx.HTTPError) as e:
             logger.warning(f"Open Library unreachable during OPDS feed build: {e}")
-            return LennyDataProvider.empty_catalog(limit=limit, auth_mode_direct=use_direct)
+            return LennyDataProvider.empty_catalog(limit=limit, auth_mode_direct=use_direct, page=page)
 
         if not items:
-            return LennyDataProvider.empty_catalog(limit=limit, auth_mode_direct=use_direct)
+            return LennyDataProvider.empty_catalog(limit=limit, auth_mode_direct=use_direct, page=page)
+
+        modified_map = cls._modified_map(items)
         query, lenny_ids, total = cls._build_query_and_lenny_ids(items)
         lenny_ids_map = {k: v for k, v in zip(items.keys(), lenny_ids) if v is not None}
         lenny_ids_arg = lenny_ids_map if lenny_ids_map else None
@@ -250,23 +391,33 @@ class LennyAPI:
             search_response = LennyDataProvider.search(
                 query=query,
                 limit=limit,
-                offset=offset,
+                # No offset here. Paging already happened in the DB query above,
+                # and `query` names only this page's editions — applying `offset`
+                # again would skip past the whole (already narrowed) result set
+                # and return nothing. That is why /opds?offset=50 has been
+                # serving an empty feed, and why `rel=next` needs this fixed to
+                # be worth emitting at all.
                 lenny_ids=lenny_ids_arg,
                 encryption_map=encryption_map,
                 borrowable_map=borrowable_map,
             )
         except (_requests.exceptions.RequestException, _httpx.HTTPError) as e:
             logger.warning(f"Open Library unreachable during OPDS feed build: {e}")
-            return LennyDataProvider.empty_catalog(limit=limit, auth_mode_direct=use_direct)
+            return LennyDataProvider.empty_catalog(limit=limit, auth_mode_direct=use_direct, page=page)
 
         for record in search_response.records:
             if isinstance(record, LennyDataRecord):
                 record.auth_mode_direct = use_direct
-        
+
         if olid:
-            return LennyDataProvider.build_publication(search_response.records[0], auth_mode_direct=use_direct)
-        
-        return LennyDataProvider.build_catalog(search_response, auth_mode_direct=use_direct)
+            return LennyDataProvider.build_publication(
+                search_response.records[0], auth_mode_direct=use_direct, modified_map=modified_map
+            )
+
+        return LennyDataProvider.build_catalog(
+            search_response, auth_mode_direct=use_direct,
+            modified_map=modified_map, page=page,
+        )
 
     @classmethod
     def _build_query_and_lenny_ids(cls, items):
