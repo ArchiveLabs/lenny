@@ -674,6 +674,117 @@ class TestOAuthAuthorizeRedirect:
         assert resp.status_code == 503
 
 
+class TestAuthorizeRejectsUnusableRedirectUri:
+    """Regression: a rejected redirect_uri must fail loudly, not silently.
+
+    Reported 2026-09-02 — patrons signing in to Lenny from a separate-origin
+    browser OPDS client (reader.archive.org) authenticated successfully and were
+    never returned to the app. `_safe_opds_redirect` returned "" for the client's
+    https URI (its host was not in the empty-by-default LENNY_OPDS_ALLOWED_HOSTS)
+    and the caller substituted "opds://authorize/", so the response was
+    indistinguishable from one where no redirect_uri had been sent at all: HTTP
+    200, a normal OTP form, and a dead-end success page after login.
+    """
+
+    OPDS_CLIENT = "https://reader.example.org"
+
+    @pytest.fixture(autouse=True)
+    def _lending_on_external_off(self, monkeypatch):
+        """Production's shape: OTP lending live, external OIDC off."""
+        from lenny import configs as lenny_configs
+        from lenny.core.external_auth import OAuthConfig
+        monkeypatch.setattr(lenny_configs, "LENDING_ENABLED", True)
+        monkeypatch.setattr(lenny_configs, "EXTERNAL_AUTH_ENABLED", False)
+        # patron_auth_mode() == "ol" needs lending mode "ol" plus both S3 keys.
+        monkeypatch.setattr(lenny_configs, "read_lending_mode", lambda: "ol")
+        monkeypatch.setattr(lenny_configs, "OL_S3_ACCESS_KEY", "test-access")
+        monkeypatch.setattr(lenny_configs, "OL_S3_SECRET_KEY", "test-secret")
+        # ...and external must read as off, which comes from auth.env, not configs.
+        monkeypatch.setattr(
+            OAuthConfig, "from_auth_env", classmethod(lambda cls, path=None: _make_config(enabled=False)),
+        )
+
+    def test_https_redirect_uri_not_in_allowlist_is_a_400(self, app_client, monkeypatch):
+        monkeypatch.setenv("LENNY_OPDS_ALLOWED_HOSTS", "")
+        resp = app_client.get(
+            f"/v1/api/oauth/authorize?redirect_uri={self.OPDS_CLIENT}&state=abc123",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["error"] == "invalid_redirect_uri"
+        # The caller is told which URI was refused and which setting governs it.
+        assert body["redirect_uri"] == self.OPDS_CLIENT
+        assert "LENNY_OPDS_ALLOWED_HOSTS" in body["message"]
+
+    def test_allowlisted_https_redirect_uri_survives_into_the_form(
+        self, app_client, monkeypatch
+    ):
+        """The fix must not merely error — the allowlisted case has to work."""
+        monkeypatch.setenv("LENNY_OPDS_ALLOWED_HOSTS", "reader.example.org")
+        resp = app_client.get(
+            f"/v1/api/oauth/authorize?redirect_uri={self.OPDS_CLIENT}&state=abc123",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        # The OTP form must carry the client's URI forward, not "opds://authorize/",
+        # or the POST that follows loses it and strands the patron anyway.
+        assert f'name="redirect_uri" value="{self.OPDS_CLIENT}"' in resp.text
+        assert 'value="opds://authorize/"' not in resp.text
+
+    def test_omitted_redirect_uri_still_defaults_quietly(self, app_client, monkeypatch):
+        """Sending none is legitimate — only a *rejected* one is an error."""
+        monkeypatch.setenv("LENNY_OPDS_ALLOWED_HOSTS", "")
+        resp = app_client.get("/v1/api/oauth/authorize?state=abc123", follow_redirects=False)
+        assert resp.status_code == 200
+        assert 'name="redirect_uri" value="opds://authorize/"' in resp.text
+
+    def test_open_redirect_is_still_refused(self, app_client, monkeypatch):
+        """The allowlist is an open-redirect defence; erroring must not relax it."""
+        monkeypatch.setenv("LENNY_OPDS_ALLOWED_HOSTS", "reader.example.org")
+        resp = app_client.get(
+            "/v1/api/oauth/authorize?redirect_uri=https://evil.example.com/steal",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_redirect_uri"
+
+    def test_rejection_is_logged_with_the_offending_host(self, app_client, monkeypatch, caplog):
+        """An operator reading `make log` must be able to see why login broke."""
+        monkeypatch.setenv("LENNY_OPDS_ALLOWED_HOSTS", "")
+        with caplog.at_level("WARNING", logger="lenny.routes.oauth"):
+            app_client.get(
+                f"/v1/api/oauth/authorize?redirect_uri={self.OPDS_CLIENT}",
+                follow_redirects=False,
+            )
+        assert "reader.example.org" in caplog.text
+        assert "LENNY_OPDS_ALLOWED_HOSTS" in caplog.text
+
+
+class TestExternalStartRejectsUnusableRedirectUri:
+    """Same silent-drop existed on the external OIDC entry point."""
+
+    def test_bad_opds_redirect_uri_is_a_400(self, app_client, monkeypatch):
+        from lenny import configs as lenny_configs
+        monkeypatch.setattr(lenny_configs, "EXTERNAL_AUTH_ENABLED", True)
+        monkeypatch.setattr(lenny_configs, "OAUTH_CLIENT_ID", "test-client")
+        monkeypatch.setattr(
+            lenny_configs, "OAUTH_DISCOVERY_URL",
+            "https://provider/.well-known/openid-configuration",
+        )
+        monkeypatch.setattr(
+            lenny_configs, "OAUTH_REDIRECT_URI",
+            "http://localhost/v1/api/oauth/external/callback",
+        )
+        monkeypatch.setenv("LENNY_OPDS_ALLOWED_HOSTS", "")
+        resp = app_client.get(
+            "/v1/api/oauth/external/start?opds_redirect_uri=https://reader.example.org",
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_redirect_uri"
+
+
 class TestSafeOpdsRedirect:
     """Unit tests for the _safe_opds_redirect open-redirect guard."""
 

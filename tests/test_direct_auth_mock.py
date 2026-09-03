@@ -16,13 +16,28 @@ from lenny.app import app
 
 from fastapi import Response
 
-# Patch templates on the REAL app instance
-app.templates = MagicMock()
-
 # Allow checking what template was rendered
 def mock_render(name, context):
     return Response(content=f"Rendered: {name}", media_type="text/html")
-app.templates.TemplateResponse.side_effect = mock_render
+
+
+@pytest.fixture(autouse=True)
+def stub_templates():
+    """Swap the real Jinja templates for a stub naming what was rendered.
+
+    Restored afterwards. `app` is the process-wide FastAPI instance shared with
+    every other test module, so assigning `app.templates` at import time leaked
+    this stub out of this file: any test elsewhere that asserted on real rendered
+    HTML then saw "Rendered: <name>" instead, passing alone and failing in a full
+    run purely on collection order.
+    """
+    original = app.templates
+    stub = MagicMock()
+    stub.TemplateResponse.side_effect = mock_render
+    app.templates = stub
+    yield
+    app.templates = original
+
 
 client = TestClient(app)
 

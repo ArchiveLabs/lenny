@@ -132,6 +132,10 @@ S3_GARAGE_MIGRATED=true
 
 # OPDS redirect allowlist — comma-separated hostnames allowed as https:// redirect_uri
 # in the OPDS OAuth flow (e.g. my.opds.client.com). Leave empty to block all https:// redirects.
+# Lenny's own bundled reader is served from this same origin under /read and uses relative
+# paths, so it needs no entry here. A browser-based OPDS client hosted on a DIFFERENT origin
+# (e.g. reader.archive.org) does: without its host listed, its patrons will sign in
+# successfully and then never be redirected back to it. See docs/OAUTH.md.
 LENNY_OPDS_ALLOWED_HOSTS=
 
 EOF
