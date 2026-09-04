@@ -20,6 +20,20 @@ import pytest
 os.environ["TESTING"] = "true"
 
 
+@pytest.fixture(autouse=True)
+def stub_item_count():
+    """Keep `Item.count` off the real database.
+
+    The feed calls it to build the paging context (`numberOfItems`, and whether
+    to emit `rel=next`). It is a local row count, not an Open Library request,
+    so it is irrelevant to what this file asserts — but unpatched it reaches a
+    database these tests never create. Each test patches `Item.get_many` with
+    its own rows; the count follows from those.
+    """
+    with patch("lenny.core.api.Item.count", side_effect=lambda **kw: 0):
+        yield
+
+
 def _item(edition_id, encrypted=False, borrowable=True):
     item = MagicMock()
     item.openlibrary_edition = edition_id
@@ -229,7 +243,11 @@ def test_opds_feed_paginates_locally_and_asks_open_library_for_page_one():
         mock_provider.return_value = SimpleNamespace(records=[MagicMock()])
         LennyAPI.opds_feed(offset=50, limit=50, auth_mode_direct=False)
 
-    assert mock_get_many.call_args.kwargs == {"offset": 50, "limit": 50}
+    # Paging is applied locally (`modified_since` rides along unset here)...
+    assert mock_get_many.call_args.kwargs == {
+        "offset": 50, "limit": 50, "modified_since": None,
+    }
+    # ...so Open Library must be asked for page 1 of the narrowed disjunction.
     assert mock_provider.call_args.kwargs["offset"] == 0
 
 
