@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 from pyopds2_lenny import LennyDataProvider, LennyDataRecord, build_post_borrow_publication
 from pyopds2 import Catalog, Metadata
 from pyopds2.models import Link, Navigation
+from pyopds2.provider import DataProvider
 from lenny.core import db, s3, auth
 from lenny.core.utils import hash_email, parse_modified_since, to_iso_utc
 from lenny.core.models import Item, FormatEnum, Loan
@@ -301,22 +302,22 @@ class LennyAPI:
 
     @classmethod
     def _modified_map(cls, items) -> dict:
-        """{lenny edition id -> ISO 8601 UTC `updated_at`} for the enriched items.
+        """{lenny edition id -> ISO 8601 UTC `updated_at`} for local `Item` rows.
 
         Keyed by the same id the OPDS records carry as `lenny_id`, so publications
         can be stamped without relying on the position of a record in the OL
-        search response.
+        search response. `updated_at` is Lenny's own column, so like the
+        encryption and availability flags it needs no upstream request.
         """
         modified = {}
-        for rec in items.values():
-            lenny_item = getattr(rec, "lenny", None)
-            if lenny_item is None:
+        for item in items:
+            if item is None:
                 continue
             try:
-                edition_id = int(lenny_item.openlibrary_edition)
+                edition_id = int(item.openlibrary_edition)
             except (AttributeError, TypeError, ValueError):
                 continue
-            if stamp := to_iso_utc(getattr(lenny_item, "updated_at", None)):
+            if stamp := to_iso_utc(getattr(item, "updated_at", None)):
                 modified[edition_id] = stamp
         return modified
 
@@ -334,6 +335,11 @@ class LennyAPI:
         `metadata.modified`, that is what lets a consumer harvest incrementally
         instead of refetching the whole catalogue — see
         internetarchive/openlibrary#13241.
+
+        Exactly one Open Library search is issued, by LennyDataProvider. The
+        edition ids, encryption flags, availability and modification stamps all
+        come from the local `Item` rows, so there is nothing to look up upstream
+        first.
         """
         use_direct = auth_mode_direct if auth_mode_direct is not None else AUTH_MODE_DIRECT
 
@@ -356,54 +362,49 @@ class LennyAPI:
             "total": Item.count(modified_since=modified_since),
         }
 
-        try:
-            items = cls.get_enriched_items(
-                olid=olid, offset=offset, limit=limit, modified_since=modified_since
-            )
-        except (_requests.exceptions.RequestException, _httpx.HTTPError) as e:
-            logger.warning(f"Open Library unreachable during OPDS feed build: {e}")
-            return LennyDataProvider.empty_catalog(limit=limit, auth_mode_direct=use_direct, page=page)
-
-        if not items:
+        items = [Item.exists(olid)] if olid else Item.get_many(
+            offset=offset, limit=limit, modified_since=modified_since
+        )
+        edition_ids, encryption_map, borrowable_map = cls._local_item_maps(items)
+        if not edition_ids:
             return LennyDataProvider.empty_catalog(limit=limit, auth_mode_direct=use_direct, page=page)
 
         modified_map = cls._modified_map(items)
-        query, lenny_ids, total = cls._build_query_and_lenny_ids(items)
-        lenny_ids_map = {k: v for k, v in zip(items.keys(), lenny_ids) if v is not None}
-        lenny_ids_arg = lenny_ids_map if lenny_ids_map else None
-
-        # Build maps for each item's encryption and availability status
-        encryption_map = {}
-        borrowable_map = {}
-
-        for rec in items.values():
-            lenny_item = getattr(rec, "lenny", None)
-            if lenny_item is None:
-                continue
-            try:
-                edition_id = int(lenny_item.openlibrary_edition)
-                encryption_map[edition_id] = lenny_item.encrypted
-                borrowable_map[edition_id] = lenny_item.is_borrowable
-            except (AttributeError, TypeError, ValueError):
-                continue
 
         try:
             search_response = LennyDataProvider.search(
-                query=query,
+                query=cls._edition_key_query(edition_ids),
                 limit=limit,
-                # No offset here. Paging already happened in the DB query above,
-                # and `query` names only this page's editions — applying `offset`
-                # again would skip past the whole (already narrowed) result set
-                # and return nothing. That is why /opds?offset=50 has been
-                # serving an empty feed, and why `rel=next` needs this fixed to
-                # be worth emitting at all.
-                lenny_ids=lenny_ids_arg,
+                # Paging already happened in the DB query above, and `query`
+                # names only this page's editions — so this must ask for page 1.
+                # Forwarding `offset` asked Open Library for page
+                # `offset // limit + 1` of a result set that never has more than
+                # one page, which is why /opds?offset=50 served an empty feed,
+                # and why `rel=next` needs this fixed to be worth emitting.
+                offset=0,
+                # Keyed `{edition_id: edition_id}`: LennyDataProvider assigns
+                # `lenny_id` from each record's own OL edition key and uses this
+                # only as a membership set (ArchiveLabs/pyopds2_lenny#31). OL
+                # neither preserves the order of the `edition_key:(...)`
+                # disjunction nor returns a record for every id, so nothing
+                # positional survives contact with it.
+                lenny_ids={edition_id: edition_id for edition_id in edition_ids},
                 encryption_map=encryption_map,
                 borrowable_map=borrowable_map,
             )
         except (_requests.exceptions.RequestException, _httpx.HTTPError) as e:
             logger.warning(f"Open Library unreachable during OPDS feed build: {e}")
             return LennyDataProvider.empty_catalog(limit=limit, auth_mode_direct=use_direct, page=page)
+
+        # Open Library knows none of these editions. Previously this was caught
+        # a step earlier, by the enrichment search returning no rows. Still a
+        # page of a paged collection, so it keeps its paging context — a
+        # harvester walking `rel=next` must not lose its place because one
+        # page happened to come back empty.
+        if not search_response.records:
+            return LennyDataProvider.empty_catalog(
+                limit=limit, auth_mode_direct=use_direct, page=page
+            )
 
         for record in search_response.records:
             if isinstance(record, LennyDataRecord):
@@ -420,18 +421,38 @@ class LennyAPI:
         )
 
     @classmethod
-    def _build_query_and_lenny_ids(cls, items):
-        """Create Open Library query and determine lenny_ids alignment."""
-        olids = [f"OL{olid}M" for olid in items.keys()]
-        query = f"edition_key:({' OR '.join(olids)})" if olids else ""
-        lenny_ids: list[Optional[int]] = []
-        for olid, rec in items.items():
+    def _local_item_maps(cls, items):
+        """Derive an OPDS feed's edition ids and per-item flags from local rows.
+
+        `lenny_id` is the Open Library edition number, and encryption and
+        availability are Lenny's own state -- none of it comes from Open
+        Library, so none of it needs an upstream request to obtain.
+
+        Returns `(edition_ids, encryption_map, borrowable_map)`.
+        """
+        edition_ids: list[int] = []
+        encryption_map: dict[int, bool] = {}
+        borrowable_map: dict[int, bool] = {}
+
+        for item in items:
+            if item is None:
+                continue
             try:
-                lenny_ids.append(int(getattr(rec, "lenny").openlibrary_edition))
-            except Exception:
-                lenny_ids.append(int(olid) if isinstance(olid, int) else None)
-        total = len(lenny_ids)
-        return query, lenny_ids, total
+                edition_id = int(item.openlibrary_edition)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if edition_id in encryption_map:
+                continue
+            edition_ids.append(edition_id)
+            encryption_map[edition_id] = item.encrypted
+            borrowable_map[edition_id] = item.is_borrowable
+
+        return edition_ids, encryption_map, borrowable_map
+
+    @staticmethod
+    def _edition_key_query(edition_ids) -> str:
+        """Build the Open Library `edition_key:(OL1M OR OL2M ...)` disjunction."""
+        return f"edition_key:({' OR '.join(f'OL{i}M' for i in edition_ids)})"
 
     @classmethod
     def search_feed(cls, query=None, limit=None, auth_mode_direct=None):
@@ -441,6 +462,10 @@ class LennyAPI:
         Chunks all local edition IDs into batches, queries OL with
         '{query} AND edition_key:(OL1M OR OL2M OR ...)' per batch,
         and stops once enough results are collected.
+
+        Each batch is a single Open Library search, issued through
+        LennyDataProvider so the records it returns are the ones the feed is
+        built from. Nothing is fetched twice.
         """
         use_direct = auth_mode_direct if auth_mode_direct is not None else AUTH_MODE_DIRECT
         limit = min(limit or cls.DEFAULT_LIMIT, cls.SEARCH_MAX_RESULTS)
@@ -464,12 +489,30 @@ class LennyAPI:
         ]
 
         collected = []
+        seen: set[int] = set()
         try:
             for batch in batches:
-                edition_keys = " OR ".join(f"OL{olid}M" for olid in batch)
-                ol_query = f"{query} AND edition_key:({edition_keys})"
+                batch_ids, encryption_map, borrowable_map = cls._local_item_maps(
+                    all_items[olid] for olid in batch
+                )
+                if not batch_ids:
+                    continue
 
-                for record in OpenLibrary.search(query=ol_query, limit=cls.SEARCH_BATCH_SIZE):
+                response = LennyDataProvider.search(
+                    query=f"{query} AND {cls._edition_key_query(batch_ids)}",
+                    limit=limit,
+                    lenny_ids={edition_id: edition_id for edition_id in batch_ids},
+                    encryption_map=encryption_map,
+                    borrowable_map=borrowable_map,
+                )
+
+                for record in response.records:
+                    # No lenny_id means Open Library surfaced an edition this
+                    # batch did not ask about; it is not one of Lenny's.
+                    lenny_id = getattr(record, "lenny_id", None)
+                    if lenny_id is None or lenny_id in seen:
+                        continue
+                    seen.add(lenny_id)
                     collected.append(record)
                     if len(collected) >= limit:
                         break
@@ -487,46 +530,15 @@ class LennyAPI:
                 title=f"Search results for: {query}", auth_mode_direct=use_direct
             )
 
-        matched_query_parts = []
-        lenny_ids_map = {}
-        encryption_map = {}
-        borrowable_map = {}
-
-        for record in collected:
-            try:
-                olid_int = int(record.olid)
-            except (AttributeError, ValueError, TypeError):
-                continue
-
-            item = all_items.get(olid_int)
-            if not item:
-                continue
-
-            matched_query_parts.append(f"OL{olid_int}M")
-            lenny_ids_map[olid_int] = olid_int
-            encryption_map[olid_int] = item.encrypted
-            borrowable_map[olid_int] = item.is_borrowable
-
-        if not matched_query_parts:
-            return LennyDataProvider.empty_catalog(
-                title=f"Search results for: {query}", auth_mode_direct=use_direct
-            )
-
-        # Re-query via LennyDataProvider to get properly structured records
-        provider_query = f"edition_key:({' OR '.join(matched_query_parts)})"
-        try:
-            search_response = LennyDataProvider.search(
-                query=provider_query,
-                limit=limit,
-                lenny_ids=lenny_ids_map,
-                encryption_map=encryption_map,
-                borrowable_map=borrowable_map,
-            )
-        except (_requests.exceptions.RequestException, _httpx.HTTPError) as e:
-            logger.warning(f"Open Library unreachable during search: {e}")
-            return LennyDataProvider.empty_catalog(
-                title=f"Search results for: {query}", auth_mode_direct=use_direct
-            )
+        search_response = DataProvider.SearchResponse(
+            provider=LennyDataProvider,
+            records=collected,
+            total=len(collected),
+            query=query,
+            limit=limit,
+            offset=0,
+            sort=None,
+        )
 
         for record in search_response.records:
             if isinstance(record, LennyDataRecord):

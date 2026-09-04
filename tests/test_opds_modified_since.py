@@ -366,23 +366,12 @@ def _item(edition, updated_at, encrypted=False):
     return item
 
 
-def _enriched(*items):
-    """Mimic get_enriched_items: {olid -> OL record carrying `.lenny`}."""
-    out = {}
-    for item in items:
-        rec = MagicMock()
-        rec.lenny = item
-        out[int(item.openlibrary_edition)] = rec
-    return out
-
-
 def test_opds_feed_passes_modified_since_to_the_db_query():
     from lenny.core.api import LennyAPI
 
     since = datetime(2026, 8, 1, tzinfo=timezone.utc)
     with patch("lenny.core.api.Item.get_many", return_value=[]) as get_many, \
          patch("lenny.core.api.Item.count", return_value=0), \
-         patch("lenny.core.api.LennyAPI._enrich_items", return_value={}), \
          patch("lenny.core.api.LennyDataProvider.empty_catalog", return_value={}):
         LennyAPI.opds_feed(modified_since=since, limit=10)
 
@@ -396,7 +385,6 @@ def test_opds_feed_accepts_a_string_modified_since():
 
     with patch("lenny.core.api.Item.get_many", return_value=[]) as get_many, \
          patch("lenny.core.api.Item.count", return_value=0), \
-         patch("lenny.core.api.LennyAPI._enrich_items", return_value={}), \
          patch("lenny.core.api.LennyDataProvider.empty_catalog", return_value={}):
         LennyAPI.opds_feed(modified_since="2026-08-01", limit=10)
 
@@ -410,10 +398,9 @@ def test_opds_feed_does_not_reapply_offset_to_the_ol_search():
     have made `rel=next` useless."""
     from lenny.core.api import LennyAPI
 
-    items = _enriched(_item(10, datetime(2026, 8, 1, tzinfo=timezone.utc)))
+    items = [_item(10, datetime(2026, 8, 1, tzinfo=timezone.utc))]
     with patch("lenny.core.api.Item.get_many", return_value=[_item(10, None)]), \
          patch("lenny.core.api.Item.count", return_value=100), \
-         patch("lenny.core.api.LennyAPI._enrich_items", return_value=items), \
          patch("lenny.core.api.LennyDataProvider.search",
                return_value=_search_response(_fake_record(10, "Ten"))) as search, \
          patch("lenny.core.api.LennyDataProvider.build_catalog", return_value={}):
@@ -425,13 +412,12 @@ def test_opds_feed_does_not_reapply_offset_to_the_ol_search():
 def test_opds_feed_builds_modified_map_from_item_updated_at():
     from lenny.core.api import LennyAPI
 
-    items = _enriched(
+    items = [
         _item(10, datetime(2026, 8, 1, 6, 0, tzinfo=timezone.utc)),
         _item(20, datetime(2026, 8, 2, 6, 0, tzinfo=timezone.utc)),
-    )
-    with patch("lenny.core.api.Item.get_many", return_value=list(items.values())), \
+    ]
+    with patch("lenny.core.api.Item.get_many", return_value=items), \
          patch("lenny.core.api.Item.count", return_value=2), \
-         patch("lenny.core.api.LennyAPI._enrich_items", return_value=items), \
          patch("lenny.core.api.LennyDataProvider.search",
                return_value=_search_response(_fake_record(10, "Ten"), _fake_record(20, "Twenty"))), \
          patch("lenny.core.api.LennyDataProvider.build_catalog", return_value={}) as build:
@@ -446,10 +432,9 @@ def test_opds_feed_builds_modified_map_from_item_updated_at():
 def test_opds_feed_tolerates_items_with_no_updated_at():
     from lenny.core.api import LennyAPI
 
-    items = _enriched(_item(10, None), _item(20, datetime(2026, 8, 2, tzinfo=timezone.utc)))
-    with patch("lenny.core.api.Item.get_many", return_value=list(items.values())), \
+    items = [_item(10, None), _item(20, datetime(2026, 8, 2, tzinfo=timezone.utc))]
+    with patch("lenny.core.api.Item.get_many", return_value=items), \
          patch("lenny.core.api.Item.count", return_value=2), \
-         patch("lenny.core.api.LennyAPI._enrich_items", return_value=items), \
          patch("lenny.core.api.LennyDataProvider.search",
                return_value=_search_response(_fake_record(10, "Ten"), _fake_record(20, "Twenty"))), \
          patch("lenny.core.api.LennyDataProvider.build_catalog", return_value={}) as build:
@@ -461,10 +446,9 @@ def test_opds_feed_tolerates_items_with_no_updated_at():
 def test_opds_feed_passes_paging_context_for_the_next_link():
     from lenny.core.api import LennyAPI
 
-    items = _enriched(_item(10, datetime(2026, 8, 1, tzinfo=timezone.utc)))
-    with patch("lenny.core.api.Item.get_many", return_value=list(items.values())), \
+    items = [_item(10, datetime(2026, 8, 1, tzinfo=timezone.utc))]
+    with patch("lenny.core.api.Item.get_many", return_value=items), \
          patch("lenny.core.api.Item.count", return_value=99) as count, \
-         patch("lenny.core.api.LennyAPI._enrich_items", return_value=items), \
          patch("lenny.core.api.LennyDataProvider.search",
                return_value=_search_response(_fake_record(10, "Ten"))), \
          patch("lenny.core.api.LennyDataProvider.build_catalog", return_value={}) as build:
@@ -488,7 +472,6 @@ def test_empty_feed_still_carries_paging_context():
 
     with patch("lenny.core.api.Item.get_many", return_value=[]), \
          patch("lenny.core.api.Item.count", return_value=0), \
-         patch("lenny.core.api.LennyAPI._enrich_items", return_value={}), \
          patch("lenny.core.api.LennyDataProvider.empty_catalog", return_value={}) as empty:
         LennyAPI.opds_feed(limit=10, modified_since="2026-08-01")
 
@@ -498,9 +481,11 @@ def test_empty_feed_still_carries_paging_context():
 def test_single_publication_request_has_no_paging_context():
     from lenny.core.api import LennyAPI
 
-    items = _enriched(_item(10, datetime(2026, 8, 1, tzinfo=timezone.utc)))
-    with patch("lenny.core.api.Item.exists", return_value=None), \
-         patch("lenny.core.api.LennyAPI._enrich_items", return_value=items), \
+    # A single-publication request reads its one row straight from `Item.exists`;
+    # there is no `get_many` page behind it and so no count to take.
+    item = _item(10, datetime(2026, 8, 1, tzinfo=timezone.utc))
+    with patch("lenny.core.api.Item.exists", return_value=item), \
+         patch("lenny.core.api.Loan.exists", return_value=None), \
          patch("lenny.core.api.Item.count") as count, \
          patch("lenny.core.api.LennyDataProvider.search",
                return_value=_search_response(_fake_record(10, "Ten"))), \
@@ -563,13 +548,12 @@ def test_feed_satisfies_the_bookworm_harvester_contract():
     from lenny.core.api import LennyAPI
     from lenny.core.utils import parse_modified_since
 
-    items = _enriched(
+    items = [
         _item(10, datetime(2026, 8, 1, 6, 0, tzinfo=timezone.utc)),
         _item(20, datetime(2026, 8, 2, 6, 0, tzinfo=timezone.utc)),
-    )
-    with patch("lenny.core.api.Item.get_many", return_value=list(items.values())), \
+    ]
+    with patch("lenny.core.api.Item.get_many", return_value=items), \
          patch("lenny.core.api.Item.count", return_value=5), \
-         patch("lenny.core.api.LennyAPI._enrich_items", return_value=items), \
          patch("lenny.core.api.LennyDataProvider.search",
                return_value=_search_response(_fake_record(10, "Ten"), _fake_record(20, "Twenty"))):
         feed = LennyAPI.opds_feed(offset=0, limit=2, modified_since="2026-08-01")

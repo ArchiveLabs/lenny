@@ -90,7 +90,11 @@ def test_search_feed_no_items_returns_empty_catalog():
 
 
 def test_search_feed_builds_chunked_query():
-    """Verify OL is called with combined '{query} AND edition_key:(...)' query."""
+    """Verify OL is called with combined '{query} AND edition_key:(...)' query.
+
+    The scoped query is now issued by LennyDataProvider, which is also what
+    builds the records — so it is one upstream search, not two.
+    """
     from lenny.core.api import LennyAPI
 
     # Create mock items in the DB
@@ -106,35 +110,63 @@ def test_search_feed_builds_chunked_query():
 
     all_items = {10: item1, 20: item2}
 
-    # Create mock OL search results matching those items
-    ol_record1 = MagicMock()
-    ol_record1.olid = "10"
-    ol_record2 = MagicMock()
-    ol_record2.olid = "20"
-
     # Mock LennyDataProvider.search response
-    mock_lenny_record = MagicMock(spec=["auth_mode_direct"])
+    mock_lenny_record = MagicMock(spec=["auth_mode_direct", "lenny_id"])
+    mock_lenny_record.lenny_id = 10
     mock_search_response = MagicMock()
     mock_search_response.records = [mock_lenny_record]
 
     with patch("lenny.core.api.Item.get_all", return_value=all_items), \
-         patch("lenny.core.api.OpenLibrary.search", return_value=[ol_record1, ol_record2]) as mock_ol_search, \
-         patch("lenny.core.api.LennyDataProvider.search", return_value=mock_search_response), \
+         patch("lenny.core.api.OpenLibrary.search") as mock_ol_search, \
+         patch("lenny.core.api.LennyDataProvider.search", return_value=mock_search_response) as mock_provider_search, \
          patch("lenny.core.api.LennyDataProvider.build_catalog", return_value={"catalog": True}) as mock_build:
 
         result = LennyAPI.search_feed(query="python", limit=10, auth_mode_direct=False)
 
-    # Verify OL.search was called with the combined query
-    mock_ol_search.assert_called_once()
-    call_kwargs = mock_ol_search.call_args
-    ol_query = call_kwargs.kwargs["query"] if "query" in call_kwargs.kwargs else call_kwargs.args[0]
-    assert "python AND edition_key:" in str(ol_query)
-    assert "OL10M" in str(ol_query)
-    assert "OL20M" in str(ol_query)
+    # Exactly one upstream search, carrying the combined query
+    mock_provider_search.assert_called_once()
+    provider_query = mock_provider_search.call_args.kwargs["query"]
+    assert "python AND edition_key:" in provider_query
+    assert "OL10M" in provider_query
+    assert "OL20M" in provider_query
+
+    # The redundant enrichment search is gone (lenny#194)
+    mock_ol_search.assert_not_called()
 
     # Verify build_catalog was called
     mock_build.assert_called_once()
     assert result == {"catalog": True}
+
+
+def test_search_feed_passes_local_flags_to_provider():
+    """Encryption and availability come from the local rows, not from OL."""
+    from lenny.core.api import LennyAPI
+
+    item1 = MagicMock()
+    item1.openlibrary_edition = 10
+    item1.encrypted = False
+    item1.is_borrowable = True
+
+    item2 = MagicMock()
+    item2.openlibrary_edition = 20
+    item2.encrypted = True
+    item2.is_borrowable = False
+
+    mock_lenny_record = MagicMock(spec=["auth_mode_direct", "lenny_id"])
+    mock_lenny_record.lenny_id = 20
+    mock_search_response = MagicMock()
+    mock_search_response.records = [mock_lenny_record]
+
+    with patch("lenny.core.api.Item.get_all", return_value={10: item1, 20: item2}), \
+         patch("lenny.core.api.LennyDataProvider.search", return_value=mock_search_response) as mock_provider_search, \
+         patch("lenny.core.api.LennyDataProvider.build_catalog", return_value={"catalog": True}):
+
+        LennyAPI.search_feed(query="python", limit=10, auth_mode_direct=False)
+
+    kwargs = mock_provider_search.call_args.kwargs
+    assert kwargs["lenny_ids"] == {10: 10, 20: 20}
+    assert kwargs["encryption_map"] == {10: False, 20: True}
+    assert kwargs["borrowable_map"] == {10: True, 20: False}
 
 
 # ---------------------------------------------------------------------------
@@ -254,13 +286,13 @@ def test_search_flow_end_to_end(test_client):
 
     # Mock search response object for LennyDataProvider.search
     mock_lenny_record = MagicMock()
+    mock_lenny_record.lenny_id = 999
     mock_search_response = MagicMock()
     mock_search_response.records = [mock_lenny_record]
 
     with patch("lenny.core.api.Item.get_all",
                return_value={999: mock_item}), \
-         patch("lenny.core.api.OpenLibrary.search",
-               return_value=[ol_record]) as mock_ol_search, \
+         patch("lenny.core.api.OpenLibrary.search") as mock_ol_search, \
          patch("lenny.core.api.LennyDataProvider.search",
                return_value=mock_search_response) as mock_provider_search, \
          patch("lenny.core.api.LennyDataProvider.build_catalog",
@@ -277,14 +309,14 @@ def test_search_flow_end_to_end(test_client):
     assert len(body["publications"]) == 1
     assert body["publications"][0]["metadata"]["title"] == "Test Book"
 
-    # Verify OL was called with the scoped query
-    mock_ol_search.assert_called_once()
-    ol_query = mock_ol_search.call_args.kwargs["query"] if "query" in mock_ol_search.call_args.kwargs else mock_ol_search.call_args.args[0]
-    assert "test AND edition_key:" in str(ol_query)
-    assert "OL999M" in str(ol_query)
-
-    # Verify LennyDataProvider.search was called to build records
+    # One upstream search, carrying the scoped query, issued by the provider
     mock_provider_search.assert_called_once()
+    provider_query = mock_provider_search.call_args.kwargs["query"]
+    assert "test AND edition_key:" in provider_query
+    assert "OL999M" in provider_query
+
+    # The redundant enrichment search is gone (lenny#194)
+    mock_ol_search.assert_not_called()
 
     # Verify build_catalog produced the final feed
     mock_build.assert_called_once()
