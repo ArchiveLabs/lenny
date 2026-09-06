@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -7,7 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from lenny.routes import api
 from lenny.routes import oauth as oauth_routes
 from lenny.routes import oauth2 as oauth2_routes
-from lenny.configs import OPTIONS
+from lenny.configs import FORWARDED_ALLOW_IPS, OPTIONS
+
+_log = logging.getLogger(__name__)
 from lenny.core.db import session as db_session
 from lenny import __version__ as VERSION
 
@@ -28,6 +32,54 @@ async def cleanup_db_session(request, call_next):
         return await call_next(request)
     finally:
         db_session.remove()
+
+
+# X-Forwarded-For misconfiguration is silent in both directions, which is why
+# ArchiveLabs/lenny#210 survived from the day proxy headers were enabled:
+#
+#   trust too broad ('*')  -> uvicorn takes the LEFTMOST hop, so a caller picks
+#                             its own IP and every IP check becomes advisory.
+#   trust too narrow       -> uvicorn trusts no proxy, so every patron collapses
+#                             onto the nginx address: one shared identity, one
+#                             shared OTP rate-limit bucket, and a session binding
+#                             that matches from anywhere.
+#
+# Neither raises, logs, or changes a status code. This warns once per worker on
+# the first request that proves the chain is being resolved wrongly: with a
+# correct configuration `request.client.host` is the RIGHTMOST entry of the
+# header nginx built with $proxy_add_x_forwarded_for.
+_xff_warned = False
+
+
+@app.middleware("http")
+async def warn_on_untrusted_proxy_chain(request, call_next):
+    global _xff_warned
+    if not _xff_warned:
+        xff = request.headers.get("x-forwarded-for")
+        client = request.client.host if request.client else None
+        if xff and client:
+            hops = [h.strip() for h in xff.split(",") if h.strip()]
+            if hops and client != hops[-1]:
+                _xff_warned = True
+                _log.warning(
+                    "X-Forwarded-For is not being resolved as expected: "
+                    "client.host=%r but the last proxy hop is %r (chain=%r). "
+                    "LENNY_FORWARDED_ALLOW_IPS=%r. If client.host matches the "
+                    "first hop, the range is too broad and callers can spoof "
+                    "their IP; if it matches neither, it is too narrow and every "
+                    "patron is sharing one identity. See ArchiveLabs/lenny#210.",
+                    client, hops[-1], xff, FORWARDED_ALLOW_IPS,
+                )
+    return await call_next(request)
+
+
+if FORWARDED_ALLOW_IPS.strip() == "*":
+    _log.warning(
+        "LENNY_FORWARDED_ALLOW_IPS='*' trusts every peer, so uvicorn takes the "
+        "first X-Forwarded-For entry — a value the caller controls. Session-cookie "
+        "IP binding and OTP IP binding are unenforceable in this configuration. "
+        "Set it to your Docker network (see docker/configure.sh)."
+    )
 
 # CORS is permissive at the app layer because nginx enforces the real security
 # boundary: `location /v1/api/admin { return 403; }` blocks all cross-origin

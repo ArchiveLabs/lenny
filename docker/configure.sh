@@ -53,6 +53,39 @@ else
   LENNY_SSL_CRT="${LENNY_SSL_CRT:-}"
   LENNY_SSL_KEY="${LENNY_SSL_KEY:-}"
   LENNY_SEED="${LENNY_SEED:-$(genpass 32)}"
+  # Which peer addresses uvicorn will trust to have set X-Forwarded-For.
+  # MUST NOT be '*': nginx uses $proxy_add_x_forwarded_for, so it APPENDS the
+  # observed address to whatever the client sent. With '*' uvicorn takes the
+  # leftmost entry, which is the client's own — letting a caller choose the IP
+  # Lenny binds sessions and OTPs to. Restricting to the Docker network means
+  # uvicorn walks the list from the right and stops at the first untrusted hop,
+  # which is the address nginx actually observed.
+  #
+  # 172.16.0.0/12 covers Docker's default Compose address pool. Narrow it to
+  # your own network (`docker network inspect lenny_lenny_network`) if you know
+  # it, but never leave it empty — an empty value trusts no proxy at all, so
+  # every patron appears to come from the nginx container and they all share one
+  # identity, one rate-limit bucket, and one session binding.
+  # Resolve the real Compose subnet when we can, so the trusted range is exact
+  # rather than approximate. The `case` guard is the important part: a failed or
+  # empty lookup must fall through to the static default below, never become an
+  # empty value.
+  #
+  # Kept OUT of the `${VAR:-default}` expression on purpose. docker/utils/update/
+  # 020_env_sync.sh back-fills new keys into existing installs by grepping this
+  # file for the literal `KEY="${KEY:-<default>}"` form, and explicitly resolves
+  # a `$(...)` default to the EMPTY STRING. Putting the lookup inline would write
+  # `LENNY_FORWARDED_ALLOW_IPS=` into every existing .env on the next update —
+  # worse than the bug this fixes.
+  if [ -z "${LENNY_FORWARDED_ALLOW_IPS:-}" ] && command -v docker >/dev/null 2>&1; then
+    _lenny_subnet="$(docker network inspect lenny_lenny_network \
+      -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null | tr -d '[:space:]')"
+    case "$_lenny_subnet" in
+      */*) LENNY_FORWARDED_ALLOW_IPS="$_lenny_subnet" ;;
+    esac
+    unset _lenny_subnet
+  fi
+  LENNY_FORWARDED_ALLOW_IPS="${LENNY_FORWARDED_ALLOW_IPS:-172.16.0.0/12}"
   # Base URL of the Lenny instance as seen by the browser (no /v1/api suffix —
   # the admin UI appends that itself). Leave empty for same-origin deployments
   # behind nginx, or set an absolute URL (https://library.example.com) for
@@ -102,6 +135,9 @@ LENNY_PRODUCTION=$LENNY_PRODUCTION
 LENNY_SSL_CRT=$LENNY_SSL_CRT
 LENNY_SSL_KEY=$LENNY_SSL_KEY
 OTP_SERVER=$OTP_SERVER
+# Peer addresses uvicorn trusts to have set X-Forwarded-For. Narrow to your own
+# Docker network if you know it; NEVER leave this empty (see configure.sh).
+LENNY_FORWARDED_ALLOW_IPS=$LENNY_FORWARDED_ALLOW_IPS
 # Set to an absolute URL for custom-domain deployments, e.g. https://library.example.com/v1/api
 NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
