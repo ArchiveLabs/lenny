@@ -21,6 +21,7 @@ pytest.importorskip("httpx")
 import httpx
 
 from lenny.core.briet import BRIET, import_briet_books, parse_olid
+from lenny.core.client import MAX_DOWNLOAD_BYTES, assert_fetchable, safe_log_url
 from lenny.core.imports import ImportJob, SCOPE, DONE, FAILED, PENDING
 
 EPUB_BYTES = b'PK\x03\x04' + b'0' * 128
@@ -72,6 +73,48 @@ def test_parse_olid_accepts_ol_form_and_bare_int():
     assert parse_olid(None) is None
 
 
+def test_parse_olid_rejects_out_of_range_values():
+    """An integer column downstream cannot hold these; drop them at the door."""
+    assert parse_olid(0) is None
+    assert parse_olid(-5) is None
+    assert parse_olid(2 ** 31) is None
+
+
+# --- download URL guard -----------------------------------------------------
+
+def test_assert_fetchable_rejects_non_https_and_internal_addresses():
+    """A bundle names where each book lives, so the URL is untrusted input."""
+    for url in (
+        "http://cdn.test/a.epub",           # plaintext
+        "file:///etc/passwd",               # not even http
+        "https://127.0.0.1/a.epub",         # loopback
+        "https://169.254.169.254/latest",   # cloud metadata
+        "https://10.0.0.5/a.epub",          # private network
+        "https://[::1]/a.epub",             # loopback, v6
+    ):
+        with pytest.raises(ValueError):
+            assert_fetchable(url)
+
+
+def test_safe_log_url_drops_a_presigned_signature():
+    assert safe_log_url("https://cdn.test/a.epub?X-Amz-Signature=deadbeef") == "https://cdn.test/a.epub"
+
+
+def test_download_epub_aborts_an_oversized_stream(monkeypatch):
+    """An unbounded response must not be read into the API's memory."""
+    from lenny.core import client as client_module
+
+    monkeypatch.setattr(client_module, "MAX_DOWNLOAD_BYTES", 16)
+    monkeypatch.setattr(client_module, "assert_fetchable", lambda url: None)
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=b"P" * 64))
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        client_module.httpx, "Client", lambda **kw: real_client(transport=transport, **kw)
+    )
+
+    assert client_module.download_epub("https://cdn.test/a.epub") is None
+
+
 # --- redeem -----------------------------------------------------------------
 
 def test_redeem_parses_book_list():
@@ -107,6 +150,41 @@ def test_redeem_skips_entries_missing_olid_or_url():
         books = BRIET.redeem("CODE")
 
     assert [b["olid"] for b in books] == [7]
+
+
+def test_redeem_skips_non_https_urls():
+    payload = {"books": [
+        {"olid": "OL1M", "url": "http://cdn.test/a.epub"},
+        {"olid": "OL2M", "url": "https://cdn.test/b.epub"},
+    ]}
+    patcher, _ = _patch_get([_response(200, payload)])
+    with patcher:
+        assert [b["olid"] for b in BRIET.redeem("CODE")] == [2]
+
+
+def test_redeem_caps_an_oversized_bundle_and_bounds_titles():
+    payload = {"books": [
+        {"olid": f"OL{i + 1}M", "url": "https://cdn.test/a.epub", "title": "T" * 5000}
+        for i in range(BRIET.MAX_BOOKS + 10)
+    ]}
+    patcher, _ = _patch_get([_response(200, payload)])
+    with patcher:
+        books = BRIET.redeem("CODE")
+
+    assert len(books) == BRIET.MAX_BOOKS
+    assert len(books[0]["title"]) == BRIET.MAX_TITLE
+
+
+def test_redeem_survives_a_payload_that_is_not_a_list():
+    patcher, _ = _patch_get([_response(200, {"books": {"olid": "OL1M"}})])
+    with patcher:
+        assert BRIET.redeem("CODE") == []
+
+
+def test_backoff_never_returns_a_negative_delay():
+    """time.sleep() raises on a negative, so a hostile Retry-After must clamp."""
+    response = _response(429, {}, headers={"Retry-After": "-10"})
+    assert BRIET._backoff(response, 1) == 0.0
 
 
 def test_redeem_retries_on_429_then_succeeds():

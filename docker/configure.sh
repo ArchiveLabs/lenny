@@ -59,6 +59,7 @@ else
   # external/custom-domain deployments.
   NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-}"
   OTP_SERVER="${OTP_SERVER:-https://openlibrary.org}"
+  BRIET_REDEEM_URL="${BRIET_REDEEM_URL:-https://demo.market.briet.app/api/redeem-lenny}"
 
   READER_PORT="${READER_PORT:-3000}"
   READIUM_PORT="${READIUM_PORT:-15080}"
@@ -102,6 +103,10 @@ LENNY_PRODUCTION=$LENNY_PRODUCTION
 LENNY_SSL_CRT=$LENNY_SSL_CRT
 LENNY_SSL_KEY=$LENNY_SSL_KEY
 OTP_SERVER=$OTP_SERVER
+# BRIET bundle-redeem endpoint. Defaults to BRIET's DEMO marketplace, which
+# behaves like production but hands out throwaway codes — swap in the real
+# host (market.briet.app) once that side is live.
+BRIET_REDEEM_URL=$BRIET_REDEEM_URL
 # Set to an absolute URL for custom-domain deployments, e.g. https://library.example.com/v1/api
 NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
