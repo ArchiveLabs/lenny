@@ -21,8 +21,15 @@ logger = logging.getLogger(__name__)
 
 _MAX_LIMIT  = 1000
 _MAX_OFFSET = 100_000
+
+# Standard Ebooks batch import. ~10s per book, so 100 is already a ~15 minute run;
+# the cap exists so one click can't tie up a worker for hours.
+_SE_DEFAULT_LIMIT = 25
+_SE_MAX_LIMIT     = 100
+_SE_RUN_TTL       = 3600  # how long one run blocks another
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Request,
     UploadFile,
     File,
@@ -43,6 +50,9 @@ from lenny.core import auth
 from lenny.core.api import LennyAPI
 from lenny.core import ol_bootstrap
 from lenny.core.cache import Cache
+from lenny.core.briet import BRIET, import_briet_books
+from lenny.core.imports import ImportJob, PENDING as IMPORT_PENDING
+from lenny.core.standardebooks import import_standardebooks
 from lenny.core.openlibrary import ol_auth_status
 from lenny import configs
 from pyopds2_lenny import LennyDataProvider, build_post_borrow_publication, LennyDataRecord
@@ -560,6 +570,97 @@ async def delete_item(request: Request, book_id: int):
     except DatabaseDeleteError as e:
         logger.exception("Delete DB error")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/admin/imports")
+async def admin_get_imports(request: Request):
+    """
+    Books currently being ingested, plus recent failures.
+
+    Source-agnostic on purpose: this is the single place the admin UI polls to
+    see anything in flight, regardless of which importer produced it. Items
+    here are NOT yet in /admin/items — they land there once ingestion commits.
+    """
+    _require_admin(request)
+    return {"imports": ImportJob.list()}
+
+
+@router.post("/admin/imports/standardebooks")
+async def admin_import_standardebooks(request: Request, background_tasks: BackgroundTasks, body: dict = Body(None)):
+    """
+    Import a batch of Standard Ebooks (~800 available, all open access).
+
+    `limit` is how many books to add that aren't already in the library — the
+    importer skips what it already has, so this can be called repeatedly to pull
+    the catalog down in batches rather than paging by offset.
+
+    Runs in the background; progress shows up in /admin/imports.
+    """
+    _require_admin(request)
+
+    limit = (body or {}).get("limit", _SE_DEFAULT_LIMIT)
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="limit must be a number")
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be at least 1")
+    limit = min(limit, _SE_MAX_LIMIT)
+
+    # One import run at a time. A second click would otherwise race the first,
+    # downloading the same books twice (both runs see the same "existing" set).
+    if Cache.is_throttled("import_run", "standardebooks", limit=1, ttl=_SE_RUN_TTL):
+        raise HTTPException(status_code=409, detail="A Standard Ebooks import is already running")
+
+    background_tasks.add_task(import_standardebooks, limit)
+    return {"source": "standardebooks", "limit": limit, "status": "started"}
+
+
+@router.post("/admin/briet/redeem")
+def admin_briet_redeem(request: Request, background_tasks: BackgroundTasks, body: dict = Body(...)):
+    """
+    Redeem a BRIET bundle code and queue its books for import.
+
+    The redemption itself is synchronous so the admin immediately learns
+    whether the code was valid and what it contained; the (slow) downloads run
+    in the background and are tracked via /admin/imports.
+
+    Defined as `def` rather than `async def` so FastAPI runs it in a
+    threadpool — BRIET.fetch sleeps between retries and would otherwise block
+    the event loop.
+    """
+    _require_admin(request)
+
+    code = (body.get("code") or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="A redeem code is required")
+
+    # Codes are single-use and admin-supplied, but this is still user input hitting
+    # a third party — same throttle primitive OTP uses.
+    if Cache.is_throttled("briet_redeem", code, limit=5, ttl=3600):
+        raise HTTPException(status_code=429, detail="Too many attempts for this code")
+
+    try:
+        books = BRIET.redeem(code)
+    except httpx.HTTPStatusError as e:
+        upstream = e.response.status_code
+        if 400 <= upstream < 500 and upstream != 429:
+            raise HTTPException(status_code=400, detail="Invalid or already redeemed code")
+        logger.exception("BRIET redeem upstream error")
+        raise HTTPException(status_code=502, detail="BRIET is unavailable, try again shortly")
+    except (httpx.HTTPError, ValueError) as e:
+        logger.exception("BRIET redeem failed")
+        raise HTTPException(status_code=502, detail="Could not reach BRIET")
+
+    if not books:
+        raise HTTPException(status_code=404, detail="No books found for this code")
+
+    for book in books:
+        ImportJob.record(BRIET.SOURCE, book["olid"], IMPORT_PENDING)
+
+    background_tasks.add_task(import_briet_books, books)
+
+    return {"code": code, "count": len(books), "books": books}
 
 
 @router.get("/profile")
