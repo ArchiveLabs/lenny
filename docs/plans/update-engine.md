@@ -41,6 +41,7 @@ The pipeline scripts live in `docker/utils/update/` and run on every update. The
 | Script | Purpose |
 |---|---|
 | `020_env_sync.sh` | Sync missing env vars into `.env` and `reader.env` from `configure.sh` defaults |
+| `025_migrate_s3_to_garage.sh` | One-time migration of book files from a pre-Garage MinIO bucket into Garage, via `mc mirror`. No-ops on fresh installs and once migrated. |
 | `030_pull_images.sh` | `docker compose pull --ignore-buildable` for external images |
 | `035_backup_db.sh` | `pg_dump` the database before migrations run |
 | `040_build_and_restart.sh` | Rebuild custom images + `docker compose up -d` |
@@ -116,9 +117,9 @@ docker compose -p lenny up -d
 
 **What's protected:**
 - Database schema and data — `pg_dump` before any migration runs
-- `.env` and `reader.env` — backed up before modification, only appends missing vars, never deletes or overwrites existing values, never removes user-added variables
-- S3/MinIO object storage (books, files) — the `s3_data` Docker volume is never touched by the update engine
-- All Docker volumes (`db_data`, `s3_data`, `readium_data`) — the engine never runs `docker compose down -v` or `docker volume rm`
+- `.env` and `reader.env` — backed up before modification, only appends missing vars, never removes user-added variables. Exception: `025_migrate_s3_to_garage.sh` deliberately overwrites `S3_PROVIDER` and `S3_ENDPOINT` on upgrade (they must point at Garage, not the old MinIO values), and self-heals `S3_RPC_SECRET`/`S3_ADMIN_TOKEN` if a prior run left them empty.
+- S3/Garage object storage (books, files) — the `garage_meta`/`garage_data` volumes are never touched by the update engine. Existing installs upgrading from MinIO have their old `s3_data` volume mirrored into Garage by `025_migrate_s3_to_garage.sh` (stopping, but never deleting, the old `lenny_s3` container first) and then left untouched — remove the container, volume, and now-unused `minio/minio`/`minio/mc` images manually with `make cleanup-old-s3` once verified.
+- All Docker volumes (`db_data`, `s3_data`, `garage_meta`, `garage_data`, `readium_data`) — the engine never runs `docker compose down -v` or `docker volume rm`
 
 **What the engine never does:**
 - Never runs `docker compose down -v` (would destroy volumes)

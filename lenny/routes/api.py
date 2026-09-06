@@ -72,10 +72,13 @@ from lenny.core.exceptions import (
     PatronLoanLimitError,
     LendingNotConfiguredError,
     LoanNotFoundError,
+    OTPGenerationError,
+    RateLimitError,
 )
 from lenny.schemas.ol import OLLoginRequest
 from lenny.core.readium import ReadiumAPI
 from lenny.core.models import Item
+from lenny.core.utils import parse_modified_since
 from urllib.parse import quote
 COOKIES_MAX_AGE = 604800  # 1 week
 
@@ -183,23 +186,45 @@ async def health():
     return {"status": "ok"}
 
 @router.get("/items")
-async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limit: Optional[int]=None, encrypted: Optional[bool]=None):
+async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limit: Optional[int]=None, encrypted: Optional[bool]=None, modified_since: Optional[str]=None):
     fields = fields.split(",") if fields else None
     if limit  is not None: limit  = max(0, min(limit,  _MAX_LIMIT))
     if offset is not None: offset = max(0, min(offset, _MAX_OFFSET))
+    try:
+        modified_since_dt = parse_modified_since(modified_since)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid `modified_since`: expected an ISO 8601 date or timestamp",
+        )
     return LennyAPI.get_enriched_items(
-        fields=fields, offset=offset, limit=limit, encrypted=encrypted
+        fields=fields, offset=offset, limit=limit, encrypted=encrypted,
+        modified_since=modified_since_dt,
     )
 
 @router.get("/opds")
-async def get_opds_catalog(request: Request, offset: Optional[int]=None, limit: Optional[int]=None, beta: bool = False, auth_mode: Optional[str] = None, session: Optional[str] = Cookie(None)):
+async def get_opds_catalog(request: Request, offset: Optional[int]=None, limit: Optional[int]=None, beta: bool = False, auth_mode: Optional[str] = None, modified_since: Optional[str] = None, session: Optional[str] = Cookie(None)):
     session = extract_session(request, session)
     email = get_authenticated_email(request, session)
     if limit  is not None: limit  = max(0, min(limit,  _MAX_LIMIT))
     if offset is not None: offset = max(0, min(offset, _MAX_OFFSET))
 
+    # Parse before the try/except below, so a malformed filter is a 400 the
+    # caller can fix rather than a 503 that looks like Lenny is down — and so it
+    # never degrades into silently serving the entire catalogue unfiltered.
     try:
-        feed = LennyAPI.opds_feed(offset=offset, limit=limit, auth_mode_direct=is_direct_auth_mode(auth_mode, beta), email=email)
+        modified_since_dt = parse_modified_since(modified_since)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid `modified_since`: expected an ISO 8601 date or timestamp, "
+                "e.g. 2026-08-01 or 2026-08-01T12:30:00Z"
+            ),
+        )
+
+    try:
+        feed = LennyAPI.opds_feed(offset=offset, limit=limit, auth_mode_direct=is_direct_auth_mode(auth_mode, beta), email=email, modified_since=modified_since_dt)
     except Exception as e:
         logger.exception("OPDS feed error")
         raise HTTPException(status_code=503, detail="Service temporarily unavailable")
@@ -382,6 +407,17 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
             except LendingNotConfiguredError as e:
                 context["error"] = str(e)
                 return request.app.templates.TemplateResponse("otp_issue.html", context)
+            except RateLimitError as e:
+                context["error"] = str(e)
+                context["email"] = post_email
+                return request.app.templates.TemplateResponse("otp_redeem.html", context)
+            except OTPGenerationError as e:
+                # Open Library refused for a reason that is not "wrong password"
+                # — stale credentials, rate limiting, an outage. Say which,
+                # instead of blaming the patron's typing.
+                context["error"] = str(e)
+                context["email"] = post_email
+                return request.app.templates.TemplateResponse("otp_redeem.html", context)
             if not session_cookie:
                 context["error"] = "Authentication failed. Invalid OTP."
                 context["email"] = post_email
@@ -395,16 +431,25 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
             return response
 
         if post_email:
+            # Only advance to the "enter your code" screen if Open Library
+            # actually said it issued one. It answers HTTP 200 with a JSON error
+            # body on every failure path, so this used to promise the patron an
+            # email that was never sent, with nothing logged on either side.
             try:
                 auth.OTP.issue(post_email, client_ip)
-                context["email"] = post_email
-                return request.app.templates.TemplateResponse("otp_redeem.html", context)
             except LendingNotConfiguredError as e:
                 context["error"] = str(e)
                 return request.app.templates.TemplateResponse("otp_issue.html", context)
+            except OTPGenerationError as e:
+                context["error"] = str(e)
+                context["email"] = post_email
+                return request.app.templates.TemplateResponse("otp_issue.html", context)
             except Exception:
+                logger.exception("Unexpected error issuing OTP")
                 context["error"] = "Failed to issue OTP. Please try again."
                 return request.app.templates.TemplateResponse("otp_issue.html", context)
+            context["email"] = post_email
+            return request.app.templates.TemplateResponse("otp_redeem.html", context)
 
     return request.app.templates.TemplateResponse("otp_issue.html", context)
 

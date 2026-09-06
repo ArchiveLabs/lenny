@@ -1,3 +1,4 @@
+from typing import Optional
 
 INVALID_ITEM = {"error": "invalid_item", "reasons": ["Invalid item selected"]}
 
@@ -23,7 +24,20 @@ class UploaderNotAllowedError(LennyAPIError): pass
 
 class RateLimitError(LennyAPIError): pass
 
-class OTPGenerationError(LennyAPIError): pass
+class OTPGenerationError(LennyAPIError):
+    """Open Library refused an OTP issue/redeem request.
+
+    `code` carries Open Library's own error string (e.g. `unauthorized`,
+    `ratelimit`, `missing_keys`), or `timeout`/`transport` when we never got a
+    usable answer. Those endpoints reply HTTP 200 with a JSON error body, so this
+    code is the only thing distinguishing "the patron typed it wrong" from "this
+    library's credentials expired" — keep it on the exception rather than
+    flattening every failure into one message.
+    """
+
+    def __init__(self, message: str = "", code: Optional[str] = None):
+        super().__init__(message)
+        self.code = code
 
 class EmailNotFoundError(LennyAPIError): pass
 

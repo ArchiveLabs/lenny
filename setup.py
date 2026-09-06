@@ -61,7 +61,6 @@ setup(
         'pyyaml==6.0.2',
         'httpx[http2]==0.28.1',
         'typing_extensions==4.12.2',
-        'minio==7.2.9',
         'python-multipart',
     ],
     include_package_data=True

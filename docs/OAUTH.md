@@ -244,7 +244,8 @@ When you `make update`, the helper at `docker/utils/update/020_env_sync.sh` keep
 | `403 state_mismatch` | The browser dropped the `_oidc_state` cookie (cross-site cookie blocking, mixed http/https, different host); check the redirect URI scheme matches the page's |
 | `401 auth_failed` on callback | Token exchange or ID-token validation failed (clock skew, bad client secret, wrong audience); inspect `make log` |
 | Lands on `/v1/api/opds` instead of where I expected | No `redirect_to` / `redirect_uri` was passed; supply one explicitly from your client |
-| `https://` `redirect_uri` silently falls back to `/v1/api/opds` | Host not in `LENNY_OPDS_ALLOWED_HOSTS` (or the var is empty); add the exact netloc (e.g. `my.reader.com` or `my.reader.com:8443`) to that env var |
+| `400 invalid_redirect_uri` | Lenny will not honour the `redirect_uri` the client sent. For an `https://` URI: its host is not in `LENNY_OPDS_ALLOWED_HOSTS` (most often because the var is still empty, which blocks **every** `https://` client); add the exact netloc (e.g. `my.reader.com` or `my.reader.com:8443`). The API log names the rejected host. |
+| Patron logs in successfully but never lands back in their reader app | Their `redirect_uri` was rejected, so Lenny fell back to `opds://authorize/` and rendered the success page as a dead end. Before 0.2.11 this was silent; it is now a `400` — if you are on an older build, check the client's `redirect_uri` against `LENNY_OPDS_ALLOWED_HOSTS`. |
 | `{"detail": "Service temporarily unavailable"}` on `/opds` | Internal error building the feed; check `make log` for the full trace |
 
 For a deeper trace, `make log` follows the API container's stdout, which logs every OIDC step at `INFO` and provider errors at `WARNING` or higher.

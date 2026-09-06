@@ -91,6 +91,14 @@ sync_env_file() {
         return 0
     fi
 
+    # A file the API container wrote (e.g. via /admin/loan/settings) can end
+    # up root-owned on the host, since the container runs as root — don't
+    # let one unreadable file abort the whole update.
+    if [ ! -r "$env_file" ]; then
+        echo "  ${label}: not readable (check ownership/permissions), skipping." >&2
+        return 0
+    fi
+
     # Extract KEY=VALUE lines from the heredoc in configure.sh
     local template_vars
     template_vars=$(
@@ -206,6 +214,13 @@ migrate_keys() {
         return 0
     fi
 
+    # See sync_env_file's comment — a container-written file can be
+    # root-owned on the host; don't let that abort the whole update.
+    if [ ! -r "$target_env" ] || [ ! -w "$target_env" ]; then
+        echo "  ${label}: ${target_env} not readable/writable (check ownership/permissions), skipping." >&2
+        return 0
+    fi
+
     local need_migrate=0
     for key in $keys; do
         if grep -qE "^${key}=" "$lenny_env"; then
@@ -273,6 +288,12 @@ migrate_lending_mode() {
 
     # Early returns before any file is touched — no trap needed yet.
     [ -f "$ol_env" ] || return 0
+    # See sync_env_file's comment — a container-written file can be
+    # root-owned on the host; don't let that abort the whole update.
+    if [ ! -r "$ol_env" ] || [ ! -w "$ol_env" ]; then
+        echo "  ol.env: not readable/writable (check ownership/permissions), skipping." >&2
+        return 0
+    fi
     grep -qE "^LENNY_LENDING_ENABLED=" "$ol_env" || return 0
 
     # From here we will write — install cleanup trap.
@@ -343,6 +364,12 @@ migrate_loan_settings() {
     # Early returns before any file is touched — no trap needed yet.
     [ -f "$lenny_env" ] || return 0
     [ -f "$loan_env" ]  || return 0
+    # See sync_env_file's comment — a container-written file can be
+    # root-owned on the host; don't let that abort the whole update.
+    if [ ! -r "$loan_env" ] || [ ! -w "$loan_env" ]; then
+        echo "  loan.env: not readable/writable (check ownership/permissions), skipping." >&2
+        return 0
+    fi
 
     local present=0
     for key in $_LOAN_MIGRATE_KEYS; do

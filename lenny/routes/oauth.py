@@ -32,7 +32,12 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 from lenny import configs
 from lenny.core import auth
 from lenny.core.api import LennyAPI
-from lenny.core.exceptions import InvalidOLCredentialsError, LendingNotConfiguredError
+from lenny.core.exceptions import (
+    InvalidOLCredentialsError,
+    LendingNotConfiguredError,
+    OTPGenerationError,
+    RateLimitError,
+)
 from lenny.core.external_auth import (
     ExternalAuthService,
     OAuthConfig,
@@ -137,8 +142,11 @@ async def oauth_authorize(
 
     if email:
         body = await LennyAPI.parse_request_body(request)
-        redirect_uri = redirect_uri or body.get("redirect_uri") or "opds://authorize/"
-        redirect_uri = _safe_opds_redirect(redirect_uri) or "/v1/api/opds"
+        requested_uri = redirect_uri or body.get("redirect_uri") or ""
+        safe_uri = _safe_opds_redirect(requested_uri or "opds://authorize/")
+        if requested_uri and not safe_uri:
+            return _invalid_redirect_uri_response(requested_uri)
+        redirect_uri = safe_uri or "/v1/api/opds"
         state = state or body.get("state")
         fragment = LennyAPI.build_oauth_fragment(session, state)
         return RedirectResponse(url=f"{redirect_uri}#{urlencode(fragment)}", status_code=303)
@@ -150,9 +158,14 @@ async def oauth_authorize(
     post_email = body.get("email")
     post_otp = body.get("otp")
 
-    current_redirect_uri = _safe_opds_redirect(
-        body.get("redirect_uri") or req_params.get("redirect_uri") or "opds://authorize/"
-    ) or "opds://authorize/"
+    # Tell "no redirect_uri supplied" apart from "one was supplied and rejected".
+    # Collapsing the two silently strands the client: it gets a normal-looking OTP
+    # form and, on success, a dead-end page instead of a redirect home.
+    requested_redirect_uri = body.get("redirect_uri") or req_params.get("redirect_uri") or ""
+    current_redirect_uri = _safe_opds_redirect(requested_redirect_uri or "opds://authorize/")
+    if requested_redirect_uri and not current_redirect_uri:
+        return _invalid_redirect_uri_response(requested_redirect_uri)
+    current_redirect_uri = current_redirect_uri or "opds://authorize/"
     current_state = body.get("state") or req_params.get("state")
     current_client_id = body.get("client_id") or req_params.get("client_id")
 
@@ -182,6 +195,11 @@ async def oauth_authorize(
         except LendingNotConfiguredError as e:
             context["error"] = str(e)
             return request.app.templates.TemplateResponse("otp_issue.html", context)
+        except (OTPGenerationError, RateLimitError) as e:
+            # Not a wrong password — Open Library refused for its own reason.
+            context["error"] = str(e)
+            context["email"] = post_email
+            return request.app.templates.TemplateResponse("otp_redeem.html", context)
         if not session_cookie:
             context["error"] = "Authentication failed. Invalid OTP."
             context["email"] = post_email
@@ -217,16 +235,23 @@ async def oauth_authorize(
         return resp
 
     if request.method == "POST" and post_email:
+        # Advance to the "enter your code" screen only once Open Library confirms
+        # it issued one — it reports failure as HTTP 200 with a JSON error body.
         try:
             auth.OTP.issue(post_email, client_ip)
-            context["email"] = post_email
-            return request.app.templates.TemplateResponse("otp_redeem.html", context)
         except LendingNotConfiguredError as e:
             context["error"] = str(e)
             return request.app.templates.TemplateResponse("otp_issue.html", context)
+        except OTPGenerationError as e:
+            context["error"] = str(e)
+            context["email"] = post_email
+            return request.app.templates.TemplateResponse("otp_issue.html", context)
         except Exception:
+            logger.exception("Unexpected error issuing OTP")
             context["error"] = "Failed to issue OTP. Please try again."
             return request.app.templates.TemplateResponse("otp_issue.html", context)
+        context["email"] = post_email
+        return request.app.templates.TemplateResponse("otp_redeem.html", context)
 
     return request.app.templates.TemplateResponse("otp_issue.html", context)
 
@@ -268,6 +293,18 @@ async def oauth_external_start(
             content={"error": "not_configured", "message": "External auth credentials are not configured."},
         )
 
+    # Validate opds_redirect_uri BEFORE contacting the provider — no point paying
+    # for a discovery round-trip on a request we are going to refuse anyway.
+    # Allow: opds:// (native OPDS client), allowlisted https:// (browser-based OPDS
+    # client), and relative /v1/api/ paths (in-Lenny browser flow).
+    # Reject: everything else — would be an open redirect leaking the token.
+    # Reject loudly: a silent drop here resurfaces much later as a login that
+    # simply never comes back, with nothing in the logs to explain it.
+    requested_opds_uri = opds_redirect_uri or ""
+    safe_opds_uri = _safe_opds_redirect(requested_opds_uri)
+    if requested_opds_uri and not safe_opds_uri:
+        return _invalid_redirect_uri_response(requested_opds_uri)
+
     try:
         auth_url, state, nonce, code_verifier = await svc.initiate_flow()
     except (OIDCDiscoveryError, RuntimeError) as exc:
@@ -282,11 +319,6 @@ async def oauth_external_start(
     # Default to the OPDS feed — that's Lenny's user-facing entry point.
     # Callers (e.g. admin UI) can override by passing ?redirect_to=/admin.
     safe_redirect_to = _safe_redirect(redirect_to or "") or "/v1/api/opds"
-
-    # Validate opds_redirect_uri before storing.
-    # Allow: opds:// (native OPDS client) and relative paths (browser flow).
-    # Reject: absolute http/https URLs — would be an open redirect leaking the token.
-    safe_opds_uri = _safe_opds_redirect(opds_redirect_uri or "")
 
     # Store state + nonce + code_verifier + redirect targets in a signed, short-lived cookie.
     # The callback reads this back to validate the round-trip and redirect correctly.
@@ -462,6 +494,28 @@ async def oauth_external_callback(
 # Private helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _invalid_redirect_uri_response(url: str) -> JSONResponse:
+    """400 for a redirect_uri the caller supplied that Lenny will not honour.
+
+    The alternative — quietly substituting ``opds://authorize/`` — is what made
+    this class of failure invisible: the client saw HTTP 200 and a normal login
+    form, the patron authenticated successfully, and then simply never arrived
+    back at the app that sent them.
+    """
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "invalid_redirect_uri",
+            "message": (
+                "This redirect_uri is not accepted. Use an opds:// URI, a relative "
+                "/v1/api/ path, or an https:// URL whose host the operator has added "
+                "to LENNY_OPDS_ALLOWED_HOSTS."
+            ),
+            "redirect_uri": url,
+        },
+    )
+
+
 def _safe_redirect(url: str) -> str:
     """Return *url* only if it is a safe relative path; fall back to '/v1/api/opds'.
 
@@ -489,6 +543,11 @@ def _safe_opds_redirect(url: str) -> str:
     Rejects: protocol-relative ``//``, backslash variants, plain ``http://``,
     and relative paths outside ``/v1/api/`` to prevent redirects to ``/admin``.
     Returns an empty string when the value is invalid.
+
+    Every rejection is logged. The allowlist defaults to empty, which blocks
+    *every* ``https://`` client, so "my OPDS reader never gets redirected back"
+    is a configuration error far more often than a code one — the operator needs
+    a log line naming the host they have to add.
     """
     if not url:
         return ""
@@ -500,12 +559,26 @@ def _safe_opds_redirect(url: str) -> str:
         parsed_https = urlparse(url)
         if allowed and parsed_https.netloc in allowed:
             return url
+        logger.warning(
+            "Rejected https redirect_uri: host %r is not in LENNY_OPDS_ALLOWED_HOSTS "
+            "(%s). Add that host to the setting to let this OPDS client complete login.",
+            parsed_https.netloc,
+            "unset — all https:// redirect URIs are blocked" if not allowed
+            else f"{len(allowed)} host(s) allowed",
+        )
         return ""
     parsed = urlparse(url)
     if parsed.scheme or parsed.netloc or url.startswith("//") or "\\" in url:
+        logger.warning(
+            "Rejected redirect_uri %r: only opds://, allowlisted https://, and "
+            "relative /v1/api/ paths are permitted.", url,
+        )
         return ""
     normalized = os.path.normpath(url)
     if not normalized.startswith("/v1/api/"):
+        logger.warning(
+            "Rejected relative redirect_uri %r: must resolve to a path under /v1/api/.", url,
+        )
         return ""
     return normalized
 

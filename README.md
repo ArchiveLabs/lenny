@@ -100,13 +100,34 @@ To switch back to OTP mode from external auth, set lending mode to `ol` or `none
 ## OPDS 2.0 Feed
 - Lenny is powered by [OPDS 2.0 Specs](https://opds.io).Lenny has its own OPDS 2.0 Package `pyopds2_lenny` more on [pyopds2_lenny](https://github.com/ArchiveLabs/pyopds2_lenny) repo.
 
+### Incremental harvesting
+
+`GET /v1/api/opds` supports polling for only what has changed, so an aggregator
+does not have to refetch the whole catalogue on every pass:
+
+```bash
+# everything modified on or after 1 Aug 2026, 100 per page
+curl "https://your-lenny.example.org/v1/api/opds?modified_since=2026-08-01&limit=100"
+```
+
+- `modified_since` accepts an ISO 8601 date (`2026-08-01`) or timestamp
+  (`2026-08-01T12:30:00Z`). No timezone means UTC. Anything else returns `400`.
+- Results are ordered oldest-change-first, so paging is stable and a harvest can
+  resume where it left off.
+- Follow `rel=next` for further pages; it preserves your `modified_since`.
+- Each publication carries `metadata.modified`, so a consumer can advance its own
+  cursor from the feed rather than trusting its clock.
+
+This is the contract Open Library's BookWorm harvester consumes
+([internetarchive/openlibrary#13241](https://github.com/internetarchive/openlibrary/pull/13241)).
+
 ---
 ## Technologies
 
 - **Docker** for deployment and containerization  
 - **nginx** as a reverse proxy  
 - **FastAPI** (Python) as the web & API framework  
-- **Minio** API for storing digital assets  
+- **Garage** API for storing digital assets  
 - **YAML** for configuring library-level rules  
 - **PostgreSQL** for the database  
 - **SQLAlchemy** as the Python ORM
@@ -375,6 +396,16 @@ After this, all future updates are just `make update` — it handles `git pull` 
 > **Note:** Do not run `make configure` during an upgrade — it would overwrite your `.env` with new credentials. The update engine syncs new variables safely without touching your existing configuration.
 
 For details on the update engine architecture, see [docs/plans/update-engine.md](docs/plans/update-engine.md).
+
+### Cleaning up after the S3 → Garage migration
+
+If your install predates Garage, `make update` mirrors your old MinIO bucket into Garage but leaves the old container, volume, and images in place. Once you've verified the migrated Garage bucket has everything, remove them:
+
+```sh
+make cleanup-old-s3
+```
+
+Removes the old `lenny_s3` container, its `lenny_s3_data` volume, and the `minio/minio` / `minio/mc` images used only during migration. This is opt-in — it never runs automatically.
 
 ---
 

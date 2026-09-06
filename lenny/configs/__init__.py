@@ -69,6 +69,11 @@ OPTIONS = {
     'log_level': LOG_LEVEL,
     'reload': os.environ.get('LENNY_PRODUCTION', 'true').lower() == 'false',
     'workers': WORKERS,
+    # Keep `python -m lenny.app` behaving like the container entrypoint in
+    # docker/api/Dockerfile: trust the fronting proxy's X-Forwarded-For, so
+    # request.client.host is the patron rather than the proxy.
+    'proxy_headers': True,
+    'forwarded_allow_ips': os.environ.get('LENNY_FORWARDED_ALLOW_IPS', '*'),
 }
 if SSL_CRT and SSL_KEY:
     OPTIONS['ssl_keyfile'] = SSL_KEY
@@ -89,12 +94,13 @@ DB_URI = (
     'postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}'.format(**DB_CONFIG)
 )            
 
-# MinIO configuration
+# Garage S3 configuration
 S3_CONFIG = {
     'endpoint': os.environ.get('S3_ENDPOINT'),
     'access_key': os.environ.get('S3_ACCESS_KEY'),
     'secret_key': os.environ.get('S3_SECRET_KEY'),
     'secure': os.environ.get('S3_SECURE', 'false').lower() == 'true',
+    'region': os.environ.get('S3_REGION', 'garage'),
 }
 
 # External OAuth / OIDC provider (optional — loaded from auth.env)

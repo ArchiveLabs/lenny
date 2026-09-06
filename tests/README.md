@@ -30,4 +30,4 @@ pip install -r requirements.txt
 
 Test-specific configurations, such as environment variables for testing, can be managed via a `.env.test` file in the root directory, which is loaded by `pytest-env` (if configured in `pytest.ini`).
 
-The tests utilize an in-memory SQLite database to ensure isolation and speed, avoiding the need for external database services like Docker during testing. Mocking is used for external services like S3 (MinIO) to ensure tests are self-contained and reliable.
+The tests utilize an in-memory SQLite database to ensure isolation and speed, avoiding the need for external database services like Docker during testing. Mocking is used for external services like S3 (Garage) to ensure tests are self-contained and reliable.

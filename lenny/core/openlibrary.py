@@ -8,13 +8,25 @@ from lenny.configs import LENNY_HTTP_HEADERS
 logger = logging.getLogger(__name__)
 
 
-def _redact_auth_header(request: httpx.Request) -> None:
-    """Prevent OL S3 keys from appearing in httpx debug logs or error traces."""
-    if request.headers.get("Authorization", "").startswith("LOW "):
-        request.headers["Authorization"] = "LOW [REDACTED]"
+def _redact_auth_header(response: httpx.Response) -> None:
+    """Scrub OL S3 keys from the request record hanging off a completed response,
+    so they cannot surface in httpx logs or exception reprs.
+
+    This MUST stay a ``response`` hook. httpx invokes ``request`` hooks with the
+    live outgoing Request *before* it is transmitted, so mutating the header
+    there does not redact a log line — it redacts the real credential on the
+    wire. Open Library then sees ``Authorization: LOW [REDACTED]``, fails to find
+    a ``:`` to split on, and answers ``missing_or_invalid_authorization`` with
+    HTTP 200, which is why this went unnoticed for so long.
+
+    Redacting after the exchange gets the same protection: by the time anything
+    can log or repr the request, the credential is gone.
+    """
+    if response.request.headers.get("Authorization", "").startswith("LOW "):
+        response.request.headers["Authorization"] = "LOW [REDACTED]"
 
 
-_REDACT_HOOKS = {"request": [_redact_auth_header]}
+_REDACT_HOOKS = {"response": [_redact_auth_header]}
 
 
 def ol_auth_headers() -> Dict[str, str]:
