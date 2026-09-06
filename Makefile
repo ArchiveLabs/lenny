@@ -85,6 +85,42 @@ rebuild:
 redeploy:
 	@bash docker/utils/lenny.sh --redeploy
 
+# ── OAuth 2.0 client administration ──────────────────────────────────────────
+# Registration is open by default, so an operator needs to see who registered
+# and be able to stop one without opening a Python console.
+# usage: make oauth2-register NAME="Open Library" URI=https://openlibrary.org/lenny/callback
+.PHONY: oauth2-register
+oauth2-register:
+	@test -n "$(NAME)" -a -n "$(URI)" || { echo 'usage: make oauth2-register NAME="Open Library" URI=https://…/callback [SCOPE=loans:read] [PUBLIC=1]'; exit 1; }
+	@docker compose -p lenny exec api python3 scripts/oauth2_client.py register "$(NAME)" "$(URI)" $(if $(SCOPE),--scope $(SCOPE)) $(if $(PUBLIC),--public)
+
+# Open Library is the consumer nearly every node wants, so it gets its own
+# targets rather than an incantation. Both are safe to run twice.
+# Optional: URI=https://…/callback overrides OL's callback; ROTATE=1 issues a
+# new secret and retires the old registration along with its tokens.
+.PHONY: ol-connect
+ol-connect:
+	@docker compose -p lenny exec api python3 scripts/oauth2_client.py ol-connect $(if $(URI),--redirect-uri $(URI)) $(if $(ROTATE),--rotate)
+
+.PHONY: ol-disconnect
+ol-disconnect:
+	@docker compose -p lenny exec api python3 scripts/oauth2_client.py ol-disconnect
+
+.PHONY: oauth2-clients
+oauth2-clients:
+	@docker compose -p lenny exec api python3 scripts/oauth2_client.py list
+
+.PHONY: oauth2-disable
+oauth2-disable:
+	@test -n "$(CLIENT)" || { echo "usage: make oauth2-disable CLIENT=<client_id>"; exit 1; }
+	@docker compose -p lenny exec api python3 scripts/oauth2_client.py disable $(CLIENT)
+
+# Deletes codes and tokens that can no longer be used. Safe to run from cron.
+.PHONY: oauth2-sweep
+oauth2-sweep:
+	@docker compose -p lenny exec api python3 scripts/oauth2_client.py sweep
+
+
 .PHONY: stop
 stop:
 	@bash docker/utils/lenny.sh --stop

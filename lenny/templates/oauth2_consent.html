@@ -1,0 +1,66 @@
+{% extends "_base_auth.html" %}
+
+{% block title %}Authorize {{ client_name }} - Lenny{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div style="text-align: center;"><span class="badge badge--oauth">Authorize</span></div>
+  <h1>{{ client_name }} wants access to your library account</h1>
+  <p class="subtitle">Signed in as {{ email }}</p>
+
+  <ul class="scopes">
+    {% for name, description in scopes %}
+    <li><strong>{{ description }}</strong> <code>{{ name }}</code></li>
+    {% endfor %}
+  </ul>
+
+  {#
+    Clients are registered by this library's operator, so the name above was
+    vetted rather than self-asserted. The destination is still worth showing:
+    it is what a patron checks if a registration was ever made in error, and it
+    is the detail that would reveal a mistake nobody else would catch.
+  #}
+  <div class="destination">
+    <span class="destination__label">Sends you to</span>
+    <code class="destination__host">{{ redirect_host }}</code>
+    <p class="destination__warn">
+      This library registered this application. If that address is not one you
+      expect, stop and tell your librarian.
+    </p>
+  </div>
+
+  <p class="subtitle">
+    You can revoke this at any time. {{ client_name }} never sees your password
+    or your one-time codes.
+  </p>
+
+  <form action="/v1/api/oauth2/authorize" method="POST">
+    {# One opaque, signed handle — the request the patron was actually shown. #}
+    <input type="hidden" name="request" value="{{ request_handle }}"/>
+    <button type="submit" name="decision" value="allow" class="btn btn--primary">Allow</button>
+    <button type="submit" name="decision" value="deny" class="btn">Not now</button>
+  </form>
+</div>
+
+<style>
+  .scopes { list-style: none; padding: 0; margin: 20px 0; text-align: left; }
+  .scopes li {
+    padding: 12px 14px; margin-bottom: 8px; border-radius: 8px;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+  }
+  .scopes code { display: block; margin-top: 4px; font-size: 0.8em; opacity: 0.6; }
+  .destination {
+    text-align: left; padding: 12px 14px; margin: 0 0 20px;
+    border-radius: 8px; border: 1px solid rgba(234,179,8,0.35);
+    background: rgba(234,179,8,0.08);
+  }
+  .destination__label {
+    display: block; font-size: 0.72em; letter-spacing: 0.08em;
+    text-transform: uppercase; opacity: 0.75;
+  }
+  .destination__host {
+    display: block; margin: 4px 0 8px; font-size: 1.02em; word-break: break-all;
+  }
+  .destination__warn { margin: 0; font-size: 0.86em; opacity: 0.85; }
+</style>
+{% endblock %}

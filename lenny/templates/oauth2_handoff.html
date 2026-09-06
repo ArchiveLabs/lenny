@@ -1,0 +1,20 @@
+{% extends "_base_auth.html" %}
+
+{% block title %}Returning to {{ client_name }} - Lenny{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div style="text-align: center;"><span class="badge badge--oauth">Authorized</span></div>
+  <h1>Returning you to {{ client_name }}</h1>
+  <p class="subtitle">
+    If nothing happens, use the button below to finish signing in.
+  </p>
+  {# A browser will not reliably redirect into a private-use URI scheme, and
+     some refuse outright, so the link is offered rather than followed. #}
+  <a class="btn btn--primary" href="{{ target }}">Open {{ client_name }}</a>
+</div>
+<script>
+  // Best effort: most platforms honour this for a registered scheme.
+  window.location.href = {{ target | tojson }};
+</script>
+{% endblock %}

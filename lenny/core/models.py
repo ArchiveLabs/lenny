@@ -168,8 +168,11 @@ class Item(Base):
     def is_encrypted_item(self):
         return self.encrypted
 
-    def borrow(self, email: str):
+    def borrow(self, email: str, hashed: bool = False):
         """Borrow a book for a patron.
+
+        `hashed=True` means *email* is already a `hash_email()` digest — the
+        OAuth resource endpoints hold only the hash, never the address.
 
         Serializes concurrent borrow attempts for the same item by acquiring a
         row-level lock (SELECT FOR UPDATE) on the Item row before any check.
@@ -190,7 +193,7 @@ class Item(Base):
 
         from lenny import configs
 
-        hashed_email = hash_email(email)
+        hashed_email = email if hashed else hash_email(email)
 
         # Acquire row-level lock on the Item. Concurrent borrow() calls for the
         # same item block here until the current transaction commits/rolls back.
