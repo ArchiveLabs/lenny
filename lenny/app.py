@@ -10,10 +10,10 @@ from lenny.routes import api
 from lenny.routes import oauth as oauth_routes
 from lenny.routes import oauth2 as oauth2_routes
 from lenny.configs import FORWARDED_ALLOW_IPS, OPTIONS
-
-_log = logging.getLogger(__name__)
 from lenny.core.db import session as db_session
 from lenny import __version__ as VERSION
+
+_log = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Lenny API",
@@ -48,6 +48,19 @@ async def cleanup_db_session(request, call_next):
 # the first request that proves the chain is being resolved wrongly: with a
 # correct configuration `request.client.host` is the RIGHTMOST entry of the
 # header nginx built with $proxy_add_x_forwarded_for.
+#
+# Ordering note, because "middleware ordering" here is really two separate
+# things and only one of them is about this file. uvicorn applies
+# ProxyHeadersMiddleware in `Config.load` — `ProxyHeadersMiddleware(loaded_app,
+# trusted_hosts=...)` — so it wraps the ENTIRE Starlette stack from outside.
+# `scope["client"]` is therefore already resolved before any middleware below
+# runs, and where this sits relative to the others does not affect what it sees.
+# Add-order only decides nesting AMONG Starlette's own middleware (that is what
+# makes a CORS override need to be added last, to wrap outermost).
+#
+# One warning per worker process, so the default --workers=3 can emit up to
+# three. That is intended: this is a startup-class diagnostic, not per-request
+# logging.
 _xff_warned = False
 
 
