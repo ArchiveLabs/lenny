@@ -196,6 +196,143 @@ def test_container_entrypoint_has_no_wildcard_default():
     assert "LENNY_FORWARDED_ALLOW_IPS:-}" not in cmd, "empty default trusts no proxy"
 
 
+# ---------------------------------------------------------------------------
+# Middleware ordering: the warning must observe the RESOLVED client
+# ---------------------------------------------------------------------------
+
+def _client_through_proxy(trusted, peer: str = NGINX_PEER):
+    """Drive the real app the way uvicorn does.
+
+    `uvicorn.config.Config.load` wraps the loaded app as
+    `ProxyHeadersMiddleware(self.loaded_app, trusted_hosts=...)`, i.e. OUTSIDE
+    every Starlette/FastAPI middleware. So the app's own middleware sees a
+    `scope["client"]` that has already been resolved. This pins that assumption
+    rather than trusting it — if uvicorn ever moved the wrap inside, the warning
+    would silently start reading the raw peer and fire on every request.
+    """
+    from unittest.mock import patch
+
+    from fastapi.testclient import TestClient
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    with patch("lenny.core.db.init"), patch("lenny.core.db.create_engine"):
+        from lenny.app import app
+
+        proxied = ProxyHeadersMiddleware(app, trusted_hosts=trusted)
+
+        # TestClient's peer is the literal string "testclient", which is in no
+        # trusted range — ProxyHeadersMiddleware would ignore the header outright
+        # and the test would measure nothing. Rewrite the peer OUTSIDE the
+        # middleware so it sees a connection arriving from inside the Compose
+        # network, the way nginx's actually does.
+        async def with_peer(scope, receive, send):
+            if scope["type"] == "http":
+                scope = {**scope, "client": (peer, 51234)}
+            await proxied(scope, receive, send)
+
+        return TestClient(with_peer)
+
+
+def _reset_warned():
+    import lenny.app as lenny_app
+
+    lenny_app._xff_warned = False
+    return lenny_app
+
+
+def test_no_warning_when_the_chain_resolves_correctly(caplog):
+    """A correctly configured instance must stay quiet, or the signal is noise."""
+    import logging
+
+    from lenny.configs import FORWARDED_ALLOW_IPS
+
+    lenny_app = _reset_warned()
+    client = _client_through_proxy(FORWARDED_ALLOW_IPS)
+    with caplog.at_level(logging.WARNING, logger="lenny.app"):
+        client.get("/v1/api/health", headers={"x-forwarded-for": f"{SPOOFED}, {REAL_CLIENT}"})
+
+    assert "X-Forwarded-For is not being resolved" not in caplog.text
+    assert lenny_app._xff_warned is False
+
+
+def test_warns_when_the_range_is_too_broad(caplog):
+    """'*' resolves to the first hop — the caller's own value. Must be loud."""
+    import logging
+
+    lenny_app = _reset_warned()
+    client = _client_through_proxy("*")
+    with caplog.at_level(logging.WARNING, logger="lenny.app"):
+        client.get("/v1/api/health", headers={"x-forwarded-for": f"{SPOOFED}, {REAL_CLIENT}"})
+
+    assert "X-Forwarded-For is not being resolved" in caplog.text
+    assert lenny_app._xff_warned is True
+
+
+def test_warns_when_the_range_is_too_narrow(caplog):
+    """Trusting nothing collapses every patron onto the proxy. Also must be loud."""
+    import logging
+
+    lenny_app = _reset_warned()
+    client = _client_through_proxy("10.255.255.255")
+    with caplog.at_level(logging.WARNING, logger="lenny.app"):
+        client.get("/v1/api/health", headers={"x-forwarded-for": f"{SPOOFED}, {REAL_CLIENT}"})
+
+    assert "X-Forwarded-For is not being resolved" in caplog.text
+
+
+def test_warning_fires_only_once_per_process(caplog):
+    """Module-level flag: one warning per worker process, not per request.
+
+    The container runs `--workers=3` by default, so an operator may see up to
+    three. That is intended — it is a startup-class diagnostic, not a per-request
+    log — and this test exists so a reviewer does not read it as a bug.
+    """
+    import logging
+
+    _reset_warned()
+    client = _client_through_proxy("*")
+    with caplog.at_level(logging.WARNING, logger="lenny.app"):
+        for _ in range(5):
+            client.get("/v1/api/health",
+                       headers={"x-forwarded-for": f"{SPOOFED}, {REAL_CLIENT}"})
+
+    assert caplog.text.count("X-Forwarded-For is not being resolved") == 1
+
+
+def test_untrusted_peer_cannot_spoof_at_all(caplog):
+    """A caller reaching uvicorn directly (not via nginx) has its header ignored
+    outright — the peer wins. Port 1337 is never published, so this is defence
+    in depth, but it is the property that makes the bounded range meaningful."""
+    import logging
+
+    from lenny.configs import FORWARDED_ALLOW_IPS
+
+    _reset_warned()
+    outsider = "198.51.100.77"
+    client = _client_through_proxy(FORWARDED_ALLOW_IPS, peer=outsider)
+    with caplog.at_level(logging.WARNING, logger="lenny.app"):
+        resp = client.get("/v1/api/health",
+                          headers={"x-forwarded-for": f"{SPOOFED}, {REAL_CLIENT}"})
+
+    assert resp.status_code == 200
+    # The warning is correct here: the chain genuinely was not honoured.
+    assert "X-Forwarded-For is not being resolved" in caplog.text
+
+
+def test_no_warning_without_a_forwarded_header(caplog):
+    """Direct requests (health checks, container probes) must not warn."""
+    import logging
+
+    from lenny.configs import FORWARDED_ALLOW_IPS
+
+    _reset_warned()
+    client = _client_through_proxy(FORWARDED_ALLOW_IPS)
+    with caplog.at_level(logging.WARNING, logger="lenny.app"):
+        client.get("/v1/api/health")
+
+    assert "X-Forwarded-For is not being resolved" not in caplog.text
+
+
 def test_configure_templates_the_variable_into_env():
     """A fresh install must get an explicit value written to .env, not inherit
     whatever the entrypoint falls back to."""
