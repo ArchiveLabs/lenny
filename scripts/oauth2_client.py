@@ -20,6 +20,7 @@ consumers are a known, curated set rather than a long tail. See #209.
 
 import argparse
 import os
+import re
 import sys
 from urllib.parse import urlparse
 
@@ -62,6 +63,32 @@ def _node_credentials():
     return None
 
 
+def _provider_name() -> str:
+    """This node's `provider_name` for Open Library's feed registry.
+
+    Not cosmetic, and not a hostname. Open Library uses `provider_name` as both
+    the `identifiers` key and the `source_records` prefix of every edition a
+    feed touches, and its import validator only accepts a record when the two
+    agree. A hostname would mint a dot-bearing identifier key —
+    `identifiers: {"example.org": [...]}` — which is not the shape Open Library
+    identifier keys take, and it would be permanent in edition data.
+
+    So: a `lenny_` prefix, which lets Open Library recognise the family, plus
+    the full host slugified. The TLD is kept deliberately, because
+    `example.org` and `example.com` are different libraries.
+
+    `OL_PROVIDER_NAME` overrides it, for a node whose name Open Library has
+    already agreed on.
+    """
+    from lenny.core.api import LennyAPI
+
+    if override := os.environ.get("OL_PROVIDER_NAME"):
+        return override
+    host = urlparse(LennyAPI.make_url("")).hostname or ""
+    slug = re.sub(r"[^a-z0-9]+", "_", host.lower()).strip("_")
+    return f"lenny_{slug}" if slug else "lenny"
+
+
 def _register_with_openlibrary(client, secret, redirect_uri) -> tuple[bool, str]:
     """Tell Open Library this node exists and how to talk to it.
 
@@ -83,11 +110,14 @@ def _register_with_openlibrary(client, secret, redirect_uri) -> tuple[bool, str]
         "OL_FEED_REGISTRY_URL",
         f"{configs.OTP_SERVER.rstrip('/')}/api/feed-registry")
     payload = {
-        "provider_name": urlparse(LennyAPI.make_url("")).hostname,
+        "provider_name": _provider_name(),
         "feed_type": "opds",
         "url": LennyAPI.make_url("/v1/api/opds"),
         "id_strategy": "self_link",
         "oauth": {
+            # The node's identity lives here, not in `provider_name`: that one
+            # is a slug baked into edition data, this one is the address a
+            # consumer actually talks to.
             "issuer": LennyAPI.make_url("").rstrip("/"),
             "client_id": client.client_id,
             "client_secret": secret,
