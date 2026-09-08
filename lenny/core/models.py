@@ -8,7 +8,9 @@
     :license: see LICENSE for more details
 """
 
-from sqlalchemy import Column, String, Boolean, BigInteger, Integer, DateTime, Enum as SQLAlchemyEnum, Index, or_
+import hashlib
+
+from sqlalchemy import Column, String, Boolean, BigInteger, Integer, DateTime, Enum as SQLAlchemyEnum, Index, or_, text
 from sqlalchemy.sql import func
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
@@ -30,6 +32,24 @@ class FormatEnum(enum.Enum):
     EPUB = 1
     PDF = 2
     EPUB_PDF = 3
+
+def _lock_patron(hashed_email: str) -> None:
+    """Hold an exclusive lock on one patron for the rest of this transaction.
+
+    A Postgres advisory lock, because the thing being protected is a *count*
+    across rows that may not exist yet, which row locks cannot express. The key
+    is derived from the patron hash rather than passed through `hashtext()`, so
+    it does not depend on an undocumented server internal.
+
+    A no-op on SQLite, which serialises writers anyway, and where the test
+    suite runs on a single connection.
+    """
+    if db.bind is None or db.bind.dialect.name != "postgresql":
+        return
+    key = int.from_bytes(
+        hashlib.sha256(hashed_email.encode("utf-8")).digest()[:8], "big", signed=True)
+    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+
 
 class Item(Base):
     __tablename__ = 'items'
@@ -168,8 +188,11 @@ class Item(Base):
     def is_encrypted_item(self):
         return self.encrypted
 
-    def borrow(self, email: str):
+    def borrow(self, email: str, hashed: bool = False):
         """Borrow a book for a patron.
+
+        `hashed=True` means *email* is already a `hash_email()` digest — the
+        OAuth resource endpoints hold only the hash, never the address.
 
         Serializes concurrent borrow attempts for the same item by acquiring a
         row-level lock (SELECT FOR UPDATE) on the Item row before any check.
@@ -190,7 +213,25 @@ class Item(Base):
 
         from lenny import configs
 
-        hashed_email = hash_email(email)
+        hashed_email = email if hashed else hash_email(email)
+
+        # Serialise this patron's concurrent borrows before anything is counted.
+        #
+        # The Item lock below is what stops one copy going to two patrons, and
+        # it does nothing for the per-patron limit: N borrows of N *different*
+        # editions take N different Item locks, never contend, and all read the
+        # same stale count at step 2. There is no row to lock instead — a patron
+        # at zero loans has no loan rows for FOR UPDATE to hold — so the lock has
+        # to be keyed on the patron rather than on a row.
+        #
+        # Every exit below MUST end the transaction. `db` is a thread-local
+        # scoped_session, and FastAPI's async handlers share one thread, so
+        # concurrent requests on a worker share one connection. A borrow that
+        # returns or raises still holding the item row lock leaves the next
+        # request taking its advisory lock on that same transaction -- the
+        # opposite order, and a real deadlock cycle: ~4% of contended borrows
+        # returned HTTP 500 before the rollbacks below were added.
+        _lock_patron(hashed_email)
 
         # Acquire row-level lock on the Item. Concurrent borrow() calls for the
         # same item block here until the current transaction commits/rolls back.
@@ -202,6 +243,7 @@ class Item(Base):
 
         # 1. Idempotent: patron already has an active loan for this item.
         if existing := Loan.exists(self.id, hashed_email, hashed=True):
+            db.rollback()          # release both locks; nothing was written
             return existing
 
         # 2. Per-patron concurrent loan limit.
@@ -211,6 +253,7 @@ class Item(Base):
         ).count()
         loan_limit = configs.get_loan_limit()
         if patron_active >= loan_limit:
+            db.rollback()
             raise PatronLoanLimitError(
                 f"Loan limit of {loan_limit} reached. Return a book before borrowing another."
             )
@@ -221,6 +264,7 @@ class Item(Base):
             *Loan._active_filters(),
         ).count()
         if item_active >= self.num_lendable_total:
+            db.rollback()
             raise BookUnavailableError("No copies available for borrowing.")
 
         return Loan.create(self.id, hashed_email, hashed=True)
