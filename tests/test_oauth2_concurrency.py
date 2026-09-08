@@ -349,3 +349,30 @@ class TestPerPatronLoanLimit:
         assert sum(1 for r in results if r) == limit, (
             f"{sum(1 for r in results if r)} borrows reported success but "
             f"{active} loans exist")
+
+    def test_reborrowing_the_same_item_returns_a_usable_loan(self, monkeypatch):
+        """The idempotent path releases both locks before returning, and
+        `db.rollback()` expires the object it hands back — so the caller's
+        `loan.due_date` has to survive a refresh. Nothing else covers this
+        path, which is why changing it needed a test of its own."""
+        from lenny import configs
+        from lenny.core.models import FormatEnum, Item, Loan
+
+        monkeypatch.setattr(configs, "get_loan_limit", lambda: 3)
+        monkeypatch.setattr(configs, "get_loan_duration_days", lambda: 14)
+
+        item = Item(openlibrary_edition=91234, encrypted=True,
+                    formats=FormatEnum.PDF)
+        db.add(item)
+        db.commit()
+
+        first = item.borrow(PATRON, hashed=True)
+        first_id = first.id
+        again = item.borrow(PATRON, hashed=True)
+
+        assert again.id == first_id, "a second borrow created a second loan"
+        assert again.due_date is not None, (
+            "the returned loan was left expired and unusable by the rollback")
+        assert db.query(Loan).filter(
+            Loan.patron_email_hash == PATRON,
+            *Loan._active_filters()).count() == 1
