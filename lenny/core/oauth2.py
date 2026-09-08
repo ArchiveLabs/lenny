@@ -81,11 +81,8 @@ _PK = BigInteger().with_variant(Integer, "sqlite")
 
 
 class GrantRevoked(Exception):
-    """Raised when a token is requested against a grant that reuse killed.
-
-    A distinct type because the caller must turn it into `invalid_grant`, not
-    into a token. See `AccessToken.issue`.
-    """
+    """A token was requested against a grant that reuse killed. See
+    `AccessToken.issue`; callers turn this into `invalid_grant`."""
 
 
 def _now() -> datetime.datetime:
@@ -145,7 +142,7 @@ def acceptable_redirect(uri: str) -> bool:
     # '#', where it never reaches the client's server. Control characters are
     # simply not URI syntax. A bare trailing '#' parses to an empty fragment,
     # which is falsy, so it needs testing on the raw string.
-    if parsed.fragment or "#" in uri:
+    if "#" in uri:
         return False
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in uri):
         return False
@@ -457,18 +454,12 @@ class AccessToken(Base):
     authorization_code_id = Column(BigInteger, nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     refresh_expires_at = Column(DateTime(timezone=True), nullable=True)
-    # The absolute end of the grant this token descends from, carried forward
-    # unchanged across every rotation. Kept on the token rather than read from
-    # the code each time so that sweeping the code cannot quietly make a grant
-    # immortal again.
-    grant_expires_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=func.now())
 
     @classmethod
     def issue(cls, *, client_id: str, patron_email_hash: str, scope: str,
               authorization_code_id: Optional[int] = None,
-              grant_expires_at: Optional[datetime.datetime] = None,
               ) -> tuple[str, str, "AccessToken"]:
         """Mint an access/refresh pair. Returns `(access, refresh, row)`.
 
@@ -490,21 +481,44 @@ class AccessToken(Base):
             # which hands roughly half of all detected replays a working token
             # for the full access-token lifetime. This lock and the INSERT below
             # must stay in one transaction; do not commit between them.
+            # populate_existing() is not optional. `redeem` already loaded
+            # this row, and the route reads its attributes to build our
+            # arguments, so it is live in the session's identity map. Without
+            # this, SQLAlchemy takes the lock and then hands back the cached
+            # instance, discarding the columns it just locked and read -- so
+            # the check below sees the PRE-revocation value and the lock
+            # accomplishes nothing. `Item.borrow` guards the same way
+            # (models.py) for the same reason.
             grant = db.query(AuthorizationCode).filter(
                 AuthorizationCode.id == authorization_code_id
-            ).with_for_update().first()
+            ).with_for_update().populate_existing().first()
             if grant is not None and grant.grant_revoked_at is not None:
-                db.commit()          # release the lock; we are issuing nothing
+                db.rollback()        # release the lock; we are issuing nothing
                 raise GrantRevoked("This grant was revoked after a replay was detected.")
 
-        if grant_expires_at is None and grant is not None:
-            grant_expires_at = (_as_utc(grant.created_at or _now())
-                                + datetime.timedelta(seconds=GRANT_MAX_TTL))
+        # The ceiling is recomputed from the grant on every rotation rather
+        # than stored and carried: `sweep_expired` keeps a code for as long as
+        # any token references it, and nothing else deletes one, so the row is
+        # always here to read. Storing it would need a column, a migration and
+        # a carry-through, to hold a value we can derive in one line.
+        #
+        # A grant whose code was swept by the OLD sweep gets no ceiling and
+        # rotates as before. That is bounded to rows that already exist and
+        # cannot recur.
+        ceiling = None
+        if grant is not None:
+            ceiling = (_as_utc(grant.created_at or _now())
+                       + datetime.timedelta(seconds=GRANT_MAX_TTL))
 
-        # The refresh token may not outlive the consent it descends from.
+        # Neither token may outlive the consent it descends from. Capping the
+        # access token matters as much as the refresh token: without it a pair
+        # minted seconds before the ceiling stays usable for the next hour,
+        # which is not what "expires after a year" means to a patron.
+        access_expiry = _now() + datetime.timedelta(seconds=ACCESS_TOKEN_TTL)
         refresh_expiry = _now() + datetime.timedelta(seconds=REFRESH_TOKEN_TTL)
-        if grant_expires_at is not None:
-            refresh_expiry = min(refresh_expiry, _as_utc(grant_expires_at))
+        if ceiling is not None:
+            access_expiry = min(access_expiry, ceiling)
+            refresh_expiry = min(refresh_expiry, ceiling)
 
         access, refresh = _mint(32), _mint(32)
         row = cls(
@@ -514,9 +528,8 @@ class AccessToken(Base):
             patron_email_hash=patron_email_hash,
             scope=scope,
             authorization_code_id=authorization_code_id,
-            expires_at=_now() + datetime.timedelta(seconds=ACCESS_TOKEN_TTL),
+            expires_at=access_expiry,
             refresh_expires_at=refresh_expiry,
-            grant_expires_at=grant_expires_at,
         )
         db.add(row)
         db.commit()
@@ -579,9 +592,6 @@ class AccessToken(Base):
                 patron_email_hash=row.patron_email_hash,
                 scope=row.scope,
                 authorization_code_id=row.authorization_code_id,
-                # Carried, not recomputed: the ceiling belongs to the original
-                # consent, so rotation must not push it forward.
-                grant_expires_at=row.grant_expires_at,
             )
         except GrantRevoked:
             # A concurrent caller detected a replay of this family between our
@@ -674,13 +684,19 @@ def sweep_expired(older_than_days: int = 1) -> int:
     sweeping on access expiry would break every legitimate refresh.
 
     A code outlives its own expiry, and the order below is what enforces it:
-    tokens go first, then only those codes nothing descends from any more. A
-    code's *expiry* is not the end of its usefulness — reuse detection reads
-    the spent code to revoke the tokens it produced, and `AccessToken.issue`
-    locks it to serialise against that revocation. Deleting a code while its
-    tokens can still be refreshed turned a detected replay into a plain
-    "invalid code" and reopened the race it exists to close, for the 89 days
-    between the old one-day cutoff and the refresh token's death.
+    tokens go first, then only those codes nothing descends from any more.
+
+    The reason is the refresh path, not the code path. `refresh` calls
+    `revoke_for_code` on reuse, which needs the code row present to set
+    `grant_revoked_at`; and `AccessToken.issue` locks that same row to
+    serialise against it. With the row gone, `issue` finds no grant, checks
+    nothing, and mints a live token -- measured at 9 out of 10 refresh
+    replays. Since a refresh token lives ninety days, a one-day cutoff left
+    that open for the other eighty-nine.
+
+    Code replay does not come into it: `redeem` returns "code expired" before
+    it ever reaches the reuse claim, so that tripwire only exists for the
+    code's 60-second life and no sweep cutoff was ever near it.
 
     Returns the number of rows deleted.
     """
@@ -689,7 +705,6 @@ def sweep_expired(older_than_days: int = 1) -> int:
         AccessToken.refresh_expires_at != None,  # noqa: E711
         AccessToken.refresh_expires_at < cutoff,
     ).delete(synchronize_session=False)
-    db.flush()
     still_referenced = db.query(AccessToken.authorization_code_id).filter(
         AccessToken.authorization_code_id != None,  # noqa: E711
     )

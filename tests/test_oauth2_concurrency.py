@@ -176,6 +176,56 @@ class TestAuthorizationCodeIsSingleUse:
             f"{len(live)} token(s) survived a detected code replay")
 
 
+    def test_issue_rereads_the_grant_it_locked(self, client):
+        """The ordering the barrier test cannot produce.
+
+        `run_concurrently` releases both callers at `redeem`, and in-process
+        the winner always reaches `issue()` before the loser's revocation
+        commits — so the loser sweeps the winner's token afterwards and the
+        dangerous interleaving never happens. It passed 12/12 against a server
+        leaking 28%.
+
+        The order that matters is: winner claims, LOSER REVOKES AND COMMITS,
+        winner issues. Driving it deterministically needs no threads, only a
+        second connection — and it catches the failure the barrier misses,
+        which is that `redeem` leaves the grant in the session's identity map,
+        so a `with_for_update()` without `populate_existing()` takes the lock
+        and then hands back the stale cached row.
+        """
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import scoped_session, sessionmaker
+
+        verifier, challenge = pkce()
+        code = AuthorizationCode.issue(
+            client_id=client.client_id, patron_email_hash=PATRON,
+            redirect_uri=REDIRECT, scope="loans:read", code_challenge=challenge)
+
+        row, err = AuthorizationCode.redeem(
+            code, client_id=client.client_id, redirect_uri=REDIRECT,
+            code_verifier=verifier)
+        assert err is None
+
+        # What routes/oauth2.py does to build issue()'s arguments. This is the
+        # step that un-expires the instance, and therefore the whole bug.
+        _ = (row.patron_email_hash, row.scope, row.id)
+
+        # The loser, on its own connection: detects the replay and revokes.
+        other = scoped_session(sessionmaker(bind=create_engine(
+            engine.url.render_as_string(hide_password=False))))
+        other.execute(text(
+            "UPDATE oauth_authorization_codes SET grant_revoked_at = now() "
+            "WHERE id = :i"), {"i": row.id})
+        other.commit()
+        other.remove()
+
+        # The winner now issues. It must refuse.
+        with pytest.raises(oauth2.GrantRevoked):
+            AccessToken.issue(
+                client_id=client.client_id,
+                patron_email_hash=row.patron_email_hash,
+                scope=row.scope, authorization_code_id=row.id)
+
+
 class TestRefreshTokenRotation:
     def test_a_refresh_token_cannot_rotate_twice_concurrently(self, client):
         """Rotation only protects anyone if a stolen refresh token and the
@@ -290,3 +340,12 @@ class TestPerPatronLoanLimit:
             Loan.patron_email_hash == PATRON, *Loan._active_filters()).count()
         assert active <= limit, (
             f"{active} concurrent loans for a patron limited to {limit}")
+        # Without this the test is green when EVERY borrow failed — a deadlock,
+        # a leaked lock, an exception storm all leave `active` at 0. The limit
+        # has to be reached, not just not exceeded.
+        assert active == limit, (
+            f"only {active} of {limit} allowed loans succeeded; the lock is "
+            "blocking legitimate borrows, not just illegitimate ones")
+        assert sum(1 for r in results if r) == limit, (
+            f"{sum(1 for r in results if r)} borrows reported success but "
+            f"{active} loans exist")

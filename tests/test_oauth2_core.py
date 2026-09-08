@@ -691,67 +691,70 @@ class TestOpenLibraryToggle:
 class TestGrantLifetime:
     """One "Allow" click must not grant access forever.
 
-    `issue` renews `refresh_expires_at` to now+90d on every rotation, so a
-    consumer that keeps refreshing holds the grant indefinitely. The ceiling is
-    anchored to the authorization code and carried across rotations, never
-    recomputed — otherwise rotation would push it forward and it would enforce
-    nothing.
+    `issue` renews `refresh_expires_at` to now+90d on every rotation, so
+    without a ceiling a consumer that keeps refreshing holds the grant
+    indefinitely. The ceiling is derived from the authorization code's
+    `created_at` each time rather than stored, which needs no column: the
+    sweep keeps a code for as long as any token references it.
     """
 
-    def test_a_grant_gets_a_ceiling_from_its_authorization_code(self, client):
+    def _grant(self, client, *, created_at=None):
         _, challenge = pkce()
         code = issue_code(client, challenge=challenge)
         row, err = AuthorizationCode.redeem(
             code, client_id=client.client_id, redirect_uri=REDIRECT,
             code_verifier="a" * 64)
         assert err is None
-        _, _, tok = AccessToken.issue(
-            client_id=client.client_id, patron_email_hash=PATRON,
-            scope="loans:read", authorization_code_id=row.id)
-        assert tok.grant_expires_at is not None
+        if created_at is not None:
+            row.created_at = created_at
+            db.add(row)
+            db.commit()
+        return row
 
-    def test_rotation_carries_the_ceiling_rather_than_extending_it(self, client):
+    def test_rotation_does_not_push_the_ceiling_forward(self, client):
         """The regression that matters: if the ceiling moves with each
-        rotation, it is not a ceiling."""
-        _, challenge = pkce()
-        code = issue_code(client, challenge=challenge)
-        row, _ = AuthorizationCode.redeem(
-            code, client_id=client.client_id, redirect_uri=REDIRECT,
-            code_verifier="a" * 64)
+        rotation it is not a ceiling. Anchor the grant a year less a day ago,
+        so a full-length refresh token would visibly overshoot."""
+        row = self._grant(
+            client, created_at=oauth2._now() - datetime.timedelta(days=364))
         _, refresh, first = AccessToken.issue(
             client_id=client.client_id, patron_email_hash=PATRON,
             scope="loans:read", authorization_code_id=row.id)
-        ceiling = oauth2._as_utc(first.grant_expires_at)
-        # Without this the comparison below is vacuous: if ceilings were never
-        # set at all, both sides are None and the test passes while enforcing
-        # nothing. Caught by reverting the fix and watching this stay green.
-        assert ceiling is not None
+        ceiling = (oauth2._as_utc(row.created_at)
+                   + datetime.timedelta(seconds=oauth2.GRANT_MAX_TTL))
+        assert oauth2._as_utc(first.refresh_expires_at) <= ceiling
 
         issued, err = AccessToken.refresh(refresh, client_id=client.client_id)
         assert err is None
-        assert oauth2._as_utc(issued[2].grant_expires_at) == ceiling
+        assert oauth2._as_utc(issued[2].refresh_expires_at) <= ceiling, (
+            "rotation extended the grant past its ceiling")
 
     def test_a_refresh_token_may_not_outlive_its_grant(self, client):
         """A rotation near the ceiling gets a truncated window, not a fresh 90
         days. This is what actually ends the grant: once `refresh_expires_at`
-        is capped at the ceiling, the existing expiry check refuses the next
-        rotation on its own."""
-        past = oauth2._now() - datetime.timedelta(days=364)
-        _, challenge = pkce()
-        code = issue_code(client, challenge=challenge)
-        row, _ = AuthorizationCode.redeem(
-            code, client_id=client.client_id, redirect_uri=REDIRECT,
-            code_verifier="a" * 64)
-        row.created_at = past
-        db.add(row)
-        db.commit()
-
+        is capped, the existing expiry check refuses the next rotation."""
+        row = self._grant(
+            client, created_at=oauth2._now() - datetime.timedelta(days=364))
         _, _, tok = AccessToken.issue(
             client_id=client.client_id, patron_email_hash=PATRON,
             scope="loans:read", authorization_code_id=row.id)
         remaining = oauth2._as_utc(tok.refresh_expires_at) - oauth2._now()
         assert remaining < datetime.timedelta(days=2), (
             "a grant one day from its ceiling minted a full-length refresh token")
+
+    def test_the_access_token_is_capped_by_the_ceiling_too(self, client):
+        """Capping only the refresh token leaves an access token minted just
+        before the ceiling usable for another hour past it, which is not what
+        "expires after a year" means to a patron."""
+        row = self._grant(
+            client,
+            created_at=(oauth2._now()
+                        - datetime.timedelta(seconds=oauth2.GRANT_MAX_TTL - 5)))
+        access, _, tok = AccessToken.issue(
+            client_id=client.client_id, patron_email_hash=PATRON,
+            scope="loans:read", authorization_code_id=row.id)
+        assert tok.expires_in <= 5, (
+            f"access token outlives the ceiling by {tok.expires_in}s")
 
 
 class TestSweepKeepsTheReuseTripwire:

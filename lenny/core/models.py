@@ -223,6 +223,14 @@ class Item(Base):
         # same stale count at step 2. There is no row to lock instead — a patron
         # at zero loans has no loan rows for FOR UPDATE to hold — so the lock has
         # to be keyed on the patron rather than on a row.
+        #
+        # Every exit below MUST end the transaction. `db` is a thread-local
+        # scoped_session, and FastAPI's async handlers share one thread, so
+        # concurrent requests on a worker share one connection. A borrow that
+        # returns or raises still holding the item row lock leaves the next
+        # request taking its advisory lock on that same transaction -- the
+        # opposite order, and a real deadlock cycle: ~4% of contended borrows
+        # returned HTTP 500 before the rollbacks below were added.
         _lock_patron(hashed_email)
 
         # Acquire row-level lock on the Item. Concurrent borrow() calls for the
@@ -235,6 +243,7 @@ class Item(Base):
 
         # 1. Idempotent: patron already has an active loan for this item.
         if existing := Loan.exists(self.id, hashed_email, hashed=True):
+            db.rollback()          # release both locks; nothing was written
             return existing
 
         # 2. Per-patron concurrent loan limit.
@@ -244,6 +253,7 @@ class Item(Base):
         ).count()
         loan_limit = configs.get_loan_limit()
         if patron_active >= loan_limit:
+            db.rollback()
             raise PatronLoanLimitError(
                 f"Loan limit of {loan_limit} reached. Return a book before borrowing another."
             )
@@ -254,6 +264,7 @@ class Item(Base):
             *Loan._active_filters(),
         ).count()
         if item_active >= self.num_lendable_total:
+            db.rollback()
             raise BookUnavailableError("No copies available for borrowing.")
 
         return Loan.create(self.id, hashed_email, hashed=True)

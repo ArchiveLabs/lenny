@@ -197,9 +197,11 @@ presenting the token is never the patron's.
 The absolute grant lifetime is the one that is not obvious. Rotation renews the
 refresh token's 90 days on every use, so without a ceiling a single "Allow"
 click would grant access for as long as the consumer kept refreshing —
-indefinitely. The ceiling is anchored to the authorization code and carried
-across every rotation rather than recomputed, and it is stored on the token so
-that sweeping the code cannot quietly make a grant immortal again.
+indefinitely. It is derived on every rotation from the authorization code's
+`created_at`, which costs no column and no migration: the sweep keeps a code
+for as long as any token references it, so the row is always there to read.
+Both tokens are capped by it, not just the refresh token — otherwise a pair
+minted just before the ceiling stays usable for another hour.
 
 ---
 
@@ -261,12 +263,11 @@ Two more things worth knowing:
   ```
 
   The order is deliberate: tokens go first, then only those codes nothing
-  descends from any more. A code's expiry is not the end of its usefulness —
-  reuse detection reads a *spent* code to revoke the tokens it produced, and
-  `issue` locks it to serialise against that revocation. Deleting a code while
-  its tokens can still be refreshed turned a detected replay into a plain
-  "invalid code" and reopened the race the lock exists to close, for the 89
-  days between the old one-day cutoff and the refresh token's death. Token rows
+  descends from any more. `revoke_for_code` needs the code row to mark a grant
+  revoked, and `issue` locks that same row to serialise against it — so
+  deleting a code while its tokens can still be refreshed left 9 out of 10
+  refresh replays with a live token. A refresh token lives ninety days, so the
+  old one-day cutoff left that open for the other eighty-nine. Token rows
   survive until their refresh token dies too, since an access token expires in
   an hour while its refresh token lives ninety days.
 
