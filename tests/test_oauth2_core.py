@@ -722,6 +722,10 @@ class TestGrantLifetime:
             client_id=client.client_id, patron_email_hash=PATRON,
             scope="loans:read", authorization_code_id=row.id)
         ceiling = oauth2._as_utc(first.grant_expires_at)
+        # Without this the comparison below is vacuous: if ceilings were never
+        # set at all, both sides are None and the test passes while enforcing
+        # nothing. Caught by reverting the fix and watching this stay green.
+        assert ceiling is not None
 
         issued, err = AccessToken.refresh(refresh, client_id=client.client_id)
         assert err is None
