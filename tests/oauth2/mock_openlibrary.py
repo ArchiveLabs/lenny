@@ -10,7 +10,7 @@ Credentials come from the node's operator (`make oauth2-register`), which is
 the trust decision a library makes rather than something a consumer helps
 itself to.
 
-    python scripts/mock_openlibrary.py --lenny http://127.0.0.1:8080
+    python tests/oauth2/mock_openlibrary.py --lenny http://127.0.0.1:8080
 
 Run it against a Lenny with a patron session available. It plays every role OL
 would: a confidential client with its own credentials, a redirect endpoint that

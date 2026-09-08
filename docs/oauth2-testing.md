@@ -67,7 +67,7 @@ print(json.dumps({"publications": len(pubs), "records": len(records),
 Then pass it to the consumer, which borrows what the harvest found:
 
 ```bash
-python scripts/mock_openlibrary.py --lenny http://127.0.0.1:8097 \
+python tests/oauth2/mock_openlibrary.py --lenny http://127.0.0.1:8097 \
   --client-id "$ID" --client-secret "$SECRET" \
   --session "$COOKIE" --harvest /tmp/harvest.json
 ```
@@ -78,7 +78,7 @@ publications at all.
 
 ## The mock consumer
 
-`scripts/mock_openlibrary.py` drives the same flow without a browser, and
+`tests/oauth2/mock_openlibrary.py` drives the same flow without a browser, and
 covers what the browser tests cannot: the back-channel token exchange, code
 replay, refresh rotation, scope enforcement and revocation.
 
@@ -88,7 +88,7 @@ python scripts/oauth2_client.py register "Open Library" http://127.0.0.1:8092/ca
 
 COOKIE=$(python -c "from lenny.core import auth; \
   print(auth.create_session_cookie('patron@example.org'))")
-python scripts/mock_openlibrary.py --lenny http://127.0.0.1:8097 \
+python tests/oauth2/mock_openlibrary.py --lenny http://127.0.0.1:8097 \
   --client-id "$ID" --client-secret "$SECRET" \
   --session "$COOKIE" --edition 37044487
 ```

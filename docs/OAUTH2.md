@@ -72,11 +72,13 @@ time.
 Steps 1–3 happen once per patron. After that the consumer holds a refresh token
 and needs no redirect and no OTP.
 
-`scripts/mock_openlibrary.py` is a working consumer that does all of this — the
-shortest way to understand the client side:
+`tests/oauth2/mock_openlibrary.py` is a working consumer that does all of this
+— the shortest way to understand the client side. It lives under `tests/`
+rather than `scripts/` because it is a harness, not an operator tool: it
+pretends to be Open Library, against a node you are already running.
 
 ```bash
-python scripts/mock_openlibrary.py --lenny https://your-node.example.org \
+python tests/oauth2/mock_openlibrary.py --lenny https://your-node.example.org \
   --client-id "$ID" --client-secret "$SECRET" \
   --session "$COOKIE" --edition 37044497
 ```
