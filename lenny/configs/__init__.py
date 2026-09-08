@@ -63,6 +63,27 @@ AUTH_ENV_PATH = '/app/auth.env'
 # loan.env: read it fresh so every worker agrees after an admin change.
 OL_ENV_PATH = '/app/ol.env'
 
+# Peer addresses uvicorn will trust to have set X-Forwarded-For.
+#
+# This must never be '*'. Lenny's nginx sets the header with
+# `$proxy_add_x_forwarded_for`, which APPENDS the address it observed to
+# whatever the client already sent. uvicorn's ProxyHeadersMiddleware, when it
+# trusts everything, takes the LEFTMOST entry — which is the client's own value.
+# A caller could therefore choose the IP Lenny binds session cookies and OTPs
+# to, making every IP check advisory (ArchiveLabs/lenny#210).
+#
+# With a bounded range, uvicorn instead walks the list right-to-left and returns
+# the first hop it does not trust: the address nginx actually observed.
+#
+# The default covers Docker's default Compose address pool. An operator who
+# knows their network can narrow it (`docker network inspect
+# lenny_lenny_network`). An EMPTY value is the one thing worse than '*' — it
+# trusts no proxy at all, so every patron looks like the nginx container and
+# they share one identity, one rate-limit bucket, and one session binding.
+FORWARDED_ALLOW_IPS = (
+    os.environ.get('LENNY_FORWARDED_ALLOW_IPS') or '172.16.0.0/12'
+).strip() or '172.16.0.0/12'
+
 OPTIONS = {
     'host': HOST,
     'port': PORT,
@@ -73,7 +94,7 @@ OPTIONS = {
     # docker/api/Dockerfile: trust the fronting proxy's X-Forwarded-For, so
     # request.client.host is the patron rather than the proxy.
     'proxy_headers': True,
-    'forwarded_allow_ips': os.environ.get('LENNY_FORWARDED_ALLOW_IPS', '*'),
+    'forwarded_allow_ips': FORWARDED_ALLOW_IPS,
 }
 if SSL_CRT and SSL_KEY:
     OPTIONS['ssl_keyfile'] = SSL_KEY
