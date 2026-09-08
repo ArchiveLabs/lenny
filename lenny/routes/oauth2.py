@@ -27,7 +27,6 @@ what a server-side consumer such as Open Library needs. See lenny#209.
 
 import base64
 import logging
-import re
 import secrets
 import time
 from typing import Optional
@@ -48,6 +47,7 @@ from lenny.core.oauth2 import (
     SCOPES,
     AccessToken,
     AuthorizationCode,
+    GrantRevoked,
     OAuthClient,
 )
 from lenny.core.utils import hash_email
@@ -413,12 +413,19 @@ async def token(
             logger.warning("Authorization code rejected for client %r: %s",
                            client.client_id, err)
             return _error("invalid_grant", err)
-        access, refresh, tok = AccessToken.issue(
-            client_id=client.client_id,
-            patron_email_hash=row.patron_email_hash,
-            scope=row.scope,
-            authorization_code_id=row.id,
-        )
+        try:
+            access, refresh, tok = AccessToken.issue(
+                client_id=client.client_id,
+                patron_email_hash=row.patron_email_hash,
+                scope=row.scope,
+                authorization_code_id=row.id,
+            )
+        except GrantRevoked as exc:
+            # A concurrent caller replayed this code and the family was killed
+            # between our claim and our issue. Report it rather than handing
+            # back a 200 with a token that is already dead.
+            logger.warning("Grant revoked mid-issue for client %r", client.client_id)
+            return _error("invalid_grant", str(exc))
 
     elif grant_type == "refresh_token":
         if not refresh_token:
@@ -527,6 +534,9 @@ async def loans(request: Request) -> Response:
         .filter(Loan.patron_email_hash == tok.patron_email_hash, *Loan._active_filters())
         .all()
     )
+    # A patron's reading history is exactly what should not sit in a shared
+    # cache or a proxy log, and the consumer is a backend that may well have one
+    # in front of it.
     return JSONResponse({"loans": [
         {
             "edition_id": int(item.openlibrary_edition),
@@ -534,7 +544,7 @@ async def loans(request: Request) -> Response:
             "due_at": loan.due_date.isoformat() if loan.due_date else None,
         }
         for loan, item in rows
-    ]})
+    ]}, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
 
 
 @router.post("/oauth2/borrow")
@@ -542,11 +552,15 @@ async def borrow(request: Request, edition_id: int = Form(...)) -> Response:
     """Borrow on the patron's behalf. Requires `borrow`.
 
     Delegates to `Item.borrow`, which is the only place lending policy lives:
-    open-access items are not lendable, the per-patron concurrent limit and the
-    per-item copy count are enforced, and all of it happens under a
-    `SELECT ... FOR UPDATE` on the Item row so two simultaneous borrows cannot
-    both succeed. Calling `Loan.create` directly here would be a second,
-    divergent copy of that policy — and silently skip every part of it.
+    open-access items are not lendable, and the per-patron concurrent limit and
+    the per-item copy count are both enforced. Calling `Loan.create` directly
+    here would be a second, divergent copy of that policy — and silently skip
+    every part of it.
+
+    Note that this endpoint is the reason `Item.borrow` locks the patron as well
+    as the item. A browser gets one click at a time; a backend consumer holding
+    a token issues borrows in parallel, which is what turned a theoretical race
+    on the per-patron limit into an observed bypass.
     """
     tok, err = _bearer(request, "borrow")
     if err:

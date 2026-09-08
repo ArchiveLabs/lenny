@@ -606,6 +606,26 @@ class TestConsentIntegrity:
         assert "registered itself" not in body, (
             "stale copy from when anyone could self-register")
 
+    def test_consent_does_not_promise_a_revocation_that_does_not_exist(
+            self, app_client, client, session_cookie):
+        """There is no patron-facing disconnect: `/oauth2/revoke` needs the
+        client's own credentials, and `oauth2-disable` cuts every patron off at
+        once. Promising "revoke at any time" is the same class of bug as the
+        self-registration copy above — the screen describing a control the
+        system does not have. If a connected-apps page is ever built, this test
+        is the one to change.
+        """
+        obj, _ = client
+        _, challenge = pkce()
+        r = app_client.get(AUTHORIZE_URL, params=authorize_params(obj, challenge),
+                           cookies={"session": session_cookie}, follow_redirects=False)
+        # Collapse whitespace: the sentence is wrapped across source lines, and
+        # where the HTML happens to break is not what this test is about.
+        body = " ".join(r.text.lower().split())
+        assert "revoke this at any time" not in body
+        assert "ask your librarian" in body, (
+            "the patron is not told what they can actually do")
+
 
 @pytest.mark.skipif(
     not DB_URI.startswith("postgresql"),

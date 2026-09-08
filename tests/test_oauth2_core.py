@@ -543,14 +543,14 @@ class TestReuseDetectionActuallyRevokes:
             code_verifier=verifier)
         assert err == "code already redeemed"
 
-        # The winner now issues. Its token must not be live: reuse of this code
-        # has already been observed.
-        access, _, _ = AccessToken.issue(
-            client_id=client.client_id, patron_email_hash=PATRON,
-            scope="loans:read", authorization_code_id=row.id)
-        assert AccessToken.authenticate(access) is None, (
-            "a token was issued live for a grant whose code was already "
-            "known to have been replayed")
+        # The winner now issues. It must get an error, not a token: handing
+        # back a 200 with a dead token leaves the caller unable to tell
+        # "refreshed" from "your grant was killed for reuse", so it silently
+        # loses service and nothing alarms.
+        with pytest.raises(oauth2.GrantRevoked):
+            AccessToken.issue(
+                client_id=client.client_id, patron_email_hash=PATRON,
+                scope="loans:read", authorization_code_id=row.id)
 
     def test_a_refresh_issued_after_family_revocation_is_dead(self, client):
         verifier, challenge = pkce()
@@ -566,12 +566,11 @@ class TestReuseDetectionActuallyRevokes:
         AccessToken.refresh(refresh, client_id=client.client_id)
         AccessToken.refresh(refresh, client_id=client.client_id)
 
-        # Anything issued for this grant afterwards must also be dead.
-        late, _, _ = AccessToken.issue(
-            client_id=client.client_id, patron_email_hash=PATRON,
-            scope="loans:read", authorization_code_id=row.id)
-        assert AccessToken.authenticate(late) is None, (
-            "a token issued after the grant was revoked is live")
+        # Nothing may be issued for this grant afterwards.
+        with pytest.raises(oauth2.GrantRevoked):
+            AccessToken.issue(
+                client_id=client.client_id, patron_email_hash=PATRON,
+                scope="loans:read", authorization_code_id=row.id)
 
 
 class TestOpenLibraryToggle:
@@ -687,3 +686,113 @@ class TestOpenLibraryToggle:
         args = argparse.Namespace(
             redirect_uri=oauth2_client.OPENLIBRARY_REDIRECT, rotate=False)
         assert oauth2_client.cmd_ol_connect(args) == 0
+
+
+class TestGrantLifetime:
+    """One "Allow" click must not grant access forever.
+
+    `issue` renews `refresh_expires_at` to now+90d on every rotation, so a
+    consumer that keeps refreshing holds the grant indefinitely. The ceiling is
+    anchored to the authorization code and carried across rotations, never
+    recomputed — otherwise rotation would push it forward and it would enforce
+    nothing.
+    """
+
+    def test_a_grant_gets_a_ceiling_from_its_authorization_code(self, client):
+        _, challenge = pkce()
+        code = issue_code(client, challenge=challenge)
+        row, err = AuthorizationCode.redeem(
+            code, client_id=client.client_id, redirect_uri=REDIRECT,
+            code_verifier="a" * 64)
+        assert err is None
+        _, _, tok = AccessToken.issue(
+            client_id=client.client_id, patron_email_hash=PATRON,
+            scope="loans:read", authorization_code_id=row.id)
+        assert tok.grant_expires_at is not None
+
+    def test_rotation_carries_the_ceiling_rather_than_extending_it(self, client):
+        """The regression that matters: if the ceiling moves with each
+        rotation, it is not a ceiling."""
+        _, challenge = pkce()
+        code = issue_code(client, challenge=challenge)
+        row, _ = AuthorizationCode.redeem(
+            code, client_id=client.client_id, redirect_uri=REDIRECT,
+            code_verifier="a" * 64)
+        _, refresh, first = AccessToken.issue(
+            client_id=client.client_id, patron_email_hash=PATRON,
+            scope="loans:read", authorization_code_id=row.id)
+        ceiling = oauth2._as_utc(first.grant_expires_at)
+
+        issued, err = AccessToken.refresh(refresh, client_id=client.client_id)
+        assert err is None
+        assert oauth2._as_utc(issued[2].grant_expires_at) == ceiling
+
+    def test_a_refresh_token_may_not_outlive_its_grant(self, client):
+        """A rotation near the ceiling gets a truncated window, not a fresh 90
+        days. This is what actually ends the grant: once `refresh_expires_at`
+        is capped at the ceiling, the existing expiry check refuses the next
+        rotation on its own."""
+        past = oauth2._now() - datetime.timedelta(days=364)
+        _, challenge = pkce()
+        code = issue_code(client, challenge=challenge)
+        row, _ = AuthorizationCode.redeem(
+            code, client_id=client.client_id, redirect_uri=REDIRECT,
+            code_verifier="a" * 64)
+        row.created_at = past
+        db.add(row)
+        db.commit()
+
+        _, _, tok = AccessToken.issue(
+            client_id=client.client_id, patron_email_hash=PATRON,
+            scope="loans:read", authorization_code_id=row.id)
+        remaining = oauth2._as_utc(tok.refresh_expires_at) - oauth2._now()
+        assert remaining < datetime.timedelta(days=2), (
+            "a grant one day from its ceiling minted a full-length refresh token")
+
+
+class TestSweepKeepsTheReuseTripwire:
+    def test_a_code_survives_while_its_tokens_can_still_be_refreshed(self, client):
+        """Reuse detection reads the *spent* code to revoke what it produced,
+        and `issue` locks that row to serialise against the revocation. Deleting
+        the code after a day, while its refresh token lives ninety, disarmed
+        both for the remaining 89 — turning a detected replay into a plain
+        "invalid code" and reopening the race.
+        """
+        _, challenge = pkce()
+        code = issue_code(client, challenge=challenge)
+        row, _ = AuthorizationCode.redeem(
+            code, client_id=client.client_id, redirect_uri=REDIRECT,
+            code_verifier="a" * 64)
+        AccessToken.issue(
+            client_id=client.client_id, patron_email_hash=PATRON,
+            scope="loans:read", authorization_code_id=row.id)
+        code_id = row.id
+
+        # Age the code well past any sweep cutoff; its token stays live.
+        row.expires_at = oauth2._now() - datetime.timedelta(days=30)
+        db.add(row)
+        db.commit()
+
+        oauth2.sweep_expired(older_than_days=1)
+        db.expire_all()
+        assert db.query(AuthorizationCode).filter(
+            AuthorizationCode.id == code_id).first() is not None, (
+            "the reuse tripwire was swept while its grant was still refreshable")
+
+    def test_a_code_goes_once_nothing_descends_from_it(self, client):
+        """The other half: the sweep must still do its job, or the tables grow
+        without bound."""
+        _, challenge = pkce()
+        code = issue_code(client, challenge=challenge)
+        row, _ = AuthorizationCode.redeem(
+            code, client_id=client.client_id, redirect_uri=REDIRECT,
+            code_verifier="a" * 64)
+        code_id = row.id
+        row.expires_at = oauth2._now() - datetime.timedelta(days=30)
+        db.add(row)
+        db.commit()
+
+        oauth2.sweep_expired(older_than_days=1)
+        db.expire_all()
+        assert db.query(AuthorizationCode).filter(
+            AuthorizationCode.id == code_id).first() is None

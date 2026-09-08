@@ -113,7 +113,13 @@ def _get_serializer():
     return SERIALIZER
 
 def create_session_cookie(email: str, ip: str = None) -> str:
-    """Returns a signed + encrypted session cookie. Always uses dict format."""
+    """Returns a signed session cookie. Always uses dict format.
+
+    Signed, not encrypted: `URLSafeTimedSerializer` authenticates the payload
+    but does not hide it, so anyone holding the cookie can read the email and
+    IP inside it. That is fine for what it carries and wrong to describe as
+    encryption.
+    """
     serializer = _get_serializer()
     data = {"email": email}
     if ip:

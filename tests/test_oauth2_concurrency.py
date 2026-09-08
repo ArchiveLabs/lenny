@@ -1,9 +1,12 @@
 """Concurrency tests for the single-use guarantees.
 
-These need real Postgres. Under SQLite the suite runs one in-memory database per
-connection, so two "concurrent" redemptions never contend and a double-spend is
-structurally invisible — which is exactly how the races below survived 74
-passing tests.
+These need real Postgres. Under SQLite the whole suite shares one connection
+(`core/db.py` pins `StaticPool` for `:memory:`, because otherwise each checkout
+gets its own empty database), so two "concurrent" redemptions are serialised by
+the connection itself and a double-spend is structurally invisible — which is
+exactly how the races below survived 74 passing tests. `SELECT ... FOR UPDATE`
+is also a no-op there, so the lock ordering these tests pin cannot be observed
+on SQLite at all.
 
     docker run -d --name lenny_oauth2_testdb \
       -e POSTGRES_DB=lenny_test -e POSTGRES_USER=lenny -e POSTGRES_PASSWORD=lennytest \
@@ -48,7 +51,8 @@ def clean_tables():
     Base.metadata.create_all(engine)
     yield
     db.remove()
-    for table in ("oauth_access_tokens", "oauth_authorization_codes", "oauth_clients"):
+    for table in ("oauth_access_tokens", "oauth_authorization_codes", "oauth_clients",
+                  "loans", "items"):
         db.execute(text(f"DELETE FROM {table}"))
     db.commit()
     db.remove()
@@ -129,6 +133,49 @@ class TestAuthorizationCodeIsSingleUse:
             f"a single-use code was redeemed {sum(outcomes)} times")
 
 
+    def test_reuse_detection_leaves_no_live_token(self, client):
+        """Detecting a replay must actually kill the grant.
+
+        Claiming the code atomically is only half the job. The loser trips reuse
+        detection and revokes the family; the winner then *issues*. If issuing
+        merely reads the grant, it reads a snapshot taken before the loser's
+        revocation committed and inserts a live token against a grant the server
+        has recorded as revoked — so roughly half of all detected replays handed
+        the attacker a working token for the full hour, silently, because the
+        honest client's call still returned 200.
+
+        `issue` therefore takes `SELECT ... FOR UPDATE` on the grant, which
+        serialises it against `revoke_for_code`. Either order is fine; what must
+        never happen is a usable token surviving.
+        """
+        verifier, challenge = pkce()
+        code = AuthorizationCode.issue(
+            client_id=client.client_id, patron_email_hash=PATRON,
+            redirect_uri=REDIRECT, scope="loans:read", code_challenge=challenge)
+
+        def redeem_and_issue():
+            """What the token endpoint does: claim, then mint."""
+            row, err = AuthorizationCode.redeem(
+                code, client_id=client.client_id, redirect_uri=REDIRECT,
+                code_verifier=verifier)
+            if err:
+                return None
+            try:
+                access, _, _ = AccessToken.issue(
+                    client_id=client.client_id,
+                    patron_email_hash=row.patron_email_hash,
+                    scope=row.scope, authorization_code_id=row.id)
+            except oauth2.GrantRevoked:
+                return None
+            return access
+
+        minted = [tok for tok in run_concurrently(redeem_and_issue) if tok]
+        db.remove()
+        live = [tok for tok in minted if AccessToken.authenticate(tok) is not None]
+        assert not live, (
+            f"{len(live)} token(s) survived a detected code replay")
+
+
 class TestRefreshTokenRotation:
     def test_a_refresh_token_cannot_rotate_twice_concurrently(self, client):
         """Rotation only protects anyone if a stolen refresh token and the
@@ -144,3 +191,102 @@ class TestRefreshTokenRotation:
         outcomes = run_concurrently(rotate)
         assert sum(outcomes) == 1, (
             f"one refresh token minted {sum(outcomes)} token families")
+
+    def test_refresh_reuse_detection_leaves_no_live_token(self, client):
+        """The same race as the code path, and the one that matters in
+        practice: a refresh token is a 90-day credential, so this is the
+        collision an attacker with a stolen one actually gets to have.
+
+        Needs a grant row, because that is what the two callers serialise on —
+        a family with `authorization_code_id` NULL has nothing to lock and
+        `revoke_for_code` refuses to act on it.
+        """
+        verifier, challenge = pkce()
+        code = AuthorizationCode.issue(
+            client_id=client.client_id, patron_email_hash=PATRON,
+            redirect_uri=REDIRECT, scope="loans:read", code_challenge=challenge)
+        row, err = AuthorizationCode.redeem(
+            code, client_id=client.client_id, redirect_uri=REDIRECT,
+            code_verifier=verifier)
+        assert err is None
+        _, refresh, _ = AccessToken.issue(
+            client_id=client.client_id, patron_email_hash=PATRON,
+            scope="loans:read", authorization_code_id=row.id)
+
+        def rotate():
+            issued, err = AccessToken.refresh(refresh, client_id=client.client_id)
+            return issued[0] if issued else None
+
+        minted = [tok for tok in run_concurrently(rotate) if tok]
+        db.remove()
+        live = [tok for tok in minted if AccessToken.authenticate(tok) is not None]
+        assert not live, (
+            f"{len(live)} token(s) survived a detected refresh replay")
+
+
+class TestPerPatronLoanLimit:
+    """The limit `/oauth2/borrow` is the first caller able to break.
+
+    `Item.borrow` takes `SELECT ... FOR UPDATE` on the *item*, which is what
+    stops one copy going to two patrons. It does nothing for the per-patron
+    limit: borrowing N different editions takes N different item locks, so the
+    calls never contend and every one of them counts the same stale set of
+    active loans.
+
+    A browser cannot exploit that — a patron gets one click at a time. A backend
+    consumer holding an OAuth token issues the requests in parallel without
+    trying, which is why this endpoint is what turned the race into a bypass.
+    """
+
+    def test_parallel_borrows_of_different_editions_respect_the_limit(self, monkeypatch):
+        from lenny import configs
+        from lenny.core.models import FormatEnum, Item, Loan
+
+        limit = 2
+        monkeypatch.setattr(configs, "get_loan_limit", lambda: limit)
+        monkeypatch.setattr(configs, "get_loan_duration_days", lambda: 14)
+
+        editions = []
+        for n in range(5):
+            item = Item(openlibrary_edition=90000 + n, encrypted=True,
+                        formats=FormatEnum.PDF)
+            db.add(item)
+            editions.append(item)
+        db.commit()
+        item_ids = [i.id for i in editions]
+        db.remove()
+
+        def borrow(item_id):
+            def go():
+                item = db.query(Item).filter(Item.id == item_id).first()
+                try:
+                    item.borrow(PATRON, hashed=True)
+                    return True
+                except Exception:
+                    return False
+            return go
+
+        # One thread per edition, all released together.
+        barrier = threading.Barrier(len(item_ids))
+        results, lock = [], threading.Lock()
+
+        def worker(item_id):
+            try:
+                barrier.wait(timeout=20)
+                out = borrow(item_id)()
+                with lock:
+                    results.append(out)
+            finally:
+                db.remove()
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in item_ids]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        db.remove()
+        active = db.query(Loan).filter(
+            Loan.patron_email_hash == PATRON, *Loan._active_filters()).count()
+        assert active <= limit, (
+            f"{active} concurrent loans for a patron limited to {limit}")

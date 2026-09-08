@@ -29,9 +29,17 @@
     </p>
   </div>
 
+  {#
+    This used to say "You can revoke this at any time", which was not true:
+    there is no patron-facing disconnect, and `/oauth2/revoke` needs the
+    client's own credentials. Say what a patron can actually do, and what
+    actually ends the access, rather than implying a control that is not there.
+    If a "connected apps" page is ever built, this is the copy to revisit.
+  #}
   <p class="subtitle">
-    You can revoke this at any time. {{ client_name }} never sees your password
-    or your one-time codes.
+    {{ client_name }} never sees your password or your one-time codes. This
+    access expires on its own, and your library can end it sooner — ask your
+    librarian to disconnect {{ client_name }}.
   </p>
 
   <form action="/v1/api/oauth2/authorize" method="POST">

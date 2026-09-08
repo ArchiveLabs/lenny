@@ -29,7 +29,6 @@ replayable.
 import base64
 import datetime
 import hashlib
-import os
 import re
 import secrets
 from typing import Optional
@@ -63,6 +62,12 @@ from lenny.core.db import session as db
 AUTH_CODE_TTL = 60                    # seconds
 ACCESS_TOKEN_TTL = 60 * 60            # 1 hour
 REFRESH_TOKEN_TTL = 60 * 60 * 24 * 90  # 90 days
+# An absolute ceiling on one consent, anchored to the authorization code rather
+# than to the newest token. Rotation renews the 90 days above on every use, so
+# without this a single "Allow" click grants access for as long as the consumer
+# keeps refreshing — indefinitely. The consent screen tells the patron their
+# access expires; this is what makes that true.
+GRANT_MAX_TTL = 60 * 60 * 24 * 365     # 1 year
 
 # Scopes this server understands. Anything else is rejected at /authorize
 # rather than silently narrowed, so a client learns immediately.
@@ -73,6 +78,14 @@ SCOPES = {
 
 
 _PK = BigInteger().with_variant(Integer, "sqlite")
+
+
+class GrantRevoked(Exception):
+    """Raised when a token is requested against a grant that reuse killed.
+
+    A distinct type because the caller must turn it into `invalid_grant`, not
+    into a token. See `AccessToken.issue`.
+    """
 
 
 def _now() -> datetime.datetime:
@@ -130,8 +143,11 @@ def acceptable_redirect(uri: str) -> bool:
         return False
     # RFC 6749 §3.1.2 — a fragment would put the authorization code after the
     # '#', where it never reaches the client's server. Control characters are
-    # simply not URI syntax, and are not URI syntax.
-    if parsed.fragment or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in uri):
+    # simply not URI syntax. A bare trailing '#' parses to an empty fragment,
+    # which is falsy, so it needs testing on the raw string.
+    if parsed.fragment or "#" in uri:
+        return False
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in uri):
         return False
     if parsed.scheme == "https" and parsed.netloc:
         return True
@@ -441,30 +457,57 @@ class AccessToken(Base):
     authorization_code_id = Column(BigInteger, nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     refresh_expires_at = Column(DateTime(timezone=True), nullable=True)
+    # The absolute end of the grant this token descends from, carried forward
+    # unchanged across every rotation. Kept on the token rather than read from
+    # the code each time so that sweeping the code cannot quietly make a grant
+    # immortal again.
+    grant_expires_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=func.now())
 
     @classmethod
     def issue(cls, *, client_id: str, patron_email_hash: str, scope: str,
-              authorization_code_id: Optional[int] = None
+              authorization_code_id: Optional[int] = None,
+              grant_expires_at: Optional[datetime.datetime] = None,
               ) -> tuple[str, str, "AccessToken"]:
         """Mint an access/refresh pair. Returns `(access, refresh, row)`.
 
         Both are returned in the clear exactly once; only their hashes persist.
+
+        Raises `GrantRevoked` if the grant was replayed, rather than minting a
+        token that is dead on arrival: a caller handed a 200 and an unusable
+        token cannot tell "refreshed" from "your grant was killed for reuse",
+        so it silently loses service and nothing alarms.
         """
-        # If this grant was already found to have been replayed, the token is
-        # born revoked. Without this the winner of an atomic claim could issue a
-        # live token after a concurrent loser had revoked the family.
-        revoked = None
+        grant = None
         if authorization_code_id is not None:
+            # SELECT ... FOR UPDATE, not a plain read. `revoke_for_code` updates
+            # this same row, so taking the lock here serialises the two and the
+            # interleaving stops deciding the outcome. Without the lock the
+            # winner of an atomic claim reads a snapshot taken before a
+            # concurrent loser's revocation committed, and inserts a *live*
+            # token against a grant the server has already recorded as revoked —
+            # which hands roughly half of all detected replays a working token
+            # for the full access-token lifetime. This lock and the INSERT below
+            # must stay in one transaction; do not commit between them.
             grant = db.query(AuthorizationCode).filter(
-                AuthorizationCode.id == authorization_code_id).first()
+                AuthorizationCode.id == authorization_code_id
+            ).with_for_update().first()
             if grant is not None and grant.grant_revoked_at is not None:
-                revoked = _now()
+                db.commit()          # release the lock; we are issuing nothing
+                raise GrantRevoked("This grant was revoked after a replay was detected.")
+
+        if grant_expires_at is None and grant is not None:
+            grant_expires_at = (_as_utc(grant.created_at or _now())
+                                + datetime.timedelta(seconds=GRANT_MAX_TTL))
+
+        # The refresh token may not outlive the consent it descends from.
+        refresh_expiry = _now() + datetime.timedelta(seconds=REFRESH_TOKEN_TTL)
+        if grant_expires_at is not None:
+            refresh_expiry = min(refresh_expiry, _as_utc(grant_expires_at))
 
         access, refresh = _mint(32), _mint(32)
         row = cls(
-            revoked_at=revoked,
             token_hash=_hash(access),
             refresh_token_hash=_hash(refresh),
             client_id=client_id,
@@ -472,7 +515,8 @@ class AccessToken(Base):
             scope=scope,
             authorization_code_id=authorization_code_id,
             expires_at=_now() + datetime.timedelta(seconds=ACCESS_TOKEN_TTL),
-            refresh_expires_at=_now() + datetime.timedelta(seconds=REFRESH_TOKEN_TTL),
+            refresh_expires_at=refresh_expiry,
+            grant_expires_at=grant_expires_at,
         )
         db.add(row)
         db.commit()
@@ -529,12 +573,21 @@ class AccessToken(Base):
             cls.revoke_for_code(row.authorization_code_id)
             return None, "refresh token revoked"
 
-        return cls.issue(
-            client_id=row.client_id,
-            patron_email_hash=row.patron_email_hash,
-            scope=row.scope,
-            authorization_code_id=row.authorization_code_id,
-        ), None
+        try:
+            issued = cls.issue(
+                client_id=row.client_id,
+                patron_email_hash=row.patron_email_hash,
+                scope=row.scope,
+                authorization_code_id=row.authorization_code_id,
+                # Carried, not recomputed: the ceiling belongs to the original
+                # consent, so rotation must not push it forward.
+                grant_expires_at=row.grant_expires_at,
+            )
+        except GrantRevoked:
+            # A concurrent caller detected a replay of this family between our
+            # claim and our issue. Say so rather than returning a dead token.
+            return None, "refresh token revoked"
+        return issued, None
 
     @classmethod
     def revoke_for_code(cls, authorization_code_id: Optional[int]) -> int:
@@ -616,24 +669,33 @@ def sweep_expired(older_than_days: int = 1) -> int:
     Nothing calls this automatically — run it from a cron (`make oauth2-sweep`).
     Codes live 60 seconds and tokens an hour, but the rows outlive both.
 
-    The grace period keeps recently-expired rows around, because a code's
-    *expiry* is not the end of its usefulness: reuse detection reads a spent
-    code to revoke the tokens it produced, and deleting it early would turn a
-    detected replay into a plain "invalid code".
-
     A token row is only removed once its refresh token is dead too — an access
     token expires in an hour while its refresh token lives ninety days, so
     sweeping on access expiry would break every legitimate refresh.
 
+    A code outlives its own expiry, and the order below is what enforces it:
+    tokens go first, then only those codes nothing descends from any more. A
+    code's *expiry* is not the end of its usefulness — reuse detection reads
+    the spent code to revoke the tokens it produced, and `AccessToken.issue`
+    locks it to serialise against that revocation. Deleting a code while its
+    tokens can still be refreshed turned a detected replay into a plain
+    "invalid code" and reopened the race it exists to close, for the 89 days
+    between the old one-day cutoff and the refresh token's death.
+
     Returns the number of rows deleted.
     """
     cutoff = _now() - datetime.timedelta(days=older_than_days)
-    deleted = db.query(AuthorizationCode).filter(
-        AuthorizationCode.expires_at < cutoff
-    ).delete(synchronize_session=False)
-    deleted += db.query(AccessToken).filter(
+    deleted = db.query(AccessToken).filter(
         AccessToken.refresh_expires_at != None,  # noqa: E711
         AccessToken.refresh_expires_at < cutoff,
+    ).delete(synchronize_session=False)
+    db.flush()
+    still_referenced = db.query(AccessToken.authorization_code_id).filter(
+        AccessToken.authorization_code_id != None,  # noqa: E711
+    )
+    deleted += db.query(AuthorizationCode).filter(
+        AuthorizationCode.expires_at < cutoff,
+        AuthorizationCode.id.notin_(still_referenced),
     ).delete(synchronize_session=False)
     db.commit()
     return deleted

@@ -8,7 +8,9 @@
     :license: see LICENSE for more details
 """
 
-from sqlalchemy import Column, String, Boolean, BigInteger, Integer, DateTime, Enum as SQLAlchemyEnum, Index, or_
+import hashlib
+
+from sqlalchemy import Column, String, Boolean, BigInteger, Integer, DateTime, Enum as SQLAlchemyEnum, Index, or_, text
 from sqlalchemy.sql import func
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
@@ -30,6 +32,24 @@ class FormatEnum(enum.Enum):
     EPUB = 1
     PDF = 2
     EPUB_PDF = 3
+
+def _lock_patron(hashed_email: str) -> None:
+    """Hold an exclusive lock on one patron for the rest of this transaction.
+
+    A Postgres advisory lock, because the thing being protected is a *count*
+    across rows that may not exist yet, which row locks cannot express. The key
+    is derived from the patron hash rather than passed through `hashtext()`, so
+    it does not depend on an undocumented server internal.
+
+    A no-op on SQLite, which serialises writers anyway, and where the test
+    suite runs on a single connection.
+    """
+    if db.bind is None or db.bind.dialect.name != "postgresql":
+        return
+    key = int.from_bytes(
+        hashlib.sha256(hashed_email.encode("utf-8")).digest()[:8], "big", signed=True)
+    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
+
 
 class Item(Base):
     __tablename__ = 'items'
@@ -194,6 +214,16 @@ class Item(Base):
         from lenny import configs
 
         hashed_email = email if hashed else hash_email(email)
+
+        # Serialise this patron's concurrent borrows before anything is counted.
+        #
+        # The Item lock below is what stops one copy going to two patrons, and
+        # it does nothing for the per-patron limit: N borrows of N *different*
+        # editions take N different Item locks, never contend, and all read the
+        # same stale count at step 2. There is no row to lock instead — a patron
+        # at zero loans has no loan rows for FOR UPDATE to hold — so the lock has
+        # to be keyed on the patron rather than on a row.
+        _lock_patron(hashed_email)
 
         # Acquire row-level lock on the Item. Concurrent borrow() calls for the
         # same item block here until the current transaction commits/rolls back.

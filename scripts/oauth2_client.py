@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Operator commands for OAuth 2.0 clients.
 
-Registration is open by default, so an operator eventually needs to see who has
-registered and stop one. Without this the only remedy is an ORM call in a Python
-console, which is not a thing anyone should have to do to cut off an abusive
-consumer.
+Nobody can register themselves — there is no public registration endpoint, and
+the RFC 8414 metadata does not advertise one. This is how a client comes to
+exist, and how the operator sees who is connected and cuts one off. Without it
+the only remedy would be an ORM call in a Python console.
 
     make ol-connect          # the common case: let Open Library act for patrons
     make ol-disconnect

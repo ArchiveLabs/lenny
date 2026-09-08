@@ -144,7 +144,12 @@ means a defence was removed, not that a refactor went wrong.
   §4.1 grammar — the 43-character floor *is* the entropy requirement that makes
   an intercepted code unusable.
 - **Authorization codes are single-use**, 60 seconds, and claimed atomically.
-  Reuse revokes every token descended from that code (RFC 6749 §4.1.2).
+  Reuse revokes every token descended from that code (RFC 6749 §4.1.2) — and
+  `issue` locks the grant row while it mints, so the revocation and the minting
+  cannot interleave. Claiming atomically is only half the job: without the lock
+  the winner of a race reads a snapshot taken before the loser's revocation
+  committed and issues a *live* token against a grant already recorded as
+  revoked, which handed roughly half of all detected replays a working token.
 - **Codes are bound** to client, `redirect_uri` and PKCE challenge.
 - **Redirect URIs match exactly** — no prefix, no wildcard. `https://` anywhere;
   `http://` on loopback (RFC 8252 §7.3); and private-use schemes for native apps
@@ -164,6 +169,14 @@ means a defence was removed, not that a refactor went wrong.
   refresh tokens. A database dump yields nothing replayable.
 - **The implicit grant is absent by design.** OAuth 2.1 removes it; the
   token-in-URL exposure is what this replaces.
+- **The consent screen states only what a patron can actually do.** There is no
+  patron-facing disconnect yet: `/oauth2/revoke` needs the *client's* own
+  credentials, and `oauth2-disable` cuts every patron off at once. So the
+  screen names the operator as the remedy and the ceiling as the expiry, rather
+  than implying a control that does not exist. A "connected apps" page is the
+  right fix, and would make this copy wrong in the other direction — the test
+  `test_consent_does_not_promise_a_revocation_that_does_not_exist` is where to
+  start when someone builds it.
 
 Access tokens are deliberately **not IP-bound**, unlike session cookies
 (`core/auth.py`): a consumer calls from its own servers, so the address
@@ -176,7 +189,15 @@ presenting the token is never the patron's.
 | Authorization code | 60s, single use |
 | Access token | 1 hour |
 | Refresh token | 90 days, rotating |
+| **Grant (absolute)** | **1 year from the patron's consent** |
 | Consent handle | 10 minutes |
+
+The absolute grant lifetime is the one that is not obvious. Rotation renews the
+refresh token's 90 days on every use, so without a ceiling a single "Allow"
+click would grant access for as long as the consumer kept refreshing —
+indefinitely. The ceiling is anchored to the authorization code and carried
+across every rotation rather than recomputed, and it is stored on the token so
+that sweeping the code cannot quietly make a grant immortal again.
 
 ---
 
@@ -237,11 +258,15 @@ Two more things worth knowing:
   make oauth2-sweep       # safe to run from cron
   ```
 
-  The grace period is deliberate. A code's expiry is not the end of its
-  usefulness: reuse detection reads a *spent* code to revoke the tokens it
-  produced, so deleting it early would turn a detected replay into a plain
-  "invalid code". Token rows survive until their refresh token dies too, since
-  an access token expires in an hour while its refresh token lives ninety days.
+  The order is deliberate: tokens go first, then only those codes nothing
+  descends from any more. A code's expiry is not the end of its usefulness —
+  reuse detection reads a *spent* code to revoke the tokens it produced, and
+  `issue` locks it to serialise against that revocation. Deleting a code while
+  its tokens can still be refreshed turned a detected replay into a plain
+  "invalid code" and reopened the race the lock exists to close, for the 89
+  days between the old one-day cutoff and the refresh token's death. Token rows
+  survive until their refresh token dies too, since an access token expires in
+  an hour while its refresh token lives ninety days.
 
 ### Native and public clients
 
