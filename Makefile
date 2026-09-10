@@ -111,7 +111,7 @@ redeploy:
 # ── OAuth 2.0 client administration ──────────────────────────────────────────
 # Registration is open by default, so an operator needs to see who registered
 # and be able to stop one without opening a Python console.
-# usage: make oauth2-register NAME="Open Library" URI=https://openlibrary.org/lenny/callback
+# usage: make oauth2-register NAME="Open Library" URI=https://openlibrary.org/borrow/lenny/callback
 .PHONY: oauth2-register
 oauth2-register:
 	@test -n "$(NAME)" -a -n "$(URI)" || { echo 'usage: make oauth2-register NAME="Open Library" URI=https://…/callback [SCOPE=loans:read] [PUBLIC=1]'; exit 1; }

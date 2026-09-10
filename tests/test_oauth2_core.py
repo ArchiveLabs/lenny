@@ -803,3 +803,33 @@ class TestSweepKeepsTheReuseTripwire:
         db.expire_all()
         assert db.query(AuthorizationCode).filter(
             AuthorizationCode.id == code_id).first() is None
+
+
+class TestCallbackCanChangeWithoutRotating:
+    """Correcting where a consumer is sent back to must not cost a new secret.
+
+    `--rotate` revokes every token the client holds, which is the right answer
+    to a leaked secret and a heavy-handed one for a changed path.
+    """
+
+    def test_update_keeps_the_secret_and_the_tokens(self, client):
+        _, refresh, _ = AccessToken.issue(
+            client_id=client.client_id, patron_email_hash=PATRON, scope="loans:read")
+        secret_before = client.client_secret_hash
+
+        client.set_redirect_uris(["https://openlibrary.org/borrow/lenny/callback"])
+
+        assert client.client_secret_hash == secret_before
+        assert client.allows_redirect("https://openlibrary.org/borrow/lenny/callback")
+        assert not client.allows_redirect(REDIRECT), "the old callback still resolves"
+        issued, err = AccessToken.refresh(refresh, client_id=client.client_id)
+        assert err is None, "changing the callback invalidated a live grant"
+
+    def test_attack_update_cannot_smuggle_an_unacceptable_uri(self, client):
+        """An update must be validated exactly as registration is, or it is a
+        way around the check rather than a way to fix a typo."""
+        for bad in ("javascript:alert(1)", "http://evil.example/cb",
+                    "myapp://cb", "https://ok.example/cb#"):
+            with pytest.raises(ValueError):
+                client.set_redirect_uris([bad])
+        assert client.allows_redirect(REDIRECT), "a refused update still mutated the row"

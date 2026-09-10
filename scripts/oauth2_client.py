@@ -32,7 +32,11 @@ from lenny.core.oauth2 import SCOPES, OAuthClient, sweep_expired
 # command rather than an incantation the operator has to remember. The redirect
 # is overridable because OL's callback path is still being built.
 OPENLIBRARY_NAME = "Open Library"
-OPENLIBRARY_REDIRECT = "https://openlibrary.org/lenny/callback"
+# Open Library puts borrowing under /borrow — `/borrow/ia/(.*)` is the
+# existing route for Internet Archive loans (plugins/upstream/borrow.py:82),
+# so /borrow/lenny/ is the idiomatic parallel. /account is account
+# management, which this is not.
+OPENLIBRARY_REDIRECT = "https://openlibrary.org/borrow/lenny/callback"
 
 
 def _openlibrary_client():
@@ -149,7 +153,39 @@ def cmd_ol_connect(args) -> int:
     existing = _openlibrary_client()
 
     if existing and not existing.disabled_at and not args.rotate:
+        # Changing where a registered consumer is sent back to should not cost
+        # a new secret. Rotating revokes every token it holds, which is the
+        # right response to a leak and a heavy-handed way to correct a path.
+        # Only act on an EXPLICIT --redirect-uri: otherwise re-running the
+        # command with no arguments would silently reset an operator's custom
+        # callback to whatever this file's default happens to be.
+        if args.redirect_uri != OPENLIBRARY_REDIRECT:
+            if existing.allows_redirect(args.redirect_uri):
+                print(f"Open Library is already connected ({existing.client_id}) "
+                      "with that callback.")
+            else:
+                try:
+                    existing.set_redirect_uris([args.redirect_uri])
+                except ValueError as exc:
+                    print(f"error: {exc}", file=sys.stderr)
+                    return 1
+                print(f"Open Library is already connected ({existing.client_id}); "
+                      "updated its callback to")
+                print(f"  {args.redirect_uri}")
+                print("  Its secret is unchanged and its tokens still work.")
+            print("  Disconnect with: make ol-disconnect")
+            return 0
+
+        registered = [u.strip() for u in existing.redirect_uris.splitlines() if u.strip()]
         print(f"Open Library is already connected ({existing.client_id}).")
+        if OPENLIBRARY_REDIRECT not in registered:
+            # Do not change it from under them, but do not let a stale callback
+            # look healthy either — this is the failure that shows up later, at
+            # a patron's callback, rather than here.
+            print(f"  Registered callback: {' '.join(registered)}")
+            print(f"  This version expects: {OPENLIBRARY_REDIRECT}")
+            print("  To change it:  make ol-connect "
+                  f"URI={OPENLIBRARY_REDIRECT}")
         print("  Lost the secret? Re-run with --rotate to issue a new one.")
         print("  Disconnect with: make ol-disconnect")
         return 0

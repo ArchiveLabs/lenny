@@ -285,6 +285,24 @@ class OAuthClient(Base):
             return False
         return redirect_uri in [u.strip() for u in self.redirect_uris.splitlines() if u.strip()]
 
+    def set_redirect_uris(self, redirect_uris: list[str]) -> None:
+        """Replace this client's callback allowlist.
+
+        Validated the same way `register` validates, so an update cannot put a
+        URI into the allowlist that registration would have refused. Kept off
+        the attribute so the check cannot be bypassed by assigning to
+        `redirect_uris` directly.
+        """
+        for uri in redirect_uris:
+            if not acceptable_redirect(uri):
+                raise ValueError(
+                    f"{uri!r} cannot be a redirect_uri: it must be an absolute "
+                    "https:// URL, http:// on loopback, or a private-use scheme "
+                    "such as opds:// or com.example.app:// (RFC 8252).")
+        self.redirect_uris = "\n".join(redirect_uris)
+        db.add(self)
+        db.commit()
+
     def allowed_scopes(self) -> set[str]:
         return {s for s in (self.scopes or "").split() if s}
 
