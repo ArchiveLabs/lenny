@@ -10,13 +10,21 @@
   <div style="text-align: center;"><span class="badge badge--oauth">OAuth Mode</span></div>
   {% endif %}
   <h1>Sign in to Lenny</h1>
+  {% if login_hint %}
+  <p class="subtitle">We'll send a one-time code to <strong>{{ login_hint }}</strong>.</p>
+  {% else %}
   <p class="subtitle">Enter your email to receive a one-time password.</p>
+  {% endif %}
   {% if error %}
   <div class="error">{{ error }}</div>
   {% endif %}
   <form action="{{ post_url }}" method="POST" id="otpIssueForm">
+    {# Pre-filled from `login_hint` when the consumer told us who this is, but
+       still editable and still requiring a click: sending on arrival would
+       make a GET mail an address the caller chose. See `_login_hint`. #}
     <label for="email">Email address</label>
-    <input type="email" id="email" name="email" required placeholder="you@example.com"/>
+    <input type="email" id="email" name="email" required placeholder="you@example.com"
+           value="{{ login_hint or '' }}"{% if login_hint %} autofocus{% endif %}/>
     <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
     <input type="hidden" name="state" value="{{ state or '' }}"/>
     <input type="hidden" name="client_id" value="{{ client_id or '' }}"/>
