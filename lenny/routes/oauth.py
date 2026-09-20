@@ -19,6 +19,7 @@ Nginx rate-limiting:
 
 import json
 import logging
+import re
 import os
 from typing import Optional
 from urllib.parse import quote, urlencode
@@ -107,6 +108,36 @@ async def oauth_implicit(request: Request) -> Response:
     )
 
 
+_EMAIL_HINT = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _login_hint(value: Optional[str]) -> Optional[str]:
+    """A `login_hint` worth pre-filling the email box with, or None.
+
+    Deliberately PRE-FILL ONLY. It would be a better experience to send the
+    code on arrival and ask straight for the digits — that is what was asked
+    for — but it would turn a GET into an outbound mailer aimed at an address
+    the caller chose. A link, an `<img src>`, or a prefetch would then send
+    mail to a stranger with no interaction at all, and `/authorize` is
+    unauthenticated by design.
+
+    Keeping a click in front of the send costs the patron one button and keeps
+    the side effect behind a POST, where it belongs. The typing — the part
+    that actually grated, having just proved who you are elsewhere — is still
+    gone.
+
+    Shape-checked rather than validated: this only decides what goes in a form
+    field the patron can edit, and Jinja escapes it. The check exists so junk
+    does not get rendered as if Lenny believed it.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    if len(value) > 254 or not _EMAIL_HINT.match(value):
+        return None
+    return value
+
+
 @router.api_route("/oauth/authorize", methods=["GET", "POST"])
 async def oauth_authorize(
     request: Request,
@@ -114,6 +145,7 @@ async def oauth_authorize(
     redirect_uri: Optional[str] = None,
     client_id: Optional[str] = None,
     state: Optional[str] = None,
+    login_hint: Optional[str] = None,
 ) -> Response:
     """
     Handles OTP-based authorization (OPDS Implicit flow).
@@ -187,6 +219,7 @@ async def oauth_authorize(
         "next": current_redirect_uri,
         "book_id": "oauth",
         "action": "oauth",
+        "login_hint": _login_hint(login_hint),
     }
 
     if request.method == "POST" and post_email and post_otp:

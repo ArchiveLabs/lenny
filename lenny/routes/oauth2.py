@@ -209,6 +209,7 @@ async def authorize(
     state: Optional[str] = None,
     code_challenge: Optional[str] = None,
     code_challenge_method: str = "S256",
+    login_hint: Optional[str] = None,
 ) -> Response:
     """Begin an authorization request.
 
@@ -243,8 +244,16 @@ async def authorize(
         # No Lenny session yet. Send them through the existing OTP login and
         # come back here afterwards with the request intact.
         this_request = f"/v1/api/oauth2/authorize?{urlencode(_echo(request))}"
+        # RFC 6749 §3.1.2.1 `login_hint`: the consumer already knows which
+        # patron this is, so pass it along and spare them typing an address
+        # they just proved they own somewhere else. It only ever PRE-FILLS the
+        # field — see `_login_hint` in routes/oauth.py for why it must not
+        # trigger the send by itself.
+        login = {"redirect_uri": this_request}
+        if login_hint:
+            login["login_hint"] = login_hint
         return RedirectResponse(
-            url=f"/v1/api/oauth/authorize?{urlencode({'redirect_uri': this_request})}",
+            url=f"/v1/api/oauth/authorize?{urlencode(login)}",
             status_code=303,
         )
 
@@ -295,7 +304,7 @@ def _echo(request: Request) -> dict:
     """The authorization request's own parameters, for round-tripping through
     login. Rebuilt from the parsed query so nothing extra is carried along."""
     keep = ("client_id", "redirect_uri", "response_type", "scope", "state",
-            "code_challenge", "code_challenge_method")
+            "code_challenge", "code_challenge_method", "login_hint")
     return {k: v for k, v in request.query_params.items() if k in keep}
 
 
