@@ -601,7 +601,13 @@ class TestConsentIntegrity:
         _, challenge = pkce()
         r = app_client.get(AUTHORIZE_URL, params=authorize_params(obj, challenge),
                            cookies={"session": session_cookie}, follow_redirects=False)
-        body = r.text.lower()
+        body = " ".join(r.text.lower().split())
+        # Enablement phrasing: the patron is granting something, and the
+        # sentence should say what — not "the consumer wants access", which
+        # casts a service as the actor and the patron as an obstacle.
+        assert "allow" in body and "to borrow, return, and see your loans" in body
+        assert "wants access to your library account" not in body, (
+            "reverted to framing the consumer as the actor")
         assert "this library registered this application" in body
         assert "registered itself" not in body, (
             "stale copy from when anyone could self-register")
