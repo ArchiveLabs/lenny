@@ -276,6 +276,12 @@ async def authorize(
         # in error, which is the failure mode that remains once self-
         # registration is gone.
         "redirect_host": urlparse(redirect_uri).netloc,
+        # This node's own hostname. Deliberately not a new "library name"
+        # setting: the consent sentence needs to name which library is being
+        # borrowed from, and the node already knows its public address. An
+        # operator-set display name would be nicer and is a config decision
+        # nobody has made.
+        "node_host": urlparse(issuer_url(request)).hostname or "this library",
         "request_handle": handle,
         "email": email,
     })

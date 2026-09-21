@@ -5,7 +5,15 @@
 {% block content %}
 <div class="card">
   <div style="text-align: center;"><span class="badge badge--oauth">Authorize</span></div>
-  <h1>{{ client_name }} wants access to your library account</h1>
+  {#
+    Phrased as what the patron is enabling, not as what the consumer wants.
+    "Open Library wants access to your library account" frames a service as
+    the actor and the patron as an obstacle; the patron is the one granting
+    something and the sentence should say what. Returns are already inside the
+    `borrow` scope, so naming them here is accurate rather than aspirational.
+  #}
+  <h1>Allow {{ client_name }} to borrow, return, and see your loans
+      at {{ node_host }}</h1>
   <p class="subtitle">Signed in as {{ email }}</p>
 
   <ul class="scopes">
