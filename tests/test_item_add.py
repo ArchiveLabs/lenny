@@ -31,11 +31,9 @@ def test_add_constructs_item_without_title_or_author():
     fake_file = MagicMock()
     fake_file.filename = "test.epub"
 
-    with patch.object(LennyAPI, "is_allowed_uploader", return_value=True), \
-         patch.object(LennyAPI, "upload_files", return_value=FormatEnum.EPUB.value):
+    with patch.object(LennyAPI, "upload_files", return_value=FormatEnum.EPUB.value):
         item = LennyAPI.add(
-            openlibrary_edition=920000001, files=[fake_file],
-            uploader_ip="127.0.0.1", encrypt=False,
+            openlibrary_edition=920000001, files=[fake_file], encrypt=False,
         )
 
     assert item.openlibrary_edition == 920000001

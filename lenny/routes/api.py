@@ -69,7 +69,6 @@ from lenny.core.exceptions import (
     DatabaseUpdateError,
     FileTooLargeError,
     S3UploadError,
-    UploaderNotAllowedError,
     BookUnavailableError,
     PatronLoanLimitError,
     EmailNotFoundError,
@@ -525,6 +524,19 @@ async def return_item(request: Request, book_id: int, format: str=".epub", sessi
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+# Admin-gated, though the path predates the /admin/ namespace. Authorization
+# used to be `request.client.host`: loopback, any private address (the docker
+# gateway and the whole LAN in a default compose install), or a reverse-DNS
+# name ending in "localhost"/"openlibrary.press" — suffix-matched, so a
+# lookalike domain whose owner controls both its PTR and its A record passed
+# the forward-confirmation in front of it. And because uvicorn runs with
+# --proxy-headers, the "observed" address could itself come from a header the
+# caller wrote. Network position is not identity; the whole check is gone.
+#
+# The admin UI already sends the pair below on this call (lenny-app
+# app/api/admin/upload/route.ts); the API simply never looked. The in-container
+# importers (Standard Ebooks, BRIET) send it too, via LennyClient.upload —
+# credentialed like everyone else rather than exempted for being local.
 @router.post('/upload', status_code=status.HTTP_200_OK)
 async def upload(
     request: Request,
@@ -535,20 +547,23 @@ async def upload(
     file: UploadFile = File(
         ..., description="The PDF or EPUB file to upload (max 50MB)")
 ):
+    """Create a new item from an uploaded file.
+
+    Admin only: requires the `X-Admin-Internal-Secret` shared secret and an
+    admin Bearer token, the same pair as every /admin/ route.
+    """
+    _require_admin(request)
 
     try:
         item = LennyAPI.add(
             openlibrary_edition=openlibrary_edition,
             files=[file],  # TODO expand to allow multiple
-            uploader_ip=request.client.host if request.client else "unknown",
             encrypt=encrypted,
         )
         return HTMLResponse(
             status_code=status.HTTP_200_OK,
             content="File uploaded successfully."
         )
-    except UploaderNotAllowedError:
-        raise HTTPException(status_code=403, detail="Upload not permitted from this host.")
     except ItemExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except InvalidFileError as e:
@@ -784,8 +799,8 @@ async def reupload_item(
     """
     Replace an existing item's file (fixes a wrong-file import). Item id and
     every loan on it are untouched — only the S3 object(s) and the
-    encrypted/formats flags change. Under /admin/, so admin-token gated,
-    unlike the IP-allowlisted /upload (which is for creating new items).
+    encrypted/formats flags change. Same admin gate as /upload (which is for
+    creating new items rather than replacing one).
 
     `book_id` accepts either a bare OLID or an OpenLibrary edition key, same
     as PATCH/DELETE.

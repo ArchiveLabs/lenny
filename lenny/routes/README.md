@@ -85,6 +85,10 @@ Base URL: `http://localhost:8080/v1/api`
 
 - **POST /upload**
   - Uploads a PDF or EPUB file for an OpenLibrary edition.
+  - **Admin only.** Requires the same credential pair as every `/admin/` route:
+    the `X-Admin-Internal-Secret` shared secret (from `auth.env`) *and* an admin
+    Bearer token from `POST /admin/auth`. There is no IP-based exemption — a
+    caller's network position never authorizes an upload.
   - **Form Data:**
     - `openlibrary_edition` (int, required): OpenLibrary Edition ID (must be positive)
     - `encrypted` (bool, optional, default: false): Set to true if file is encrypted
@@ -92,6 +96,8 @@ Base URL: `http://localhost:8080/v1/api`
   - Example:
     ```sh
     curl -X POST "http://localhost:8080/v1/api/upload" \
+      -H "X-Admin-Internal-Secret: $ADMIN_INTERNAL_SECRET" \
+      -H "Authorization: Bearer $ADMIN_TOKEN" \
       -F "openlibrary_edition=12345678" \
       -F "encrypted=false" \
       -F "file=@book.epub"

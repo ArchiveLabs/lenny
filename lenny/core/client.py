@@ -6,6 +6,7 @@ import httpx
 from io import BytesIO
 from typing import Optional
 from lenny.configs import LENNY_HTTP_HEADERS
+from lenny.core import auth
 import logging
 
 logger = logging.getLogger(__name__)
@@ -143,13 +144,18 @@ class LennyClient:
         files_payload = {
             'file': ('book.epub', file_content, 'application/epub+zip')
         }
+        # /upload is admin-gated. This runs inside the api container (the
+        # importers are background tasks of this very process), so it holds the
+        # server-side secrets and presents them like any other admin caller —
+        # it is not exempted for being local.
+        headers = {**cls.HTTP_HEADERS, **auth.internal_admin_headers()}
         try:
             with httpx.Client(verify=False) as client:
                 response = client.post(
                     cls.UPLOAD_API_URL,
                     data=data_payload,
                     files=files_payload,
-                    headers=cls.HTTP_HEADERS,
+                    headers=headers,
                     timeout=timeout
                 )
                 logger.info(f"Upload response (OLID: {olid}): {response.content}")

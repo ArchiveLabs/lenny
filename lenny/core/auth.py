@@ -44,6 +44,39 @@ def verify_admin_internal_secret(secret: str) -> bool:
         return False
     return hmac.compare_digest(ADMIN_INTERNAL_SECRET, secret)
 
+def issue_admin_token() -> str:
+    """Mint a signed admin token valid for ADMIN_TOKEN_TTL.
+
+    Minting is NOT authorization: every caller must have established admin
+    identity first — by password (`authenticate_admin`) or by already holding
+    the process's own secrets (`LennyClient`, which runs inside the api
+    container and is calling this service's own /upload).
+    """
+    return _get_admin_serializer().dumps({"admin": True})
+
+def internal_admin_headers() -> dict:
+    """Admin credentials for a server-side call this process makes to its own
+    admin-gated HTTP routes (`LennyClient.upload` -> POST /v1/api/upload).
+
+    Both halves come from secrets only this container holds: the shared secret
+    out of auth.env, and a token signed with LENNY_SEED. They are read from the
+    same module globals `verify_admin_internal_secret`/`verify_admin_token`
+    check against, so the two ends cannot drift apart.
+
+    Deliberately not a "skip the check when the call is local" shortcut: the
+    request is authenticated like any other, so the route keeps exactly one
+    authorization path to reason about.
+    """
+    if not ADMIN_INTERNAL_SECRET:
+        logger.error(
+            "ADMIN_INTERNAL_SECRET is unset, so internal uploads will be "
+            "rejected with 403. Run docker/configure.sh to populate auth.env."
+        )
+    return {
+        "X-Admin-Internal-Secret": ADMIN_INTERNAL_SECRET or "",
+        "Authorization": f"Bearer {issue_admin_token()}",
+    }
+
 def authenticate_admin(username: str, password: str) -> Optional[str]:
     """Validates admin username + password and returns a signed token on success."""
     if not ADMIN_USERNAME or not ADMIN_PASSWORD:
@@ -52,8 +85,7 @@ def authenticate_admin(username: str, password: str) -> Optional[str]:
     password_ok = hmac.compare_digest(ADMIN_PASSWORD, password)
     if not (username_ok and password_ok):
         return None
-    serializer = _get_admin_serializer()
-    return serializer.dumps({"admin": True})
+    return issue_admin_token()
 
 def verify_admin_token(token: str) -> bool:
     """Validates a signed admin token. Returns True if valid and not expired."""

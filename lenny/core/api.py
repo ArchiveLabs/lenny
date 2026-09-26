@@ -2,8 +2,6 @@ from pathlib import Path
 from typing import Optional
 from fastapi import UploadFile, Request
 from botocore.exceptions import ClientError
-import socket
-import ipaddress
 import time as _time
 import requests as _requests
 import httpx as _httpx
@@ -26,7 +24,6 @@ from lenny.core.exceptions import (
     DatabaseUpdateError,
     FileTooLargeError,
     S3UploadError,
-    UploaderNotAllowedError,
     EmailNotFoundError,
     ItemNotFoundError,
     LoanNotFoundError
@@ -671,36 +668,6 @@ class LennyAPI:
         return f
 
     @classmethod
-    def _resolve_ip_to_hostname(cls, client_ip: str) -> Optional[str]:
-        try:
-            hostname, _, _ = socket.gethostbyaddr(client_ip)
-            # Forward-confirmed rDNS: PTR must resolve back to the same IP to
-            # prevent spoofing via attacker-controlled PTR records.
-            if socket.gethostbyname(hostname) != client_ip:
-                return None
-            return hostname
-        except (socket.herror, socket.gaierror):
-            return None
-    
-    @classmethod
-    def is_allowed_uploader(cls, client_ip: str) -> bool:
-        if client_ip in ("127.0.0.1", "::1"):
-            return True
-
-        # Allow Docker internal network (admin container proxies uploads server-side)
-        try:
-            if ipaddress.ip_address(client_ip).is_private:
-                return True
-        except ValueError:
-            pass
-
-        if host := cls._resolve_ip_to_hostname(client_ip):
-            for allowed_host in ["localhost", "openlibrary.press"]:
-                if host == allowed_host or host.endswith(allowed_host):
-                    return True
-        return False
-
-    @classmethod
     def upload_file(cls, fp, filename):
         if not fp.size or fp.size > cls.MAX_FILE_SIZE:
             one_mb = (1024 * 1024)
@@ -770,11 +737,14 @@ class LennyAPI:
         return formats
 
     @classmethod
-    def add(cls, openlibrary_edition: int, files: list[UploadFile], uploader_ip:str, encrypt: bool=False):
-        """Adds a book into s3 and the database"""
-        if not cls.is_allowed_uploader(uploader_ip):
-            raise UploaderNotAllowedError(f"IP {uploader_ip} not in allow list")
+    def add(cls, openlibrary_edition: int, files: list[UploadFile], encrypt: bool=False):
+        """Adds a book into s3 and the database.
 
+        Authorization is the caller's job and is NOT done here: every route
+        reaching this must already have proved the caller is an admin
+        (`_require_admin`). This used to take an `uploader_ip` and authorize on
+        it, which authorized anyone who could reach the port.
+        """
         if Item.exists(openlibrary_edition):
             raise ItemExistsError(f"Item '{openlibrary_edition}' already exists.")
 
