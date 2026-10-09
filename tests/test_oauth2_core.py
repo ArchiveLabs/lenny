@@ -145,6 +145,98 @@ class TestOAuthClient:
         assert granted is None
         assert "unknown scope" in err
 
+    def test_openid_alone_is_treated_as_no_scope(self, client):
+        """A generic OIDC client sends `openid` by habit; it carries no permission here."""
+        granted, err = client.resolve_scope("openid")
+        assert err is None
+        assert set(granted.split()) == {"borrow", "loans:read"}
+
+    def test_identity_scopes_are_ignored_next_to_real_ones(self, client):
+        granted, err = client.resolve_scope("openid email profile loans:read")
+        assert err is None
+        assert granted == "loans:read"
+
+    def test_attack_identity_scope_does_not_widen_a_narrow_client(self):
+        """Ignoring `openid` must never grant more than the client was registered for."""
+        narrow, _ = OAuthClient.register(
+            name="Loans only", redirect_uris=[REDIRECT], scopes=["loans:read"])
+        granted, err = narrow.resolve_scope("openid")
+        assert err is None
+        assert granted == "loans:read"
+
+    def test_attack_unregistered_scope_still_refused_beside_openid(self):
+        narrow, _ = OAuthClient.register(
+            name="Loans only", redirect_uris=[REDIRECT], scopes=["loans:read"])
+        granted, err = narrow.resolve_scope("openid borrow")
+        assert granted is None
+        assert "not registered" in err
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Operator-chosen client ids
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestChosenClientId:
+    def test_operator_can_choose_the_id(self):
+        obj, secret = OAuthClient.register(
+            name="Book Server", redirect_uris=[REDIRECT], is_confidential=False,
+            client_id="reader-archive-org")
+        assert obj.client_id == "reader-archive-org"
+        assert secret is None
+        assert OAuthClient.get("reader-archive-org").name == "Book Server"
+
+    def test_omitted_id_is_still_minted(self):
+        a, _ = OAuthClient.register(name="A", redirect_uris=[REDIRECT])
+        b, _ = OAuthClient.register(name="B", redirect_uris=[REDIRECT])
+        assert a.client_id != b.client_id and len(a.client_id) >= 16
+
+    def test_two_different_apps_each_get_their_own_id_and_redirect(self):
+        one, _ = OAuthClient.register(name="One", redirect_uris=[REDIRECT], client_id="app-one")
+        two, _ = OAuthClient.register(name="Two", redirect_uris=[OTHER_REDIRECT], client_id="app-two")
+        assert one.allows_redirect(REDIRECT) and not one.allows_redirect(OTHER_REDIRECT)
+        assert two.allows_redirect(OTHER_REDIRECT) and not two.allows_redirect(REDIRECT)
+
+    def test_attack_duplicate_id_refused(self):
+        OAuthClient.register(name="First", redirect_uris=[REDIRECT], client_id="shared-name")
+        with pytest.raises(ValueError, match="already registered"):
+            OAuthClient.register(name="Second", redirect_uris=[OTHER_REDIRECT], client_id="shared-name")
+
+    def test_attack_disabled_client_id_cannot_be_reused(self):
+        """Reusing a disabled id could hand a new owner the old client's trust."""
+        OAuthClient.register(name="Old", redirect_uris=[REDIRECT], client_id="retired-app")
+        OAuthClient.disable("retired-app")
+        with pytest.raises(ValueError, match="already registered"):
+            OAuthClient.register(name="New", redirect_uris=[OTHER_REDIRECT], client_id="retired-app")
+
+    @pytest.mark.parametrize("bad", ["", "ab", "-lead", "has space", "slash/inside",
+                                     "semi;colon", "x" * 65, "ünï", "a\nb"])
+    def test_attack_malformed_id_refused(self, bad):
+        with pytest.raises(ValueError, match="cannot be a client_id"):
+            OAuthClient.register(name="Bad", redirect_uris=[REDIRECT], client_id=bad)
+
+    def test_attack_ids_differing_only_by_case_are_the_same_id(self):
+        """`Reader-Archive-Org` beside `reader-archive-org` is a lookalike."""
+        OAuthClient.register(name="Real", redirect_uris=[REDIRECT], client_id="reader-archive-org")
+        with pytest.raises(ValueError, match="already registered"):
+            OAuthClient.register(name="Twin", redirect_uris=[OTHER_REDIRECT], client_id="Reader-Archive-Org")
+
+    @pytest.mark.parametrize("name", ["", "   ", "x" * 101])
+    def test_attack_a_name_that_is_empty_or_too_long_is_refused(self, name):
+        """The column holds 255; Postgres answers more with a 500."""
+        with pytest.raises(ValueError, match="name must be"):
+            OAuthClient.register(name=name, redirect_uris=[REDIRECT])
+
+    def test_attack_too_many_redirect_urls_refused(self):
+        uris = [f"https://a{i}.example.org/cb" for i in range(11)]
+        with pytest.raises(ValueError, match="at most"):
+            OAuthClient.register(name="Many", redirect_uris=uris)
+
+    def test_a_chosen_id_still_needs_a_registered_redirect(self):
+        """The id is public; the registered redirect is what binds the client."""
+        obj, _ = OAuthClient.register(
+            name="Book Server", redirect_uris=[REDIRECT], client_id="reader-archive-org")
+        assert obj.allows_redirect("https://evil.example.com/cb") is False
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Authorization codes

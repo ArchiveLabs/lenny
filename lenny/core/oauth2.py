@@ -76,6 +76,32 @@ SCOPES = {
     "borrow": "Borrow and return books on your behalf",
 }
 
+# OpenID Connect identity scopes. Lenny's own server is not an OIDC provider, but
+# generic OIDC-minded clients send these by habit. They carry no permission here,
+# so they are ignored rather than treated as an unknown-scope error.
+OIDC_IDENTITY_SCOPES = {"openid", "profile", "email", "offline_access"}
+
+CLIENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}")
+
+# Bounds on what an operator can register. The database column for `name` is
+# 255 characters and Postgres refuses more with a 500; the rest keep one client
+# from carrying an unbounded amount of text that is read on every request.
+MAX_CLIENT_NAME_LEN = 100
+MAX_REDIRECT_URIS = 10
+MAX_REDIRECT_URI_LEN = 2048
+
+# Consumers every node trusts out of the box. Created once at startup if absent;
+# an operator who disables one keeps it disabled (the row stays, so it is never
+# recreated), and can bring it back from the admin page.
+DEFAULT_CLIENTS = [
+    {
+        "client_id": "reader-archive-org",
+        "name": "Book Server",
+        "redirect_uris": ["https://reader.archive.org"],
+        "is_confidential": False,
+    },
+]
+
 
 _PK = BigInteger().with_variant(Integer, "sqlite")
 
@@ -120,6 +146,34 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _REVERSE_DNS_SCHEME = re.compile(r"^[a-z][a-z0-9+.\-]*\.[a-z0-9+.\-]+$")
 
 
+def _check_name(name: Optional[str]) -> str:
+    name = (name or "").strip()
+    if not name or len(name) > MAX_CLIENT_NAME_LEN:
+        raise ValueError(f"name must be 1-{MAX_CLIENT_NAME_LEN} characters.")
+    return name
+
+
+def _check_redirects(redirect_uris: list[str]) -> list[str]:
+    if not redirect_uris:
+        raise ValueError("at least one redirect URL is required.")
+    if len(redirect_uris) > MAX_REDIRECT_URIS:
+        raise ValueError(f"at most {MAX_REDIRECT_URIS} redirect URLs per app.")
+    for uri in redirect_uris:
+        if not acceptable_redirect(uri):
+            raise ValueError(
+                f"{uri!r} cannot be a redirect_uri: it must be an absolute "
+                "https:// URL, http:// on loopback, or a private-use scheme "
+                "such as opds:// or com.example.app:// (RFC 8252).")
+    return list(dict.fromkeys(redirect_uris))  # drop exact duplicates, keep order
+
+
+def _check_scopes(scopes: list[str]) -> list[str]:
+    scopes = list(dict.fromkeys(scopes))
+    if not scopes or (unknown := set(scopes) - set(SCOPES)):
+        raise ValueError(f"scopes must be some of: {', '.join(sorted(SCOPES))}.")
+    return scopes
+
+
 def acceptable_redirect(uri: str) -> bool:
     """Whether a redirect_uri may be registered.
 
@@ -146,8 +200,16 @@ def acceptable_redirect(uri: str) -> bool:
         return False
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in uri):
         return False
+    # Whitespace and backslashes are not URI syntax, and the two ends of the flow
+    # parse them differently: a browser reads `https://evil.example.org\\@good.example.org/`
+    # as host evil.example.org, Python as good.example.org. A length cap stops a
+    # megabyte "URL" being stored and compared on every request.
+    if len(uri) > MAX_REDIRECT_URI_LEN or "\\" in uri or any(ch.isspace() for ch in uri):
+        return False
     if parsed.scheme == "https" and parsed.netloc:
-        return True
+        # `https://good.example.org@evil.example.org/cb` really names evil.example.org,
+        # but the consent screen would show a hurried patron the first half.
+        return "@" not in parsed.netloc
 
     # RFC 8252 §7.1 — a native app redirects to a private-use URI scheme,
     # because it has no https origin to own. Lenny already hands native OPDS
@@ -217,33 +279,173 @@ class OAuthClient(Base):
     @classmethod
     def register(cls, name: str, redirect_uris: list[str],
                  scopes: Optional[list[str]] = None,
-                 is_confidential: bool = True) -> tuple["OAuthClient", Optional[str]]:
+                 is_confidential: bool = True,
+                 client_id: Optional[str] = None) -> tuple["OAuthClient", Optional[str]]:
         """Create a client. Returns `(client, client_secret)`.
+
+        `client_id` lets an operator pick the id, for a consumer that ships with a
+        fixed one (e.g. a reading app). It is not a secret — the registered
+        redirect_uris are what bind a client — so a chosen id is as safe as a
+        minted one. Omitted, a random id is minted.
 
         The secret is returned exactly once and never recoverable afterwards —
         only its hash is stored, so a database dump yields nothing replayable.
 
-        Raises ValueError for a redirect_uri that could not be honoured.
+        Raises ValueError for a redirect_uri that could not be honoured, or a
+        client_id that is malformed or already taken (a disabled client keeps its
+        id, so it cannot be reused to resurrect old tokens).
         """
-        for uri in redirect_uris:
-            if not acceptable_redirect(uri):
+        name = _check_name(name)
+        redirect_uris = _check_redirects(redirect_uris)
+        if client_id is not None:
+            if not CLIENT_ID_RE.fullmatch(client_id):
                 raise ValueError(
-                    f"{uri!r} cannot be a redirect_uri: it must be an absolute "
-                    "https:// URL, http:// on loopback, or a private-use scheme "
-                    "such as opds:// or com.example.app:// (RFC 8252).")
-
+                    f"{client_id!r} cannot be a client_id: use 3-64 letters, digits, "
+                    "'.', '_' or '-', starting with a letter or digit.")
+            # Case-insensitive, so `Reader-Archive-Org` cannot sit beside
+            # `reader-archive-org` and be mistaken for it.
+            if db.query(cls).filter(func.lower(cls.client_id) == client_id.lower()).first():
+                raise ValueError(f"client_id {client_id!r} is already registered.")
         secret = _mint(32) if is_confidential else None
         client = cls(
-            client_id=_mint(16),
+            client_id=client_id or _mint(16),
             client_secret_hash=_hash(secret) if secret else None,
             name=name,
             redirect_uris="\n".join(redirect_uris),
-            scopes=" ".join(scopes or list(SCOPES)),
+            scopes=" ".join(_check_scopes(scopes) if scopes else list(SCOPES)),
             is_confidential=is_confidential,
         )
         db.add(client)
         db.commit()
         return client, secret
+
+    @classmethod
+    def find(cls, client_id: str) -> Optional["OAuthClient"]:
+        """The client with this id in any state, including disabled. `get` is for
+        authenticating a request and hides disabled clients; this is for admin."""
+        return db.query(cls).filter(cls.client_id == client_id).first()
+
+    @classmethod
+    def _revoke_live_tokens(cls, client_id: str) -> int:
+        tokens = db.query(AccessToken).filter(
+            AccessToken.client_id == client_id,
+            AccessToken.revoked_at == None,  # noqa: E711
+        ).all()
+        for token in tokens:
+            token.revoked_at = _now()
+            db.add(token)
+        return len(tokens)
+
+    @classmethod
+    def update(cls, client_id: str, *, name: Optional[str] = None,
+               redirect_uris: Optional[list[str]] = None,
+               scopes: Optional[list[str]] = None) -> tuple["OAuthClient", int]:
+        """Change what an admin got wrong at registration. Returns
+        `(client, tokens_revoked)`. Raises LookupError for an unknown client and
+        ValueError for a change that fails the same checks `register` applies.
+
+        The id is never editable: tokens and codes are keyed on it. Neither is the
+        type (public or server): that decides whether a secret exists, and a
+        secret is reset, not toggled.
+
+        Taking a permission away revokes the client's live tokens. Otherwise a
+        token issued with the old, wider scope would keep working until it expired,
+        which would make "I removed `borrow`" untrue. The patrons sign in again.
+        Redirect URLs need no such step: a code is bound to the URL it was issued
+        for and lives minutes, and the check runs again on every authorization.
+        """
+        row = cls.find(client_id)
+        if row is None:
+            raise LookupError(client_id)
+        new_name = _check_name(name) if name is not None else None
+        new_uris = _check_redirects(redirect_uris) if redirect_uris is not None else None
+        new_scopes = _check_scopes(scopes) if scopes is not None else None
+
+        revoked = 0
+        if new_scopes is not None and (row.allowed_scopes() - set(new_scopes)):
+            revoked = cls._revoke_live_tokens(client_id)
+        if new_name is not None:
+            row.name = new_name
+        if new_uris is not None:
+            row.redirect_uris = "\n".join(new_uris)
+        if new_scopes is not None:
+            row.scopes = " ".join(new_scopes)
+        db.add(row)
+        db.commit()
+        return row, revoked
+
+    @classmethod
+    def rotate_secret(cls, client_id: str) -> str:
+        """Issue a new secret for a server app and return it once. The old secret
+        stops working immediately; tokens already issued are not affected. This is
+        the answer to "the secret was shown once and we lost it" (or leaked).
+
+        Raises LookupError for an unknown client, ValueError for a public client,
+        which has no secret to rotate."""
+        row = cls.find(client_id)
+        if row is None:
+            raise LookupError(client_id)
+        if not row.is_confidential:
+            raise ValueError("this app is a public client: it has no secret to reset.")
+        secret = _mint(32)
+        row.client_secret_hash = _hash(secret)
+        db.add(row)
+        db.commit()
+        return secret
+
+    @classmethod
+    def delete(cls, client_id: str) -> None:
+        """Remove a client and everything it holds. Raises LookupError if unknown
+        and ValueError when removal is not allowed:
+
+        * a built-in client (it would simply be recreated at the next start, and
+          an operator's "off" is what survives a restart), and
+        * a client that is still on: turning it off first is the deliberate step,
+          so a removal is never one stray click away from signing patrons out.
+
+        Its tokens and codes go with it, so a later client registered under the
+        same id inherits nothing.
+        """
+        row = cls.find(client_id)
+        if row is None:
+            raise LookupError(client_id)
+        if client_id in {c["client_id"] for c in DEFAULT_CLIENTS}:
+            raise ValueError("a built-in app cannot be removed; turn it off instead.")
+        if row.disabled_at is None:
+            raise ValueError("turn the app off before removing it.")
+        db.query(AccessToken).filter(AccessToken.client_id == client_id).delete(synchronize_session=False)
+        db.query(AuthorizationCode).filter(AuthorizationCode.client_id == client_id).delete(synchronize_session=False)
+        db.delete(row)
+        db.commit()
+
+    @classmethod
+    def all(cls) -> list["OAuthClient"]:
+        return db.query(cls).order_by(cls.created_at.desc(), cls.id.desc()).all()
+
+    @classmethod
+    def enable(cls, client_id: str) -> bool:
+        """Undo `disable` for the client itself. The tokens `disable` revoked stay
+        revoked: a re-enabled client signs its patrons in again from scratch."""
+        row = cls.find(client_id)
+        if row is None:
+            return False
+        row.disabled_at = None
+        db.add(row)
+        db.commit()
+        return True
+
+    def public_view(self) -> dict:
+        """Everything an admin screen may show. Never the secret or its hash."""
+        return {
+            "client_id": self.client_id,
+            "name": self.name,
+            "redirect_uris": [u.strip() for u in self.redirect_uris.splitlines() if u.strip()],
+            "scopes": sorted(self.allowed_scopes()),
+            "is_confidential": bool(self.is_confidential),
+            "status": "disabled" if self.disabled_at else "active",
+            "is_default": self.client_id in {c["client_id"] for c in DEFAULT_CLIENTS},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
     @classmethod
     def disable(cls, client_id: str) -> int:
@@ -258,15 +460,9 @@ class OAuthClient(Base):
             return 0
         row.disabled_at = _now()
         db.add(row)
-        tokens = db.query(AccessToken).filter(
-            AccessToken.client_id == client_id,
-            AccessToken.revoked_at == None,  # noqa: E711
-        ).all()
-        for token in tokens:
-            token.revoked_at = _now()
-            db.add(token)
+        revoked = cls._revoke_live_tokens(client_id)
         db.commit()
-        return len(tokens)
+        return revoked
 
     # ── checks ───────────────────────────────────────────────────────────────
 
@@ -316,7 +512,10 @@ class OAuthClient(Base):
         allowed = self.allowed_scopes()
         if not requested:
             return " ".join(sorted(allowed)), None
-        asked = {s for s in requested.split() if s}
+        asked = {s for s in requested.split() if s} - OIDC_IDENTITY_SCOPES
+        if not asked:
+            # Only identity scopes were sent: same as sending none.
+            return " ".join(sorted(allowed)), None
         if unknown := asked - set(SCOPES):
             return None, f"unknown scope(s): {' '.join(sorted(unknown))}"
         if ungranted := asked - allowed:
@@ -732,3 +931,26 @@ def sweep_expired(older_than_days: int = 1) -> int:
     ).delete(synchronize_session=False)
     db.commit()
     return deleted
+
+
+def ensure_default_clients() -> list[str]:
+    """Create any DEFAULT_CLIENTS this node does not have yet. Safe to run on
+    every start and from several workers at once. Returns the ids it created.
+
+    A default that exists in any state, disabled included, is left alone, so an
+    operator's decision to turn one off is not undone by the next restart.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    created = []
+    for spec in DEFAULT_CLIENTS:
+        if OAuthClient.find(spec["client_id"]):
+            continue
+        try:
+            OAuthClient.register(**spec)
+            created.append(spec["client_id"])
+        except (IntegrityError, ValueError):
+            # Another worker won the race, or the spec is invalid; either way
+            # there is nothing for this one to do.
+            db.rollback()
+    return created

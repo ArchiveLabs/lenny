@@ -258,6 +258,24 @@ class TestAuthorize:
         # Scopes are described in words, not just symbols.
         assert "on loan" in r.text
 
+    def test_consent_screen_is_usable(self, app_client, client, session_cookie):
+        """The screen must render both choices visibly, read access before write,
+        and name where the patron is sent. "Not now" once had no background and
+        rendered as white text on white, so a patron could not see how to decline."""
+        obj, _ = client
+        _, challenge = pkce()
+        r = app_client.get(AUTHORIZE_URL, params=authorize_params(obj, challenge),
+                           cookies={"session": session_cookie}, follow_redirects=False)
+        assert r.status_code == 200
+        html = r.text
+        assert 'class="btn btn--primary"' in html and 'value="allow"' in html
+        assert 'class="btn btn--secondary"' in html and 'value="deny"' in html
+        assert ".btn--secondary" in html, "the decline button has no style of its own"
+        assert html.index("loans:read") < html.index(">borrow<"), \
+            "the read scope should be listed before the one that acts"
+        assert "You will return to" in html
+        assert '<meta charset="utf-8">' in html
+
     @pytest.mark.parametrize("override,expected", [
         ({"response_type": "token"}, "unsupported_response_type"),
         ({"code_challenge": ""}, "invalid_request"),
@@ -275,6 +293,128 @@ class TestAuthorize:
         q = parse_qs(urlparse(r.headers["location"]).query)
         assert q["error"][0] == expected
         assert q["state"][0] == "state-123", "state must survive an error"
+
+    @pytest.mark.parametrize("prompt", ["login", "select_account"])
+    def test_prompt_forces_a_fresh_sign_in_and_drops_the_old_login(
+            self, app_client, client, session_cookie, prompt):
+        """A patron who is already signed in can ask to sign in as someone else."""
+        obj, _ = client
+        _, challenge = pkce()
+        r = app_client.get(AUTHORIZE_URL,
+                           params={**authorize_params(obj, challenge), "prompt": prompt},
+                           cookies={"session": session_cookie}, follow_redirects=False)
+        assert r.status_code == 303
+        loc = urlparse(r.headers["location"])
+        assert loc.path == "/v1/api/oauth/authorize"
+        outer = parse_qs(loc.query)
+        assert outer["prompt"] == [prompt], "the provider has to be told to show its chooser"
+        back = outer["redirect_uri"][0]
+        assert "prompt" not in back, "the return trip must not ask again, or login never ends"
+        assert f"client_id={obj.client_id}" in back
+        cleared = r.headers.get("set-cookie", "")
+        assert "session=" in cleared and ("Max-Age=0" in cleared or "expires=" in cleared.lower()), \
+            "the old session cookie must be dropped"
+
+    def test_the_return_trip_after_a_fresh_sign_in_reaches_consent(
+            self, app_client, client, session_cookie):
+        obj, _ = client
+        _, challenge = pkce()
+        first = app_client.get(AUTHORIZE_URL,
+                               params={**authorize_params(obj, challenge), "prompt": "login"},
+                               follow_redirects=False)
+        back = parse_qs(urlparse(first.headers["location"]).query)["redirect_uri"][0]
+        again = app_client.get(back, cookies={"session": session_cookie}, follow_redirects=False)
+        assert again.status_code == 200 and "Allow" in again.text
+
+    def test_attack_prompt_is_an_allow_list(self, app_client, client, session_cookie):
+        """Anything but login/select_account is ignored, never forwarded."""
+        obj, _ = client
+        _, challenge = pkce()
+        for junk in ("none", "consent", "x%0d%0aSet-Cookie:evil=1", "login-ish"):
+            r = app_client.get(AUTHORIZE_URL,
+                               params={**authorize_params(obj, challenge), "prompt": junk},
+                               cookies={"session": session_cookie}, follow_redirects=False)
+            assert r.status_code == 200, f"{junk!r} should be ignored"
+
+    def test_prompt_cannot_get_around_client_checks(self, app_client, session_cookie):
+        _, challenge = pkce()
+        r = app_client.get(AUTHORIZE_URL, params={
+            "client_id": "nobody", "redirect_uri": REDIRECT, "response_type": "code",
+            "code_challenge": challenge, "code_challenge_method": "S256", "prompt": "login"},
+            cookies={"session": session_cookie}, follow_redirects=False)
+        assert r.status_code == 400 and r.json()["error"] == "invalid_client"
+
+    def test_consent_offers_a_way_to_use_a_different_account(
+            self, app_client, client, session_cookie):
+        obj, _ = client
+        _, challenge = pkce()
+        r = app_client.get(AUTHORIZE_URL, params=authorize_params(obj, challenge),
+                           cookies={"session": session_cookie}, follow_redirects=False)
+        assert r.status_code == 200
+        assert "Not you?" in r.text
+        link = re.search(r'href="([^"]*prompt=select_account[^"]*)"', r.text)
+        assert link, "no switch-account link on the consent screen"
+        href = link.group(1).replace("&amp;", "&")
+        assert href.startswith("/v1/api/oauth2/authorize?")
+        assert f"client_id={obj.client_id}" in href and "code_challenge=" in href
+
+    def test_a_browser_gets_a_human_page_for_an_unregistered_app(self, app_client):
+        """A patron who follows a link from an unregistered app is not a program."""
+        _, challenge = pkce()
+        r = app_client.get(AUTHORIZE_URL, params={
+            "client_id": "nobody-home", "redirect_uri": REDIRECT, "response_type": "code",
+            "code_challenge": challenge, "code_challenge_method": "S256"},
+            headers={"Accept": "text/html,application/xhtml+xml"}, follow_redirects=False)
+        assert r.status_code == 400
+        assert r.headers["content-type"].startswith("text/html")
+        assert "set up with this library" in r.text
+        assert "App Access" in r.text, "it must say who can fix it and where"
+        assert "nobody-home" in r.text and "invalid_client" in r.text
+        assert '"error"' not in r.text, "no raw JSON in front of a patron"
+        assert r.headers["x-frame-options"] == "DENY"
+
+    def test_a_program_still_gets_json_for_the_same_mistake(self, app_client):
+        _, challenge = pkce()
+        for accept in (None, "application/json", "*/*"):
+            r = app_client.get(AUTHORIZE_URL, params={
+                "client_id": "nobody-home", "redirect_uri": REDIRECT, "response_type": "code",
+                "code_challenge": challenge, "code_challenge_method": "S256"},
+                headers={"Accept": accept} if accept else {}, follow_redirects=False)
+            assert r.status_code == 400 and r.json()["error"] == "invalid_client"
+
+    def test_a_browser_gets_a_human_page_for_an_unregistered_return_address(
+            self, app_client, client):
+        obj, _ = client
+        _, challenge = pkce()
+        r = app_client.get(AUTHORIZE_URL,
+                           params=authorize_params(obj, challenge, redirect_uri="https://evil.example.com/cb"),
+                           headers={"Accept": "text/html"}, follow_redirects=False)
+        assert r.status_code == 400 and r.headers["content-type"].startswith("text/html")
+        assert "return address" in r.text
+        assert "evil.example.com" not in r.text, "never echo an unregistered address back"
+
+    def test_attack_the_problem_page_never_renders_markup_from_the_request(self, app_client):
+        _, challenge = pkce()
+        r = app_client.get(AUTHORIZE_URL, params={
+            "client_id": "<script>alert(1)</script>", "redirect_uri": REDIRECT,
+            "response_type": "code", "code_challenge": challenge,
+            "code_challenge_method": "S256"},
+            headers={"Accept": "text/html"}, follow_redirects=False)
+        assert "<script>alert(1)</script>" not in r.text
+        assert "&lt;script&gt;" in r.text
+
+    def test_a_disabled_app_looks_the_same_as_an_unknown_one(self, app_client, client):
+        """The page must not reveal which client ids exist."""
+        obj, _ = client
+        _, challenge = pkce()
+        OAuthClient.disable(obj.client_id)
+        a = app_client.get(AUTHORIZE_URL, params=authorize_params(obj, challenge),
+                           headers={"Accept": "text/html"}, follow_redirects=False)
+        b = app_client.get(AUTHORIZE_URL, params=authorize_params(obj, challenge, client_id="never-existed"),
+                           headers={"Accept": "text/html"}, follow_redirects=False)
+        strip = lambda r: re.sub(r"<code>[^<]*</code>", "", r.text)
+        assert a.status_code == b.status_code == 400
+        assert strip(a) == strip(b)
 
     def test_deny_redirects_with_access_denied(self, app_client, client, session_cookie):
         obj, _ = client
@@ -832,6 +972,11 @@ class TestSpecConformance:
         "https://app.example/cb#frag",              # RFC 6749 §3.1.2
         "https://app.example/cb\r\nX-Injected: 1",  # not URI syntax
         "http://app.example/cb",                    # plaintext, non-loopback
+        "https://good.example.org@evil.example.org/cb",   # userinfo: names the host after '@'
+        "https://evil.example.org\\@good.example.org/",   # browser and Python disagree on the host
+        "https://app.example/cb x",                 # whitespace is not URI syntax
+        "https://app.example/cb\nhttps://evil.example.org/cb",  # would split into two entries
+        "https://app.example/" + "a" * 3000,        # unbounded text read on every request
     ])
     def test_attack_malformed_redirect_uris_refused(self, uri):
         """A fragment would put the authorization code after the '#', where it
@@ -901,6 +1046,37 @@ class TestNativeAppClients:
             "client_id": obj.client_id})
         assert token.status_code == 200, token.text
         assert token.json()["scope"] == "loans:read"
+
+    def test_fixed_id_app_sending_openid_completes_the_flow(
+            self, app_client, session_cookie):
+        """A reading app that ships a fixed client_id and sends `scope=openid`
+        out of habit must get a token, without gaining any permission it was
+        not registered for."""
+        obj, _ = OAuthClient.register(
+            name="Book Server", redirect_uris=[REDIRECT], scopes=["loans:read"],
+            is_confidential=False, client_id="reader-archive-org")
+
+        verifier, challenge = pkce()
+        r = consent(app_client, obj, challenge, session_cookie, scope="openid")
+        assert r.status_code == 303, r.text
+        code = parse_qs(urlparse(r.headers["location"]).query)["code"][0]
+
+        token = app_client.post(TOKEN_URL, data={
+            "grant_type": "authorization_code", "code": code,
+            "redirect_uri": REDIRECT, "code_verifier": verifier,
+            "client_id": "reader-archive-org"})
+        assert token.status_code == 200, token.text
+        assert token.json()["scope"] == "loans:read"
+
+    def test_attack_unregistered_fixed_id_still_refused(self, app_client):
+        _, challenge = pkce()
+        r = app_client.get(AUTHORIZE_URL, params={
+            "client_id": "reader-archive-org", "redirect_uri": REDIRECT,
+            "response_type": "code", "scope": "openid", "state": "s",
+            "code_challenge": challenge, "code_challenge_method": "S256"},
+            follow_redirects=False)
+        assert r.status_code == 400
+        assert r.json()["error"] == "invalid_client"
 
     def test_metadata_advertises_public_clients(self, app_client):
         meta = app_client.get("/.well-known/oauth-authorization-server").json()

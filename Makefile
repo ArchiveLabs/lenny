@@ -112,10 +112,11 @@ redeploy:
 # Registration is open by default, so an operator needs to see who registered
 # and be able to stop one without opening a Python console.
 # usage: make oauth2-register NAME="Open Library" URI=https://openlibrary.org/borrow/lenny/callback
+# optional: CLIENT_ID=reader-archive-org to choose the id a consumer ships with
 .PHONY: oauth2-register
 oauth2-register:
 	@test -n "$(NAME)" -a -n "$(URI)" || { echo 'usage: make oauth2-register NAME="Open Library" URI=https://…/callback [SCOPE=loans:read] [PUBLIC=1]'; exit 1; }
-	@docker compose -p lenny exec api python3 scripts/oauth2_client.py register "$(NAME)" "$(URI)" $(if $(SCOPE),--scope $(SCOPE)) $(if $(PUBLIC),--public)
+	@docker compose -p lenny exec api python3 scripts/oauth2_client.py register "$(NAME)" "$(URI)" $(if $(SCOPE),--scope $(SCOPE)) $(if $(CLIENT_ID),--client-id $(CLIENT_ID)) $(if $(PUBLIC),--public)
 
 # Open Library is the consumer nearly every node wants, so it gets its own
 # targets rather than an incantation. Both are safe to run twice.
@@ -129,6 +130,12 @@ ol-connect:
 ol-disconnect:
 	@docker compose -p lenny exec api python3 scripts/oauth2_client.py ol-disconnect
 
+# Book Server (reader.archive.org) is registered automatically when a node starts.
+# This is for a node where that was disabled, or to check it. ENABLE=1 turns it back on.
+.PHONY: bookserver-connect
+bookserver-connect:
+	@docker compose -p lenny exec api python3 scripts/oauth2_client.py bookserver-connect $(if $(ENABLE),--enable)
+
 .PHONY: oauth2-clients
 oauth2-clients:
 	@docker compose -p lenny exec api python3 scripts/oauth2_client.py list
@@ -137,6 +144,13 @@ oauth2-clients:
 oauth2-disable:
 	@test -n "$(CLIENT)" || { echo "usage: make oauth2-disable CLIENT=<client_id>"; exit 1; }
 	@docker compose -p lenny exec api python3 scripts/oauth2_client.py disable $(CLIENT)
+
+# Removes an app that is already turned off (make oauth2-disable first), together
+# with its tokens and codes. A built-in app cannot be removed; leave it disabled.
+.PHONY: oauth2-delete
+oauth2-delete:
+	@test -n "$(CLIENT)" || { echo "usage: make oauth2-delete CLIENT=<client_id>  (disable it first)"; exit 1; }
+	@docker compose -p lenny exec api python3 scripts/oauth2_client.py delete $(CLIENT)
 
 # Deletes codes and tokens that can no longer be used. Safe to run from cron.
 .PHONY: oauth2-sweep

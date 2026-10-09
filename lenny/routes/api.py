@@ -48,7 +48,7 @@ from fastapi.responses import (
     JSONResponse,
 )
 from lenny.core import auth
-from lenny.core.api import LennyAPI
+from lenny.core.api import LennyAPI, auth_document
 from lenny.core import ol_bootstrap
 from lenny.core.cache import Cache
 from lenny.core.briet import BRIET, import_briet_books, parse_olid
@@ -122,7 +122,8 @@ def get_authenticated_email(
 
 def get_authenticated_identity(
     request: Optional[Request] = None,
-    session: Optional[str] = None
+    session: Optional[str] = None,
+    scope: str = "loans:read",
 ) -> tuple[Optional[str], bool]:
     """Like `get_authenticated_email`, but also recognizes an OAuth2 bearer
     token — the credential an `ol`-mode consumer (e.g. Open Library) presents
@@ -137,13 +138,16 @@ def get_authenticated_identity(
     email (from the cookie) — callers that check loan ownership need to know
     which one they got, since `Loan.exists(..., hashed=...)` compares them
     differently.
+
+    `scope` is what the token must have been granted: `loans:read` to look,
+    `borrow` to act. A cookie login is not scoped.
     """
     email = get_authenticated_email(request, session)
     if email:
         return email, False
     if session:
         tok = AccessToken.authenticate(session)
-        if tok and tok.has_scope("loans:read"):
+        if tok and tok.has_scope(scope):
             return tok.patron_email_hash, True
     return None, False
 
@@ -196,7 +200,7 @@ def requires_item_auth(do_function=None):
                 if 'error' in result:
                     return JSONResponse(
                         status_code=401, 
-                        content=LennyDataProvider.get_authentication_document(),
+                        content=auth_document(),
                         media_type="application/opds-authentication+json"
                     )
  
@@ -349,11 +353,12 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
          raise HTTPException(status_code=404, detail="Item not found")
 
     session = extract_session(request, session)
-    email = get_authenticated_email(request, session)
+    # Cookie login, or an OAuth2 bearer token that was granted the `borrow` scope.
+    email, email_hashed = get_authenticated_identity(request, session, scope="borrow")
 
     if email:
         try:
-            loan = item.borrow(email)
+            loan = item.borrow(email, hashed=email_hashed)
         except LoanNotRequiredError:
             pass
         except BookUnavailableError:
@@ -405,7 +410,7 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
             )
         return JSONResponse(
             status_code=401,
-            content=LennyDataProvider.get_authentication_document(),
+            content=auth_document(),
             media_type="application/opds-authentication+json"
         )
 
@@ -920,17 +925,18 @@ async def profile(request: Request, session: Optional[str] = Cookie(None)):
     Returns the OPDS 2.0 User Profile.
     """
     session = extract_session(request, session)
-    email = get_authenticated_email(request, session)
+    # Cookie login (implicit) or an OAuth2 bearer token with loans:read (PKCE).
+    email, email_hashed = get_authenticated_identity(request, session)
     
     if not email:
         return JSONResponse(
             status_code=401,
-            content=LennyDataProvider.get_authentication_document(),
+            content=auth_document(),
             media_type="application/opds-authentication+json"
         )
     
-    name = email.split("@")[0]
-    profile_data = LennyAPI.get_user_profile(email, name)
+    name = None if email_hashed else email.split("@")[0]
+    profile_data = LennyAPI.get_user_profile(email, name, hashed=email_hashed)
 
     return JSONResponse(
         profile_data, 
@@ -945,16 +951,18 @@ async def get_shelf(request: Request, session: Optional[str] = Cookie(None), aut
     Contains all currently borrowed items with return/read links.
     """
     session = extract_session(request, session)
-    email = get_authenticated_email(request, session)
+    # A session cookie, or the OAuth2 bearer token (scope loans:read) that a
+    # reading app gets from the PKCE flow. The token carries a hashed identity.
+    email, email_hashed = get_authenticated_identity(request, session)
     
     if not email:
         return JSONResponse(
             status_code=401,
-            content=LennyDataProvider.get_authentication_document(),
+            content=auth_document(),
             media_type="application/opds-authentication+json"
         )
     
-    shelf_feed = LennyAPI.get_shelf_feed(email, auth_mode_direct=is_direct_auth_mode(auth_mode))
+    shelf_feed = LennyAPI.get_shelf_feed(email, auth_mode_direct=is_direct_auth_mode(auth_mode), hashed=email_hashed)
     
     return Response(
         content=json.dumps(shelf_feed),
@@ -1861,6 +1869,145 @@ async def update_auth_config(request: Request, body: dict = Body(...)):
             fields.append("LENNY_EXTERNAL_AUTH_ENABLED")
 
     return JSONResponse({"updated": True, "fields": fields})
+
+
+# ─── OAuth2 clients (connected apps) ─────────────────────────────────────────
+# What `make oauth2-register` does, for the admin page. Same admin gate as every
+# /admin route; the client secret is returned once, at registration, and never
+# again (only its hash is stored).
+
+@router.get("/admin/oauth2/clients", status_code=status.HTTP_200_OK)
+async def admin_list_oauth2_clients(request: Request):
+    _require_admin(request)
+    from lenny.core.oauth2 import OAuthClient, SCOPES
+    from lenny.routes.oauth2 import issuer_url
+    # What the developer of an app needs in order to connect to THIS node. The
+    # same values the public metadata document publishes, built the same way.
+    issuer = issuer_url(request)
+    base = f"{issuer}/v1/api"
+    return JSONResponse({
+        "clients": [c.public_view() for c in OAuthClient.all()],
+        "available_scopes": [{"name": k, "description": v} for k, v in SCOPES.items()],
+        "connection": {
+            "issuer": issuer,
+            "discovery_url": f"{issuer}/.well-known/oauth-authorization-server",
+            "authorization_endpoint": f"{base}/oauth2/authorize",
+            "token_endpoint": f"{base}/oauth2/token",
+            "revocation_endpoint": f"{base}/oauth2/revoke",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "pkce_method": "S256",
+        },
+    })
+
+
+@router.post("/admin/oauth2/clients", status_code=status.HTTP_201_CREATED)
+async def admin_register_oauth2_client(request: Request, body: dict = Body(...)):
+    _require_admin(request)
+    from lenny.core.oauth2 import OAuthClient, SCOPES
+
+    name = str(body.get("name", "")).strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="'name' is required.")
+    uris = body.get("redirect_uris")
+    if isinstance(uris, str):
+        uris = [u for u in uris.replace(",", "\n").split() if u]
+    if not isinstance(uris, list) or not uris or not all(isinstance(u, str) for u in uris):
+        raise HTTPException(status_code=400, detail="'redirect_uris' must list at least one URL.")
+    scopes = body.get("scopes") or sorted(SCOPES)
+    if not isinstance(scopes, list) or (unknown := set(scopes) - set(SCOPES)):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown scope(s). Available: {', '.join(sorted(SCOPES))}.")
+    public = body.get("public", True)
+    if not isinstance(public, bool):
+        raise HTTPException(status_code=400, detail="'public' must be a JSON boolean.")
+    client_id = (str(body["client_id"]).strip() or None) if body.get("client_id") else None
+
+    try:
+        client, secret = OAuthClient.register(
+            name=name, redirect_uris=[u.strip() for u in uris], scopes=scopes,
+            is_confidential=not public, client_id=client_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse(status_code=201, content={**client.public_view(), "client_secret": secret})
+
+
+@router.patch("/admin/oauth2/clients/{client_id}", status_code=status.HTTP_200_OK)
+async def admin_update_oauth2_client(request: Request, client_id: str, body: dict = Body(...)):
+    """Fix a mistake in an app's name, redirect URLs or permissions. The id and
+    the app type are not editable. Removing a permission revokes the app's live
+    tokens (reported in `revoked_tokens`) so the change is true immediately."""
+    _require_admin(request)
+    from lenny.core.oauth2 import OAuthClient
+
+    fields = {k: body[k] for k in ("name", "redirect_uris", "scopes") if k in body}
+    if not fields:
+        raise HTTPException(status_code=400, detail="Send at least one of: name, redirect_uris, scopes.")
+    uris = fields.get("redirect_uris")
+    if isinstance(uris, str):
+        uris = [u for u in uris.replace(",", "\n").split() if u]
+    if "redirect_uris" in fields:
+        if not isinstance(uris, list) or not all(isinstance(u, str) for u in uris):
+            raise HTTPException(status_code=400, detail="'redirect_uris' must list at least one URL.")
+        fields["redirect_uris"] = [u.strip() for u in uris]
+    if "scopes" in fields and (not isinstance(fields["scopes"], list) or not all(isinstance(s, str) for s in fields["scopes"])):
+        raise HTTPException(status_code=400, detail="'scopes' must be a list.")
+    if "name" in fields and not isinstance(fields["name"], str):
+        raise HTTPException(status_code=400, detail="'name' must be a string.")
+    try:
+        client, revoked = OAuthClient.update(client_id, **fields)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="No such client.")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse({**client.public_view(), "revoked_tokens": revoked})
+
+
+@router.post("/admin/oauth2/clients/{client_id}/rotate-secret", status_code=status.HTTP_200_OK)
+async def admin_rotate_oauth2_client_secret(request: Request, client_id: str):
+    """New secret for a server app, returned once. The old one stops working now."""
+    _require_admin(request)
+    from lenny.core.oauth2 import OAuthClient
+    try:
+        secret = OAuthClient.rotate_secret(client_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="No such client.")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse({"client_id": client_id, "client_secret": secret})
+
+
+@router.delete("/admin/oauth2/clients/{client_id}", status_code=status.HTTP_200_OK)
+async def admin_delete_oauth2_client(request: Request, client_id: str):
+    """Remove an app that is already turned off, with the tokens and codes it
+    held. Built-in apps and apps that are still on are refused (409)."""
+    _require_admin(request)
+    from lenny.core.oauth2 import OAuthClient
+    try:
+        OAuthClient.delete(client_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="No such client.")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return JSONResponse({"client_id": client_id, "deleted": True})
+
+
+@router.post("/admin/oauth2/clients/{client_id}/disable", status_code=status.HTTP_200_OK)
+async def admin_disable_oauth2_client(request: Request, client_id: str):
+    _require_admin(request)
+    from lenny.core.oauth2 import OAuthClient
+    if OAuthClient.find(client_id) is None:
+        raise HTTPException(status_code=404, detail="No such client.")
+    return JSONResponse({"client_id": client_id, "revoked_tokens": OAuthClient.disable(client_id)})
+
+
+@router.post("/admin/oauth2/clients/{client_id}/enable", status_code=status.HTTP_200_OK)
+async def admin_enable_oauth2_client(request: Request, client_id: str):
+    _require_admin(request)
+    from lenny.core.oauth2 import OAuthClient
+    if not OAuthClient.enable(client_id):
+        raise HTTPException(status_code=404, detail="No such client.")
+    return JSONResponse({"client_id": client_id, "status": "active"})
 
 
 @router.post("/admin/auth/mode", status_code=status.HTTP_200_OK)

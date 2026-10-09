@@ -3,7 +3,7 @@
 {% block title %}Authorize {{ client_name }} - Lenny{% endblock %}
 
 {% block content %}
-<div class="card">
+<div class="card" role="main" aria-labelledby="consent-title">
   <div style="text-align: center;"><span class="badge badge--oauth">Authorize</span></div>
   {#
     Phrased as what the patron is enabling, not as what the consumer wants.
@@ -12,13 +12,35 @@
     something and the sentence should say what. Returns are already inside the
     `borrow` scope, so naming them here is accurate rather than aspirational.
   #}
-  <h1>Allow {{ client_name }} to borrow, return, and see your loans
+  <h1 id="consent-title">Allow {{ client_name }} to borrow, return, and see your loans
       at {{ node_host }}</h1>
-  <p class="subtitle">Signed in as {{ email }}</p>
+  {#
+    Who you are comes before what you are granting. The patron has to be able to
+    see which account this approval will attach to, and change it, at a glance:
+    a small text link under the title was missed in practice, and a patron signed
+    in as the wrong account would approve for the wrong person.
+  #}
+  <div class="account" aria-label="Account">
+    <span class="account__avatar" aria-hidden="true">{{ (email or '?')[0]|upper }}</span>
+    <div class="account__body">
+      <span class="account__label">Signed in as</span>
+      <span class="account__email email">{{ email }}</span>
+    </div>
+    <a class="account__switch" href="{{ switch_url }}">Not you? Use a different account</a>
+  </div>
 
-  <ul class="scopes">
-    {% for name, description in scopes %}
-    <li><strong>{{ description }}</strong> <code>{{ name }}</code></li>
+  {#
+    Reading comes before acting. The scopes arrive sorted by name, which put
+    "borrow" above "loans:read"; a patron should see the least powerful ask first.
+  #}
+  {% set order = ['loans:read', 'borrow'] %}
+  <p class="consent-lead">{{ client_name }} will be able to:</p>
+  <ul class="scopes" role="list">
+    {% for key in order %}{% for name, description in scopes if name == key %}
+    <li><span class="scopes__icon" aria-hidden="true">{% if name == 'loans:read' %}<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>{% else %}<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5"/></svg>{% endif %}</span><span class="scopes__text">{{ description }}</span> <code>{{ name }}</code></li>
+    {% endfor %}{% endfor %}
+    {% for name, description in scopes if name not in order %}
+    <li><span class="scopes__icon" aria-hidden="true"></span><span class="scopes__text">{{ description }}</span> <code>{{ name }}</code></li>
     {% endfor %}
   </ul>
 
@@ -26,16 +48,14 @@
     Clients are registered by this library's operator, so the name above was
     vetted rather than self-asserted. The destination is still worth showing:
     it is what a patron checks if a registration was ever made in error, and it
-    is the detail that would reveal a mistake nobody else would catch.
+    is the detail that would reveal a mistake nobody else would catch. It is a
+    neutral fact, not an alarm: the alarm is the last sentence, for the rare case.
   #}
-  <div class="destination">
-    <span class="destination__label">Sends you to</span>
-    <code class="destination__host">{{ redirect_host }}</code>
-    <p class="destination__warn">
-      This library registered this application. If that address is not one you
-      expect, stop and tell your librarian.
-    </p>
-  </div>
+  <p class="destination">
+    You will return to <code class="destination__host">{{ redirect_host }}</code>
+    afterwards. This library registered this application. If that address is
+    not one you expect, choose <strong>Not now</strong> and tell your librarian.
+  </p>
 
   {#
     This used to say "You can revoke this at any time", which was not true:
@@ -44,39 +64,91 @@
     actually ends the access, rather than implying a control that is not there.
     If a "connected apps" page is ever built, this is the copy to revisit.
   #}
-  <p class="subtitle">
+  <p class="reassure">
     {{ client_name }} never sees your password or your one-time codes. This
-    access expires on its own, and your library can end it sooner — ask your
+    access expires on its own, and your library can end it sooner: ask your
     librarian to disconnect {{ client_name }}.
   </p>
 
-  <form action="/v1/api/oauth2/authorize" method="POST">
-    {# One opaque, signed handle — the request the patron was actually shown. #}
+  <form action="/v1/api/oauth2/authorize" method="POST" class="actions">
+    {# One opaque, signed handle: the request the patron was actually shown. #}
     <input type="hidden" name="request" value="{{ request_handle }}"/>
     <button type="submit" name="decision" value="allow" class="btn btn--primary">Allow</button>
-    <button type="submit" name="decision" value="deny" class="btn">Not now</button>
+    <button type="submit" name="decision" value="deny" class="btn btn--secondary">Not now</button>
   </form>
 </div>
 
 <style>
-  .scopes { list-style: none; padding: 0; margin: 20px 0; text-align: left; }
+  .account {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+    padding: 14px; margin: 18px 0 22px; text-align: left;
+    border: 1px solid var(--border); border-radius: 12px; background: var(--card);
+  }
+  .account__avatar {
+    flex: none; width: 40px; height: 40px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--accent); color: var(--accent-foreground);
+    font-weight: 700; font-size: 16px;
+  }
+  .account__body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .account__label {
+    font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+  .account__email { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+  .account__switch {
+    flex: 1 1 100%; min-height: 44px; padding: 9px 12px; border-radius: 8px; text-align: center;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--input); background: var(--card);
+    font-size: 13px; font-weight: 600; color: var(--primary); text-decoration: none;
+  }
+  .account__switch:hover { background: var(--accent); }
+  .account__switch:focus-visible { outline: 3px solid var(--ring); outline-offset: 2px; }
+  .consent-lead { font-size: 14px; color: var(--muted-foreground); margin: 0 0 10px; }
+  .scopes { list-style: none; padding: 0; margin: 0 0 20px; text-align: left; }
   .scopes li {
+    display: grid; grid-template-columns: 32px 1fr; align-items: center; gap: 4px 12px;
     padding: 12px 14px; margin-bottom: 8px; border-radius: 8px;
-    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+    background: var(--accent); border: 1px solid var(--border);
   }
-  .scopes code { display: block; margin-top: 4px; font-size: 0.8em; opacity: 0.6; }
+  .scopes__icon {
+    flex: none; width: 32px; height: 32px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--card); border: 1px solid var(--border); color: var(--accent-foreground);
+  }
+  /* Icon, then the sentence, then its technical name underneath: the same shape
+     at every width, so no row is squeezed and no two rows differ. */
+  .scopes__icon { grid-row: 1 / span 2; }
+  .scopes__text { grid-column: 2; font-size: 15px; font-weight: 600; color: var(--card-foreground); }
+  .scopes code {
+    grid-column: 2; justify-self: start; font-size: 11px; color: var(--accent-foreground);
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 8px;
+  }
   .destination {
-    text-align: left; padding: 12px 14px; margin: 0 0 20px;
-    border-radius: 8px; border: 1px solid rgba(234,179,8,0.35);
-    background: rgba(234,179,8,0.08);
-  }
-  .destination__label {
-    display: block; font-size: 0.72em; letter-spacing: 0.08em;
-    text-transform: uppercase; opacity: 0.75;
+    margin: 0 0 14px; font-size: 13px; line-height: 1.5;
+    color: var(--muted-foreground); text-align: left;
   }
   .destination__host {
-    display: block; margin: 4px 0 8px; font-size: 1.02em; word-break: break-all;
+    font-size: 13px; color: var(--card-foreground); font-weight: 600;
+    overflow-wrap: anywhere;
   }
-  .destination__warn { margin: 0; font-size: 0.86em; opacity: 0.85; }
+  .reassure {
+    margin: 0 0 24px; padding-top: 14px; border-top: 1px solid var(--border);
+    font-size: 13px; line-height: 1.5; color: var(--muted-foreground); text-align: left;
+  }
+  .actions { display: flex; flex-direction: column; gap: 10px; }
+  .actions .btn { width: 100%; min-height: 46px; padding: 13px 24px; font-size: 15px; }
+  /* The base .btn is white text and expects a background; a button with none
+     rendered as invisible text on the card. */
+  .btn--secondary {
+    background: var(--card); color: var(--card-foreground);
+    border: 1px solid var(--input);
+  }
+  .btn--secondary:hover { background: var(--accent); }
+  .btn:focus-visible { outline: 3px solid var(--ring); outline-offset: 2px; }
+  @media (max-width: 480px) {
+    .card { padding: 28px 20px; }
+  }
 </style>
 {% endblock %}

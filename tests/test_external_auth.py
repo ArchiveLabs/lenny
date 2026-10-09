@@ -473,6 +473,71 @@ def app_client():
 # Route: GET /oauth/external/start
 # ─────────────────────────────────────────────────────────────────────────────
 
+class TestPromptPassThrough:
+    def test_authorization_url_carries_an_allowed_prompt(self):
+        from lenny.core.external_auth import OIDCProvider, PKCEHelper
+        provider = OIDCProvider(_make_config())
+        v = PKCEHelper.generate_verifier()
+        url = provider.authorization_url("https://provider.example.com/authorize",
+                                         state="s", nonce="n", code_verifier=v,
+                                         prompt="select_account")
+        assert "prompt=select_account" in url
+
+    def test_authorization_url_has_no_prompt_by_default(self):
+        from lenny.core.external_auth import OIDCProvider, PKCEHelper
+        provider = OIDCProvider(_make_config())
+        url = provider.authorization_url("https://provider.example.com/authorize",
+                                         state="s", nonce="n",
+                                         code_verifier=PKCEHelper.generate_verifier())
+        assert "prompt" not in url
+
+    def test_valid_prompt_is_an_allow_list(self):
+        from lenny.core.external_auth import valid_prompt
+        assert valid_prompt("login") == "login"
+        assert valid_prompt("consent select_account") == "select_account"
+        for junk in (None, "", "none", "consent", "LOGIN", "login-ish"):
+            assert valid_prompt(junk) is None
+        # Whitespace splits tokens, so injected text can never ride along.
+        assert valid_prompt("login\r\nX: y") == "login"
+
+    def _configure(self, monkeypatch):
+        from lenny import configs as lenny_configs
+        monkeypatch.setattr(lenny_configs, "EXTERNAL_AUTH_ENABLED", True)
+        monkeypatch.setattr(lenny_configs, "OAUTH_CLIENT_ID", "cid")
+        monkeypatch.setattr(lenny_configs, "OAUTH_CLIENT_SECRET", "csec")
+        monkeypatch.setattr(lenny_configs, "OAUTH_DISCOVERY_URL", "https://provider.example.com")
+        monkeypatch.setattr(lenny_configs, "OAUTH_REDIRECT_URI", "https://lenny.example.com/cb")
+        monkeypatch.setattr(lenny_configs, "OAUTH_SCOPES", ["openid", "email"])
+        monkeypatch.setattr(lenny_configs, "OAUTH_FLOW", "pkce")
+
+    def test_start_route_tells_the_provider_to_show_its_chooser(self, app_client, monkeypatch):
+        self._configure(monkeypatch)
+        from lenny.core.external_auth import OIDCProvider
+        with patch.object(OIDCProvider, "discover", AsyncMock(return_value=_FAKE_DISCOVERY)):
+            resp = app_client.get("/v1/api/oauth/external/start?prompt=select_account",
+                                  follow_redirects=False)
+        assert resp.status_code == 302
+        assert "prompt=select_account" in resp.headers["location"]
+
+    def test_start_route_never_forwards_a_prompt_it_does_not_know(self, app_client, monkeypatch):
+        self._configure(monkeypatch)
+        from lenny.core.external_auth import OIDCProvider
+        with patch.object(OIDCProvider, "discover", AsyncMock(return_value=_FAKE_DISCOVERY)):
+            resp = app_client.get("/v1/api/oauth/external/start?prompt=none",
+                                  follow_redirects=False)
+        assert "prompt" not in resp.headers["location"]
+
+    def test_authorize_hands_prompt_on_to_the_external_start(self, app_client, monkeypatch):
+        self._configure(monkeypatch)
+        from lenny import configs as lenny_configs
+        monkeypatch.setattr(lenny_configs, "LENDING_ENABLED", False)
+        resp = app_client.get("/v1/api/oauth/authorize?prompt=login", follow_redirects=False)
+        assert resp.status_code == 302
+        assert "prompt=login" in resp.headers["location"]
+        resp = app_client.get("/v1/api/oauth/authorize?prompt=evil", follow_redirects=False)
+        assert "prompt" not in resp.headers["location"]
+
+
 class TestOAuthExternalStartRoute:
     def test_start_returns_503_when_disabled(self, app_client, monkeypatch):
         from lenny import configs as lenny_configs

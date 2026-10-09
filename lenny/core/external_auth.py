@@ -70,6 +70,19 @@ def _read_env_file(path: str) -> dict[str, str]:
 # OAuthConfig
 # ─────────────────────────────────────────────────────────────────────────────
 
+# `prompt` values Lenny will honour and pass on to the provider. A fixed
+# allow-list: whatever else a caller sends is dropped, never forwarded.
+PROMPTS = ("login", "select_account")
+
+
+def valid_prompt(value: Optional[str]) -> Optional[str]:
+    """The first allowed `prompt` token in a space-separated value, or None."""
+    for token in (value or "").split():
+        if token in PROMPTS:
+            return token
+    return None
+
+
 @dataclass
 class OAuthConfig:
     """All configuration needed to drive an OIDC provider.
@@ -254,11 +267,14 @@ class OIDCProvider:
         state: str,
         nonce: str,
         code_verifier: str,
+        prompt: Optional[str] = None,
     ) -> str:
         """Build the provider's authorization URL.
 
         If *code_verifier* is supplied (PKCE) the S256 challenge is appended.
         *nonce* is always included for replay-attack protection.
+        *prompt* (``login`` or ``select_account``) asks the provider to show its
+        sign-in or account chooser even if it already has a session.
         """
         from urllib.parse import urlencode
 
@@ -272,6 +288,8 @@ class OIDCProvider:
             "code_challenge": PKCEHelper.generate_challenge(code_verifier),
             "code_challenge_method": "S256",
         }
+        if prompt:
+            params["prompt"] = prompt
 
         sep = "&" if "?" in authorization_endpoint else "?"
         return f"{authorization_endpoint}{sep}{urlencode(params)}"
@@ -433,6 +451,7 @@ class ExternalAuthService:
 
     async def initiate_flow(
         self,
+        prompt: Optional[str] = None,
     ) -> tuple[str, str, str, str]:
         """Return ``(auth_url, state, nonce, code_verifier)`` to start the PKCE flow."""
         self.assert_enabled()
@@ -447,7 +466,7 @@ class ExternalAuthService:
             raise OIDCDiscoveryError("Discovery document missing 'authorization_endpoint'")
 
         auth_url = self._provider.authorization_url(
-            auth_endpoint, state, nonce, code_verifier=code_verifier
+            auth_endpoint, state, nonce, code_verifier=code_verifier, prompt=prompt
         )
         return auth_url, state, nonce, code_verifier
 

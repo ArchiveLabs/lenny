@@ -1,0 +1,46 @@
+{% extends "_base_auth.html" %}
+
+{% block title %}{{ heading }} - Lenny{% endblock %}
+
+{% block content %}
+<div class="card" role="main" aria-labelledby="problem-title">
+  <div style="text-align: center;"><span class="badge badge--oauth">Sign-in problem</span></div>
+  <h1 id="problem-title">{{ heading }}</h1>
+  <p class="subtitle">{{ explanation }}</p>
+
+  <p class="problem-reassure">Nothing was shared and no one was signed in.</p>
+
+  <ul class="problem-steps">
+    <li>Go back to the app and try again.</li>
+    <li>If it keeps happening, tell your librarian. They can add or turn on the app
+        under <strong>Settings &rarr; App Access</strong>.</li>
+  </ul>
+
+  {#
+    For the person who built the app. Escaped by autoescape: client_id is whatever
+    the request carried, so it must never be rendered as markup.
+  #}
+  <details class="problem-details">
+    <summary>Details for the app's developer</summary>
+    <dl>
+      <dt>Error</dt><dd><code>{{ code }}</code></dd>
+      {% if client_id %}<dt>App ID</dt><dd><code>{{ client_id }}</code></dd>{% endif %}
+      <dt>What happened</dt><dd>{{ description }}</dd>
+    </dl>
+  </details>
+</div>
+
+<style>
+  .problem-reassure { font-size: 14px; text-align: center; margin: 0 0 18px; color: var(--card-foreground); font-weight: 600; }
+  .problem-steps { margin: 0 0 20px 20px; padding: 0; font-size: 14px; line-height: 1.5; color: var(--muted-foreground); text-align: left; }
+  .problem-steps li { margin-bottom: 6px; }
+  .problem-details { border-top: 1px solid var(--border); padding-top: 14px; font-size: 13px; color: var(--muted-foreground); text-align: left; }
+  .problem-details summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; font-weight: 600; }
+  .problem-details summary:focus-visible { outline: 3px solid var(--ring); outline-offset: 2px; }
+  .problem-details dl { margin: 8px 0 0; }
+  .problem-details dt { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; margin-top: 8px; }
+  .problem-details dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+  .problem-details code { font-size: 12px; color: var(--card-foreground); }
+  @media (max-width: 480px) { .card { padding: 28px 20px; } }
+</style>
+{% endblock %}

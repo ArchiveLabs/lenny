@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Optional
 from fastapi import UploadFile, Request
 from botocore.exceptions import ClientError
+import os as _os
 import time as _time
 import requests as _requests
 import httpx as _httpx
@@ -12,10 +13,13 @@ from pyopds2_lenny import LennyDataProvider, LennyDataRecord, build_post_borrow_
 from pyopds2 import Catalog, Metadata
 from pyopds2.models import Link, Navigation
 from pyopds2.provider import DataProvider
+from lenny import configs as _configs
 from lenny.core import db, s3, auth
 from lenny.core.utils import hash_email, parse_modified_since, to_iso_utc
 from lenny.core.models import Item, FormatEnum, Loan
 from lenny.core.openlibrary import OpenLibrary
+from lenny.core.upstream import open_library as _ol_guard, install_timeout as _install_ol_timeout
+import pyopds2_openlibrary as _pyopds2_openlibrary
 from lenny.core.exceptions import (
     ItemExistsError,
     InvalidFileError,
@@ -43,7 +47,42 @@ def _make_url(path):
         url += f":{PORT}"
     return f"{url}{path}"
 
+_install_ol_timeout(_pyopds2_openlibrary)
+
+
+def _guarded_search(**kw):
+    """LennyDataProvider.search with a deadline, a breaker and a stale fallback."""
+    key = (kw.get("query"), kw.get("limit"), kw.get("offset"))
+    return _ol_guard.call(key, LennyDataProvider.search, **kw)
+
+
 LennyDataProvider.BASE_URL = _make_url("/v1/api/")
+# Same configured issuer as routes.oauth2.issuer_url, never the Host header. Lets
+# the library build an Authorization Code + PKCE entry; auth_document() decides
+# whether a client is shown it.
+LennyDataProvider.OAUTH_ISSUER = _make_url("").rstrip("/")
+
+
+
+def auth_document() -> dict:
+    """The OPDS Authentication Document for the flow the admin has made active.
+
+    One flow at a time, following the admin switch: `external` (OIDC provider
+    configured and enabled) advertises Authorization Code + PKCE only; every
+    other mode keeps the implicit entry exactly as before. A node that never
+    configured an external provider therefore never advertises PKCE.
+
+    Escape hatch for a node whose readers only speak the implicit flow:
+    LENNY_AUTH_DOC_MODE=both advertises the implicit entry and then the PKCE
+    entry, in any mode, so an upgrade strands no existing reader.
+    ponytail: "both" becomes the default once the revised spec settles (#237).
+    """
+    if _os.environ.get("LENNY_AUTH_DOC_MODE", "active").strip().lower() == "both":
+        flows = ["implicit", "pkce"]
+    else:
+        flows = ["pkce"] if _configs.read_lending_mode() == "external" else ["implicit"]
+    # The library picks the entries and names the document (`id`) after them.
+    return LennyDataProvider.get_authentication_document(flows)
 
 # empty_catalog / build_catalog / build_publication are not yet in the
 # pyopds2_lenny library (pinned to commit 356518d). Patch them here so
@@ -484,7 +523,7 @@ class LennyAPI:
         modified_map = cls._modified_map(items)
 
         try:
-            search_response = LennyDataProvider.search(
+            search_response = _guarded_search(
                 query=cls._edition_key_query(edition_ids),
                 limit=limit,
                 # Paging already happened in the DB query above, and `query`
@@ -610,7 +649,7 @@ class LennyAPI:
                 if not batch_ids:
                     continue
 
-                response = LennyDataProvider.search(
+                response = _guarded_search(
                     query=f"{query} AND {cls._edition_key_query(batch_ids)}",
                     limit=limit,
                     lenny_ids={edition_id: edition_id for edition_id in batch_ids},
@@ -965,12 +1004,15 @@ class LennyAPI:
         return result
 
     @classmethod
-    def get_borrowed_items(cls, email: str):
+    def get_borrowed_items(cls, email: str, hashed: bool = False):
         """
         Returns active (non-returned, non-expired) Loan objects for the patron.
         Ensures openlibrary_edition is set for each loan.
+
+        `hashed=True` means *email* is already a `hash_email()` digest, which is
+        all an OAuth2 access token carries.
         """
-        email_hash = hash_email(email)
+        email_hash = email if hashed else hash_email(email)
         loans = db.query(Loan).filter(
             Loan.patron_email_hash == email_hash,
             *Loan._active_filters(),
@@ -984,26 +1026,34 @@ class LennyAPI:
         return enriched_loans
 
     @classmethod
-    def get_user_profile(cls, email: str, name: Optional[str] = None) -> dict:
+    def get_user_profile(cls, email: str, name: Optional[str] = None, hashed: bool = False) -> dict:
         """
         Retrieves loan stats and generates the OPDS User Profile using LennyDataProvider.
+
+        `hashed=True` means *email* is a `hash_email()` digest (all an OAuth2
+        token carries). The profile then has no name or email: Lenny stores only
+        the hash, and a hash is not something to show as an address.
         """
-        current_loans = cls.get_borrowed_items(email)
+        current_loans = cls.get_borrowed_items(email, hashed=hashed)
         loans_count = len(current_loans)
-        
-        return LennyDataProvider.get_user_profile(
-            name=name,
-            email=email,
+
+        profile = LennyDataProvider.get_user_profile(
+            name=None if hashed else name,
+            email=None if hashed else email,
             active_loans_count=loans_count,
             loan_limit=LOAN_LIMIT
         )
+        if hashed:
+            for key in ("name", "email"):
+                profile["metadata"].pop(key, None)
+        return profile
 
     @classmethod
-    def get_shelf_feed(cls, email: str, auth_mode_direct: bool = False) -> dict:
+    def get_shelf_feed(cls, email: str, auth_mode_direct: bool = False, hashed: bool = False) -> dict:
         """
         Retrieves user loans, fetches their metadata, and generates the OPDS Shelf Feed.
         """
-        loans = cls.get_borrowed_items(email)
+        loans = cls.get_borrowed_items(email, hashed=hashed)
         
         if not loans:
              return LennyDataProvider.get_shelf_feed([])
@@ -1017,7 +1067,7 @@ class LennyAPI:
         query = f"edition_key:({' OR '.join(olids)})"
 
         try:
-            resp = LennyDataProvider.search(
+            resp = _guarded_search(
                 query=query,
                 limit=len(olids),
                 lenny_ids=lenny_ids

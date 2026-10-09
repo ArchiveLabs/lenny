@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from lenny.core import auth
+from lenny.core.external_auth import valid_prompt
 from lenny.core.exceptions import (
     BookUnavailableError,
     LoanNotRequiredError,
@@ -162,6 +163,40 @@ def _error(code: str, description: str, status: int = 400) -> JSONResponse:
                         content={"error": code, "error_description": description})
 
 
+_PROBLEMS = {
+    "invalid_client": (
+        "This app isn't set up with this library",
+        "The app that sent you here isn't registered with this library, or it has been turned off.",
+    ),
+    "invalid_request": (
+        "This app can't sign you in yet",
+        "The app's return address isn't one this library has on file for it.",
+    ),
+}
+
+
+def _problem_for_patron(request: Request, code: str, description: str, status: int = 400) -> Response:
+    """A problem on the very first hop, before there is anywhere safe to send an
+    error (RFC 6749 §4.1.2.1: do not redirect on a bad client_id or redirect_uri).
+
+    The person looking at it is a patron who followed a link, not a program. A
+    browser gets a page that says what happened and what to do; an API client
+    keeps the JSON. Same status and same message text either way, so nothing is
+    revealed about whether a client id exists or is disabled.
+    """
+    if "text/html" not in (request.headers.get("accept") or "").lower():
+        return _error(code, description, status)
+    heading, explanation = _PROBLEMS.get(code, ("Sign-in problem", description))
+    page = request.app.templates.TemplateResponse("oauth2_error.html", {
+        "request": request, "code": code, "description": description,
+        "heading": heading, "explanation": explanation,
+        "client_id": (request.query_params.get("client_id") or "")[:64],
+    }, status_code=status)
+    page.headers["X-Frame-Options"] = "DENY"
+    page.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    return page
+
+
 def _invalid_client() -> JSONResponse:
     """RFC 6749 §5.2: a 401 for a client that attempted Basic auth MUST carry
     the challenge, or the client cannot tell what to do differently."""
@@ -209,20 +244,23 @@ async def authorize(
     state: Optional[str] = None,
     code_challenge: Optional[str] = None,
     code_challenge_method: str = "S256",
+    prompt: Optional[str] = None,
     login_hint: Optional[str] = None,
 ) -> Response:
     """Begin an authorization request.
 
     Sends the patron to log in if they have no Lenny session, then asks them to
-    approve the client's requested scopes.
+    approve the client's requested scopes. `prompt=login` or `select_account`
+    (OIDC Core §3.1.2.1) ignores an existing session and has the patron sign in
+    again, so a different account can be chosen.
     """
     client = OAuthClient.get(client_id or "")
     if client is None:
-        return _error("invalid_client", "Unknown client_id.")
+        return _problem_for_patron(request, "invalid_client", "Unknown client_id.")
     if not client.allows_redirect(redirect_uri or ""):
         # Not redirected back — see the note above.
-        return _error("invalid_request",
-                      "redirect_uri is not registered for this client.")
+        return _problem_for_patron(request, "invalid_request",
+                                   "redirect_uri is not registered for this client.")
 
     # From here the redirect target is trusted, so errors may travel to it.
     if response_type != "code":
@@ -239,10 +277,13 @@ async def authorize(
     if scope_error:
         return _redirect_error(redirect_uri, "invalid_scope", scope_error, state)
 
-    email = _authenticated_patron(request)
+    fresh = valid_prompt(prompt)
+    email = None if fresh else _authenticated_patron(request)
     if not email:
-        # No Lenny session yet. Send them through the existing OTP login and
-        # come back here afterwards with the request intact.
+        # No Lenny session yet, or the client asked for a fresh sign-in. Send
+        # them through login and come back here afterwards with the request
+        # intact. `prompt` is deliberately NOT part of the return trip, or the
+        # patron would be asked to sign in again forever.
         this_request = f"/v1/api/oauth2/authorize?{urlencode(_echo(request))}"
         # RFC 6749 §3.1.2.1 `login_hint`: the consumer already knows which
         # patron this is, so pass it along and spare them typing an address
@@ -252,10 +293,14 @@ async def authorize(
         login = {"redirect_uri": this_request}
         if login_hint:
             login["login_hint"] = login_hint
-        return RedirectResponse(
-            url=f"/v1/api/oauth/authorize?{urlencode(login)}",
-            status_code=303,
-        )
+        if fresh:
+            login["prompt"] = fresh
+        redirect = RedirectResponse(
+            url=f"/v1/api/oauth/authorize?{urlencode(login)}", status_code=303)
+        if fresh:
+            # Drop the old login so it cannot be picked up again on the way back.
+            redirect.delete_cookie(key="session", path="/", secure=True, samesite="Lax")
+        return redirect
 
     # The form carries one opaque, signed handle instead of the request's
     # parameters. Two things follow: the POST cannot be fed a different
@@ -293,6 +338,9 @@ async def authorize(
         "node_host": urlparse(issuer_url(request)).hostname or "this library",
         "request_handle": handle,
         "email": email,
+        # "Not you?": the same request, asking for a fresh sign-in.
+        "switch_url": "/v1/api/oauth2/authorize?" + urlencode(
+            {**_echo(request), "prompt": "select_account"}),
     })
     # RFC 6749 §10.13 / RFC 9700 §4.16 — this is the screen where a patron
     # grants access, so it must not be framable. The app-wide CORS policy

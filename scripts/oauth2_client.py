@@ -260,7 +260,7 @@ def cmd_register(args) -> int:
     try:
         client, secret = OAuthClient.register(
             name=args.name, redirect_uris=list(args.redirect_uri), scopes=scopes,
-            is_confidential=not args.public,
+            is_confidential=not args.public, client_id=args.client_id,
         )
     except ValueError as exc:
         print(exc, file=sys.stderr)
@@ -278,8 +278,43 @@ def cmd_register(args) -> int:
     return 0
 
 
+def cmd_bookserver_connect(args) -> int:
+    """Make sure the default consumers (Book Server) are registered. Safe to run
+    twice; a default an operator disabled stays disabled unless --enable is given."""
+    from lenny.core.oauth2 import DEFAULT_CLIENTS, ensure_default_clients
+
+    created = set(ensure_default_clients())
+    for spec in DEFAULT_CLIENTS:
+        row = OAuthClient.find(spec["client_id"])
+        if row is not None and row.disabled_at and args.enable:
+            OAuthClient.enable(spec["client_id"])
+            print(f"Re-enabled {spec['name']!r} ({spec['client_id']}).")
+        elif row is not None and row.disabled_at:
+            print(f"{spec['name']!r} ({spec['client_id']}) is disabled. "
+                  "Re-run with --enable to turn it back on.")
+        else:
+            verb = "Registered" if spec["client_id"] in created else "Already registered"
+            print(f"{verb}: {spec['name']!r} ({spec['client_id']}) -> "
+                  f"{' '.join(spec['redirect_uris'])}")
+    return 0
+
+
+def cmd_delete(args) -> int:
+    """Remove an app that is already turned off, with its tokens and codes."""
+    try:
+        OAuthClient.delete(args.client_id)
+    except LookupError:
+        print(f"No client with id {args.client_id!r}.", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print(f"Removed {args.client_id!r} and everything it held.")
+    return 0
+
+
 def cmd_list(args) -> int:
-    """Client ids are server-generated, so this is the only way to find one."""
+    """Client ids are generated unless chosen at registration, so this is how to find one."""
     rows = db.query(OAuthClient).order_by(OAuthClient.created_at.desc()).all()
     if not rows:
         print("No registered clients.")
@@ -335,10 +370,25 @@ def main() -> int:
                           help="one or more registered callback URLs")
     register.add_argument("--scope", action="append",
                           help=f"repeatable; defaults to all ({' '.join(sorted(SCOPES))})")
+    register.add_argument("--client-id",
+                          help="use this client_id instead of a generated one, for a "
+                               "consumer that ships with a fixed id")
     register.add_argument("--public", action="store_true",
                           help="a native app that cannot keep a secret; "
                                "authenticates with PKCE alone (RFC 8252)")
     register.set_defaults(fn=cmd_register)
+
+    book = sub.add_parser(
+        "bookserver-connect",
+        help="register the default consumers (Book Server) if this node lacks them")
+    book.add_argument("--enable", action="store_true",
+                      help="also turn a disabled default back on")
+    book.set_defaults(fn=cmd_bookserver_connect)
+
+    delete = sub.add_parser(
+        "delete", help="remove an app that is turned off, with its tokens and codes")
+    delete.add_argument("client_id")
+    delete.set_defaults(fn=cmd_delete)
 
     sub.add_parser("list", help="show every registered client").set_defaults(fn=cmd_list)
 

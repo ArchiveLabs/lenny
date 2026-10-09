@@ -4,7 +4,8 @@ OAuth / OIDC routes for Lenny.
 
 Contains:
   - Existing OPDS-standard OAuth endpoints (moved from api.py):
-      GET/POST /oauth/implicit   — OPDS Authentication Document
+      GET/POST /oauth/implicit   — OPDS Authentication Document (original address)
+      GET/POST /oauth/authentication — the same document, flow-neutral name
       GET/POST /oauth/authorize  — OTP-based authorization
 
   - New external OIDC provider endpoints:
@@ -32,7 +33,7 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from lenny import configs
 from lenny.core import auth
-from lenny.core.api import LennyAPI
+from lenny.core.api import LennyAPI, auth_document
 from lenny.core.exceptions import (
     InvalidOLCredentialsError,
     LendingNotConfiguredError,
@@ -44,10 +45,10 @@ from lenny.core.external_auth import (
     OAuthConfig,
     OIDCDiscoveryError,
     OIDCTokenError,
+    valid_prompt,
 )
 from lenny.core.patron_auth import AuthModeManager as _AuthModeManager
 from lenny.core.patron_auth import validate_patron_ia_s3
-from pyopds2_lenny import LennyDataProvider
 
 logger = logging.getLogger(__name__)
 
@@ -98,12 +99,18 @@ def _get_authenticated_email(
     return email_data.get("email") if isinstance(email_data, dict) else None
 
 
+# `/oauth/implicit` is the original address, kept because readers have stored it.
+# `/oauth/authentication` serves the same document under a name that does not claim
+# a flow; it is the address the document names as its own `id` when the node
+# advertises Authorization Code + PKCE.
 @router.get("/oauth/implicit")
 @router.post("/oauth/implicit")
+@router.get("/oauth/authentication")
+@router.post("/oauth/authentication")
 async def oauth_implicit(request: Request) -> Response:
     """Returns the OPDS Authentication Document describing the available flows."""
     return Response(
-        content=json.dumps(LennyDataProvider.get_authentication_document()),
+        content=json.dumps(auth_document()),
         media_type="application/opds-authentication+json",
     )
 
@@ -145,6 +152,7 @@ async def oauth_authorize(
     redirect_uri: Optional[str] = None,
     client_id: Optional[str] = None,
     state: Optional[str] = None,
+    prompt: Optional[str] = None,
     login_hint: Optional[str] = None,
 ) -> Response:
     """
@@ -166,6 +174,8 @@ async def oauth_authorize(
             params["opds_redirect_uri"] = redirect_uri
         if state:
             params["opds_state"] = state
+        if p := valid_prompt(prompt):
+            params["prompt"] = p
         qs = ("?" + urlencode(params)) if params else ""
         return RedirectResponse(url=f"/v1/api/oauth/external/start{qs}", status_code=302)
     _require_lending()
@@ -299,6 +309,7 @@ async def oauth_external_start(
     redirect_to: Optional[str] = None,
     opds_redirect_uri: Optional[str] = None,
     opds_state: Optional[str] = None,
+    prompt: Optional[str] = None,
 ) -> Response:
     """Initiate the external OIDC flow.
 
@@ -339,7 +350,7 @@ async def oauth_external_start(
         return _invalid_redirect_uri_response(requested_opds_uri)
 
     try:
-        auth_url, state, nonce, code_verifier = await svc.initiate_flow()
+        auth_url, state, nonce, code_verifier = await svc.initiate_flow(prompt=valid_prompt(prompt))
     except (OIDCDiscoveryError, RuntimeError) as exc:
         logger.error("OIDC initiate_flow failed: %s", exc)
         return JSONResponse(
