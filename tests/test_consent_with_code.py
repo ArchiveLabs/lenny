@@ -222,6 +222,31 @@ class TestDecidingWithoutAValidCode:
         assert 'name="otp"' in r.text, "the code field is gone after a typo"
         assert outbox == [PATRON], f"a typo triggered another send: {outbox}"
 
+    def test_a_rejected_code_shows_between_the_field_and_the_allow_button(self, client, outbox):
+        """The 'that code was wrong' message belongs in the gap the patron is
+        already looking at — below the code field and above Allow — not at the
+        top of a card they have already scrolled past. Placement nothing
+        asserts is placement that drifts back."""
+        html = screen(client).text
+        c = TestClient(app, follow_redirects=False)
+        r = c.post(AUTHORIZE, data={"request": handle_of(html),
+                                    "decision": "allow", "otp": "000000"})
+        assert r.status_code == 200
+        body = r.text
+        i_code = body.index('name="otp"')
+        i_error = body.index('class="error"')
+        i_allow = body.index('value="allow"')
+        assert i_code < i_error < i_allow, (
+            "rejected-code message must render below the code field and above "
+            f"Allow (code={i_code}, error={i_error}, allow={i_allow})")
+
+    def test_the_password_reassurance_line_is_gone(self, client, outbox):
+        """Removed at the maintainer's request; asserted so it cannot drift
+        back. The 'you will return to <host>' destination line stays."""
+        text = visible(screen(client).text)
+        assert "never sees your password" not in text
+        assert "ask your librarian to disconnect" not in text
+
     def test_a_wrong_code_keeps_the_authorization_request(self, client, outbox):
         """Losing the request would send the patron back to Open Library to
         start again, which is what a typo must not cost."""

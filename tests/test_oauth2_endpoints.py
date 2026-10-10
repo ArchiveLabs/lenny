@@ -768,8 +768,13 @@ class TestConsentIntegrity:
         client's own credentials, and `oauth2-disable` cuts every patron off at
         once. Promising "revoke at any time" is the same class of bug as the
         self-registration copy above — the screen describing a control the
-        system does not have. If a connected-apps page is ever built, this test
-        is the one to change.
+        system does not have.
+
+        The reassurance paragraph that used to carry "ask your librarian to
+        disconnect" was removed at the maintainer's request, so this test no
+        longer asserts that line is present; what it guards is unchanged — the
+        screen must not promise a self-service revocation that does not exist.
+        If a connected-apps page is ever built, this test is the one to change.
         """
         obj, _ = client
         _, challenge = pkce()
@@ -779,8 +784,8 @@ class TestConsentIntegrity:
         # where the HTML happens to break is not what this test is about.
         body = " ".join(r.text.lower().split())
         assert "revoke this at any time" not in body
-        assert "ask your librarian" in body, (
-            "the patron is not told what they can actually do")
+        # No copy implying the patron can disconnect the app themselves.
+        assert "disconnect" not in body
 
 
 @pytest.mark.skipif(

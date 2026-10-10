@@ -95,7 +95,6 @@
     </ul>
   </div>
 
-  {% if error %}<div class="error">{{ error }}</div>{% endif %}
   <form action="/v1/api/oauth2/authorize" method="POST" class="actions" id="consentForm">
     {# One opaque, signed handle: the request the patron was actually shown. #}
     <input type="hidden" name="request" value="{{ request_handle }}"/>
@@ -112,6 +111,13 @@
              autocomplete="one-time-code" autofocus/>
     </div>
     {% endif %}
+    {#
+      A rejected code renders here — directly below the field it refers to and
+      above the decision, in the gap where the patron's eye already is — not at
+      the top of a card they have already scrolled past. On the signed-in path
+      (no code field) it still sits just above Allow.
+    #}
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
     <button type="submit" name="decision" value="allow" class="btn btn--primary">Allow</button>
     {# `formnovalidate` so declining never trips the code field's `required`:
        refusing must not be conditional on proving who you are. #}
@@ -132,18 +138,6 @@
     not one you expect, choose <strong>Decline</strong> and tell your librarian.
   </p>
 
-  {#
-    This used to say "You can revoke this at any time", which was not true:
-    there is no patron-facing disconnect, and `/oauth2/revoke` needs the
-    client's own credentials. Say what a patron can actually do, and what
-    actually ends the access, rather than implying a control that is not there.
-    If a "connected apps" page is ever built, this is the copy to revisit.
-  #}
-  <p class="reassure">
-    {{ client_name }} never sees your password or your one-time codes. This
-    access expires on its own, and your library can end it sooner: ask your
-    librarian to disconnect {{ client_name }}.
-  </p>
 </div>
 
 <style>
@@ -204,10 +198,6 @@
   .destination__host {
     font-size: 13px; color: var(--card-foreground); font-weight: 600;
     overflow-wrap: anywhere;
-  }
-  .reassure {
-    margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(--border);
-    font-size: 13px; line-height: 1.5; color: var(--muted-foreground); text-align: left;
   }
   .verify {
     text-align: left; padding: 16px; margin-bottom: 4px;
