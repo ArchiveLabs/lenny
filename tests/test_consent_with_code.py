@@ -334,3 +334,50 @@ class TestNoCopyClaimsAPositionInASequence:
                             "state": "", "book_id": "oauth", "action": "oauth",
                             "next": ""}, follow_redirects=False)
         assert done.status_code in (302, 303), f"no redirect home: {done.status_code}"
+
+
+class TestTheConsentLayoutMatchesTheSpec:
+    """Layout and labels Mek specified after seeing the collapsed screen."""
+
+    def test_the_buttons_are_allow_and_decline(self, client, outbox):
+        html = screen(client).text
+        assert ">Allow</button>" in html
+        assert ">Decline</button>" in html
+        assert "Not now" not in html
+
+    def test_nothing_anywhere_still_names_the_old_button(self):
+        """The notice that tells a patron how to refuse used to say "choose Not
+        now". Renaming the button without re-reading that sentence would leave
+        it pointing at a control that does not exist — the same stale-prose
+        failure as the "Last step" badge."""
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent.parent
+        stale = []
+        for p in list(root.glob("lenny/**/*.html")) + list(root.glob("lenny/**/*.py")) \
+                + list(root.glob("docs/*.md")):
+            if "Not now" in p.read_text():
+                stale.append(str(p.relative_to(root)))
+        assert not stale, f"still naming the old button label: {stale}"
+
+    def test_the_permissions_are_one_section_not_a_box_each(self, client, outbox):
+        html = screen(client).text
+        assert html.count('class="permissions"') == 1
+        # The per-permission cards, their icons and their raw scope pills are gone.
+        assert 'class="scopes"' not in html and "scopes__icon" not in html
+        assert "loans:read" not in html and ">borrow<" not in html
+
+    def test_the_headline_names_the_node_not_the_product(self, client, outbox):
+        """`node_host` is the deployment's own hostname. Hardcoding "Lenny"
+        would put every other library's consent page in this one's name."""
+        text = visible(screen(client).text)
+        assert "to connect with" in text
+        assert "a trusted book provider" not in text
+
+    def test_the_return_notice_sits_below_the_decision(self, client, outbox):
+        html = screen(client).text
+        assert html.index(">Decline</button>") < html.index("You will return to"), \
+            "the return notice is still above the buttons"
+
+    def test_the_code_box_does_not_explain_itself_at_length(self, client, outbox):
+        text = visible(screen(client).text)
+        assert "checks the book is going to you" not in text

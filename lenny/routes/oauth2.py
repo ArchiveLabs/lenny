@@ -405,7 +405,7 @@ async def authorize(
     # A random id makes the handle single-use: it is recorded when redeemed, so
     # a replay finds it spent. Without it one consent click authorised an
     # unbounded number of grants for the handle's whole lifetime, and clicking
-    # "Not now" invalidated nothing.
+    # declining invalidated nothing.
     # `p` is the address the grant will be recorded against, and in the
     # send-on-arrival case it is the consumer's hint rather than any session.
     # `e` is present only while that address is still unproven: it is what
