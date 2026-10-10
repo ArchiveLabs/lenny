@@ -38,11 +38,19 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from lenny.core import auth
 from lenny.core.external_auth import valid_prompt
-from lenny.routes.oauth import _login_hint
+from lenny.routes.api import _external_auth_ready
+from lenny.routes.oauth import (
+    _claim_send,
+    _is_top_level_navigation,
+    _login_hint,
+)
 from lenny.core.exceptions import (
     BookUnavailableError,
+    LendingNotConfiguredError,
     LoanNotRequiredError,
+    OTPGenerationError,
     PatronLoanLimitError,
+    RateLimitError,
 )
 from lenny.core.models import Item, Loan
 from lenny.core.oauth2 import (
@@ -307,8 +315,47 @@ async def authorize(
         return _redirect_error(redirect_uri, "invalid_scope", scope_error, state)
 
     fresh = valid_prompt(prompt)
+    hint = None if fresh else _login_hint(login_hint)
     email = None if fresh else _authenticated_patron(request)
-    if not email:
+
+    # A session for a different address than the consumer named cannot be used
+    # to answer this request. Loans key on `patron_email_hash`, a SHA-256 of
+    # the lowercased address (`lenny/core/utils.hash_email`), so a grant
+    # recorded against the session would hand the consumer a working token for
+    # a loan it can never read — nothing errors, the book simply never appears.
+    # The consumer's address wins and the patron proves it with a code.
+    if hint and email and hash_email(email) != hash_email(hint):
+        logger.info("Ignoring a Lenny session that does not match the "
+                    "consumer's login_hint; the hinted address is binding.")
+        email = None
+
+    # When the address is already known, the code goes out now and the consent
+    # screen carries the field that redeems it: one screen that states the
+    # request and takes the answer, instead of address -> code -> consent.
+    #
+    # Not reachable in external-IdP mode, which has no OTP at all, and gated on
+    # the same navigation check as every other send (see `_is_top_level_
+    # navigation`) so an embedded URL cannot spend one.
+    pending_email = None
+    if not email and hint and not _external_auth_ready() \
+            and _is_top_level_navigation(request):
+        client_ip = request.client.host if request.client else "unknown"
+        # Keyed on the authorization request itself, so a reload re-renders the
+        # screen without mailing a second code.
+        if not _claim_send(f"{client.client_id}:{code_challenge}"):
+            pending_email = hint
+        else:
+            try:
+                auth.OTP.issue(hint, client_ip)
+            except Exception as exc:
+                # Fall through to the ordinary login hop, which renders the
+                # address form and reports the reason properly.
+                logger.warning("Could not send a code on arrival for %s: %s",
+                               client.client_id, exc)
+            else:
+                pending_email = hint
+
+    if not email and not pending_email:
         # No Lenny session yet, or the client asked for a fresh sign-in. Send
         # them through login and come back here afterwards with the request
         # intact. `prompt` is deliberately NOT part of the return trip, or the
@@ -359,6 +406,12 @@ async def authorize(
     # a replay finds it spent. Without it one consent click authorised an
     # unbounded number of grants for the handle's whole lifetime, and clicking
     # "Not now" invalidated nothing.
+    # `p` is the address the grant will be recorded against, and in the
+    # send-on-arrival case it is the consumer's hint rather than any session.
+    # `e` is present only while that address is still unproven: it is what
+    # tells the POST to require a code, and it is inside the signature so the
+    # address cannot be swapped between showing the screen and answering it.
+    subject = email or pending_email
     handle = _consent_serializer().dumps({
         "j": secrets.token_urlsafe(16),
         "c": client.client_id,
@@ -367,7 +420,8 @@ async def authorize(
         "st": state or "",
         "cc": code_challenge,
         "m": code_challenge_method,
-        "p": hash_email(email),
+        "p": hash_email(subject),
+        **({"e": pending_email} if pending_email else {}),
     })
 
     response = request.app.templates.TemplateResponse("oauth2_consent.html", {
@@ -386,9 +440,17 @@ async def authorize(
         # nobody has made.
         "node_host": urlparse(issuer_url(request)).hostname or "this library",
         "request_handle": handle,
-        "email": email,
+        "email": subject,
+        # Present only while the address is unproven: the screen then carries
+        # the code field instead of a "signed in as" line.
+        "needs_code": bool(pending_email),
         # "Not you?": the same request, asking for a fresh sign-in.
-        "switch_url": "/v1/api/oauth2/authorize?" + urlencode(
+        #
+        # Offered only when the consumer named nobody. With a `login_hint`,
+        # signing in as somebody else does not change which address the loan is
+        # written under — it just produces one the consumer cannot read — so
+        # the way out of a wrong address is to decline, not to switch.
+        "switch_url": None if hint else "/v1/api/oauth2/authorize?" + urlencode(
             {**_echo(request), "prompt": "select_account"}),
     })
     # RFC 6749 §10.13 / RFC 9700 §4.16 — this is the screen where a patron
@@ -401,6 +463,34 @@ async def authorize(
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
     return response
+
+
+def _render_consent(request: Request, payload: dict, handle: str,
+                    error: Optional[str] = None) -> Response:
+    """Re-draw the consent screen for a handle that is still live.
+
+    Only reached when a patron mistyped the code. It rebuilds the page from the
+    signed handle rather than from the form, so a retry cannot quietly change
+    the client, the scopes or the address — and it does not mint a new handle,
+    because the one they hold has not been spent.
+    """
+    client = OAuthClient.get(payload["c"])
+    scopes = [(s, SCOPES[s]) for s in payload["s"].split() if s in SCOPES]
+    page = request.app.templates.TemplateResponse("oauth2_consent.html", {
+        "request": request,
+        "client_name": client.name if client else "the application",
+        "scopes": scopes,
+        "redirect_host": urlparse(payload["r"]).netloc,
+        "node_host": urlparse(issuer_url(request)).hostname or "this library",
+        "request_handle": handle,
+        "email": payload.get("e"),
+        "needs_code": bool(payload.get("e")),
+        "switch_url": None,
+        "error": error,
+    }, status_code=200)
+    page.headers["X-Frame-Options"] = "DENY"
+    page.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+    return page
 
 
 def _echo(request: Request) -> dict:
@@ -416,11 +506,18 @@ async def authorize_decision(
     request: Request,
     request_handle: str = Form(..., alias="request"),
     decision: str = Form("deny"),
+    otp: Optional[str] = Form(None),
 ) -> Response:
     """Record the patron's decision and redirect back to the client.
 
     Everything about the request comes from the signed handle minted at GET
     time, so this cannot be fed different parameters than the patron approved.
+
+    When the handle carries `e`, the patron had no session when the screen was
+    drawn and this one POST does both halves of RFC 6749 §4.1.1 — authenticate
+    the resource owner, then record the authorization — in that order. The code
+    is what proves the address; the address itself was fixed at GET time and is
+    inside the signature, so it cannot be swapped here.
     """
     try:
         payload = _consent_serializer().loads(request_handle, max_age=_CONSENT_TTL)
@@ -428,31 +525,64 @@ async def authorize_decision(
         return _error("invalid_request",
                       "This approval is no longer valid. Start the sign-in again.")
 
-    email = _authenticated_patron(request)
-    if not email:
-        return _error("access_denied", "Your session expired. Start again.", status=401)
-
-    # The handle is bound to the patron it was shown to. An attacker can mint a
-    # valid handle by starting their own authorization; without this check they
-    # could get a victim's browser to submit it and silently obtain a code
-    # against the victim's account.
-    if payload.get("p") != hash_email(email):
-        return _error("access_denied",
-                      "This approval was issued for a different account.", status=403)
-
     redirect_uri = payload["r"]
     state = payload.get("st") or None
+    pending_email = payload.get("e")
+    session_cookie = None
 
-    # Spend the handle before acting on it, whichever way the patron decided.
-    # A denial has to consume it too, or replaying the same handle with
-    # decision=allow would quietly overturn the refusal.
+    # Declining is never conditional on proving who you are. It also has to
+    # spend the handle, or replaying it with decision=allow would quietly
+    # overturn the refusal.
+    if decision != "allow":
+        if not _spend_consent(payload.get("j")):
+            return _error("invalid_request",
+                          "This approval has already been used. Start the sign-in again.")
+        return _redirect_error(redirect_uri, "access_denied",
+                               "The patron declined this request.", state)
+
+    if pending_email:
+        # Prove the address before recording anything against it. A wrong code
+        # must not spend the handle — a typo would otherwise cost the patron
+        # the whole authorization request and send them back to the consumer to
+        # start again. Guessing is bounded by `OTP.verify`'s own attempt limit,
+        # not by burning the handle.
+        client_ip = request.client.host if request.client else "unknown"
+        error = None
+        if not (otp or "").strip():
+            error = "Enter the code we emailed you."
+        else:
+            try:
+                session_cookie = auth.OTP.authenticate(
+                    pending_email, otp.strip(), client_ip)
+            except LendingNotConfiguredError as e:
+                # This one names an environment variable and the admin panel.
+                # It is addressed to an operator and the person reading it is a
+                # patron, so log the detail and say something they can act on.
+                logger.error("Consent screen could not verify a code: %s", e)
+                error = ("This library is not set up to lend right now. "
+                         "Please tell your librarian.")
+            except (RateLimitError, OTPGenerationError) as e:
+                error = str(e)
+            if not session_cookie and not error:
+                error = "That code is not valid. Check the email and try again."
+        if error:
+            return _render_consent(request, payload, request_handle, error=error)
+        email = pending_email
+    else:
+        email = _authenticated_patron(request)
+        if not email:
+            return _error("access_denied", "Your session expired. Start again.", status=401)
+        # The handle is bound to the patron it was shown to. An attacker can
+        # mint a valid handle by starting their own authorization; without this
+        # check they could get a victim's browser to submit it and silently
+        # obtain a code against the victim's account.
+        if payload.get("p") != hash_email(email):
+            return _error("access_denied",
+                          "This approval was issued for a different account.", status=403)
+
     if not _spend_consent(payload.get("j")):
         return _error("invalid_request",
                       "This approval has already been used. Start the sign-in again.")
-
-    if decision != "allow":
-        return _redirect_error(redirect_uri, "access_denied",
-                               "The patron declined this request.", state)
 
     code = AuthorizationCode.issue(
         client_id=payload["c"],
@@ -475,11 +605,21 @@ async def authorize_decision(
     # existing OPDS flow does.
     if urlparse(redirect_uri).scheme not in ("http", "https"):
         client = OAuthClient.get(payload["c"])
-        return request.app.templates.TemplateResponse("oauth2_handoff.html", {
+        done = request.app.templates.TemplateResponse("oauth2_handoff.html", {
             "request": request, "target": target,
             "client_name": client.name if client else "the application",
         })
-    return RedirectResponse(url=target, status_code=303)
+    else:
+        done = RedirectResponse(url=target, status_code=303)
+
+    # The patron proved their address on this request, so leave them signed in
+    # — otherwise borrowing through Open Library would silently cost them a
+    # second code the moment they open the book here.
+    if session_cookie:
+        done.set_cookie(key="session", value=session_cookie,
+                        max_age=auth.COOKIE_TTL, httponly=True, secure=True,
+                        samesite="Lax", path="/")
+    return done
 
 
 # ─────────────────────────────────────────────────────────────────────────────

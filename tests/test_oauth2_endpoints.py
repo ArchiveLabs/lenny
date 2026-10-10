@@ -745,7 +745,11 @@ class TestConsentIntegrity:
         # Enablement phrasing: the patron is granting something, and the
         # sentence should say what — not "the consumer wants access", which
         # casts a service as the actor and the patron as an obstacle.
-        assert "allow" in body and "to borrow, return, and see your loans" in body
+        # "return" was removed deliberately: `return_item` takes only a
+        # cookie, so a token-only consumer cannot return a book and the
+        # screen must not ask permission for it (ArchiveLabs/lenny#240).
+        assert "allow" in body and "to borrow and see your loans" in body
+        assert "borrow, return," not in body
         assert "wants access to your library account" not in body, (
             "reverted to framing the consumer as the actor")
         assert "this library registered this application" in body

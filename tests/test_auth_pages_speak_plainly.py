@@ -142,7 +142,7 @@ class TestTheReasonComesBeforeTheCredential:
     def test_the_email_step_says_who_is_asking_and_what_for(self, client):
         text = visible(login_page(client).text)
         assert "Open Library" in text, "the page never names the consumer"
-        assert "Borrow and return books on your behalf" in text
+        assert "Borrow books on your behalf" in text
         assert "See which books you have on loan" in text
 
     def test_the_code_step_says_who_is_asking_and_what_for(self, client):
@@ -150,7 +150,7 @@ class TestTheReasonComesBeforeTheCredential:
         that most needs the reason on it."""
         text = visible(login_page(client, login_hint=PATRON).text)
         assert "Open Library" in text
-        assert "Borrow and return books on your behalf" in text
+        assert "Borrow books on your behalf" in text
 
     def test_the_reason_is_rendered_above_the_credential_field(self, client):
         """Order on the page, not merely presence: the explanation has to come

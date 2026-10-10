@@ -12,25 +12,49 @@
     Phrased as what the patron is enabling, not as what the consumer wants.
     "Open Library wants access to your library account" frames a service as
     the actor and the patron as an obstacle; the patron is the one granting
-    something and the sentence should say what. Returns are already inside the
-    `borrow` scope, so naming them here is accurate rather than aspirational.
+    something and the sentence should say what.
+
+    This used to end "borrow, return, and see your loans", defended by a
+    comment here claiming returns were "already inside the `borrow` scope, so
+    naming them here is accurate rather than aspirational". That was wrong, and
+    wrong in the place a reviewer would look to check it: `return_item`
+    (lenny/routes/api.py) never calls `get_authenticated_identity` and takes
+    only a `session` cookie, so a token-only consumer cannot return a book at
+    all (docs/OAUTH2.md). The word is gone from the sentence and from
+    SCOPES["borrow"]. Put it back when returning by token exists — see
+    ArchiveLabs/lenny#240 — and not before.
   #}
-  <h1 id="consent-title">Allow {{ client_name }} to borrow, return, and see your loans
-      at {{ node_host }}</h1>
+  <h1 id="consent-title">Allow {{ client_name }} to borrow and see your loans
+      from {{ node_host }}</h1>
+  <p class="provider">a trusted book provider for your library</p>
   {#
     Who you are comes before what you are granting. The patron has to be able to
     see which account this approval will attach to, and change it, at a glance:
     a small text link under the title was missed in practice, and a patron signed
     in as the wrong account would approve for the wrong person.
   #}
+  {#
+    Who this grant will belong to.
+
+    With a `login_hint` there is no account to switch to. A loan keys on
+    `patron_email_hash`, so approving as anyone other than the address the
+    consumer named produces a loan that consumer cannot read — a dead end with
+    nothing to show the patron. The way out of a wrong address is Not now,
+    which abandons the request, rather than a switch that silently continues it
+    under a different one.
+  #}
+  {% if not needs_code %}
   <div class="account" aria-label="Account">
     <span class="account__avatar" aria-hidden="true">{{ (email or '?')[0]|upper }}</span>
     <div class="account__body">
       <span class="account__label">Signed in as</span>
       <span class="account__email email">{{ email }}</span>
     </div>
+    {% if switch_url %}
     <a class="account__switch" href="{{ switch_url }}">Not you? Use a different account</a>
+    {% endif %}
   </div>
+  {% endif %}
 
   {#
     Reading comes before acting. The scopes arrive sorted by name, which put
@@ -60,6 +84,32 @@
     not one you expect, choose <strong>Not now</strong> and tell your librarian.
   </p>
 
+
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <form action="/v1/api/oauth2/authorize" method="POST" class="actions" id="consentForm">
+    {# One opaque, signed handle: the request the patron was actually shown. #}
+    <input type="hidden" name="request" value="{{ request_handle }}"/>
+    {#
+      The code sits between the permissions and the buttons, so what is being
+      granted is read before the field that takes the attention. It is the last
+      thing before the decision, not the first thing on the page.
+    #}
+    {% if needs_code %}
+    <div class="verify">
+      <label for="otp">Enter the code we emailed to <span class="email">{{ email }}</span></label>
+      <input type="text" id="otp" name="otp" class="otp-input" required
+             placeholder="6-digit code" maxlength="6" inputmode="numeric"
+             autocomplete="one-time-code" autofocus/>
+      <p class="verify__why">This is how {{ node_host }} checks the book is
+        going to you. {{ client_name }} never sees this code.</p>
+    </div>
+    {% endif %}
+    <button type="submit" name="decision" value="allow" class="btn btn--primary">
+      {% if needs_code %}Allow {{ client_name }}{% else %}Allow{% endif %}</button>
+    <button type="submit" name="decision" value="deny" class="btn btn--secondary"
+            {% if needs_code %}formnovalidate{% endif %}>Not now</button>
+  </form>
+
   {#
     This used to say "You can revoke this at any time", which was not true:
     there is no patron-facing disconnect, and `/oauth2/revoke` needs the
@@ -72,13 +122,6 @@
     access expires on its own, and your library can end it sooner: ask your
     librarian to disconnect {{ client_name }}.
   </p>
-
-  <form action="/v1/api/oauth2/authorize" method="POST" class="actions">
-    {# One opaque, signed handle: the request the patron was actually shown. #}
-    <input type="hidden" name="request" value="{{ request_handle }}"/>
-    <button type="submit" name="decision" value="allow" class="btn btn--primary">Allow</button>
-    <button type="submit" name="decision" value="deny" class="btn btn--secondary">Not now</button>
-  </form>
 </div>
 
 <style>
@@ -137,8 +180,29 @@
     overflow-wrap: anywhere;
   }
   .reassure {
-    margin: 0 0 24px; padding-top: 14px; border-top: 1px solid var(--border);
+    margin: 22px 0 0; padding-top: 16px; border-top: 1px solid var(--border);
     font-size: 13px; line-height: 1.5; color: var(--muted-foreground); text-align: left;
+  }
+  .provider {
+    margin: 0 0 18px; text-align: center;
+    font-size: 12.5px; color: var(--muted-foreground);
+  }
+  .verify {
+    text-align: left; padding: 16px; margin-bottom: 4px;
+    border: 1px solid var(--border); border-radius: 12px; background: var(--accent);
+  }
+  .verify label { color: var(--accent-foreground); font-size: 13.5px; }
+  /* The field sits on the accent panel, not on the card, and --input
+     (#9a9074) only reaches 2.77:1 against that lighter surface — under
+     SC 1.4.11's 3:1 for the boundary of a control, on the one control this
+     screen exists for. #8f8569 is the lightest step that clears it on BOTH
+     surfaces it touches: 3.21:1 against the panel, 3.67:1 against its own
+     white fill. */
+  .verify .otp-input { margin-bottom: 0; border-color: #8f8569; }
+  .verify .otp-input:focus { border-color: var(--ring); }
+  .verify__why {
+    margin: 10px 0 0; font-size: 12px; line-height: 1.45;
+    color: var(--accent-foreground); opacity: 0.85;
   }
   .actions { display: flex; flex-direction: column; gap: 10px; }
   .actions .btn { width: 100%; min-height: 46px; padding: 13px 24px; font-size: 15px; }
