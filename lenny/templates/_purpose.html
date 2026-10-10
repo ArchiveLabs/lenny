@@ -1,0 +1,29 @@
+{#
+  Why this sign-in is happening, shown above the credential on both sign-in
+  screens.
+
+  Rendered only when `client_name` is set, which happens only when the patron
+  arrived through `/v1/api/oauth2/authorize` — the values come out of the
+  signed login context, so the name is the one the library registered and the
+  permissions are the ones that endpoint resolved, never anything echoed from
+  the query string.
+
+  A patron signing in to Lenny directly, or an OPDS reader hitting
+  `/oauth/authorize` on its own, has no consumer and no consent step, so this
+  renders nothing and those flows look exactly as they did.
+#}
+{% if client_name %}
+<div class="purpose">
+  <p class="purpose__lead">
+    <strong>{{ client_name }}</strong> wants to borrow books for you
+    {% if node_host %}at <strong>{{ node_host }}</strong>{% endif %}.
+  </p>
+  {% if scope_descriptions %}
+  <ul class="purpose__list">
+    {% for description in scope_descriptions %}
+    <li>{{ description }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endif %}

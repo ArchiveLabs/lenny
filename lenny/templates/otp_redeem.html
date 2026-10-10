@@ -1,32 +1,40 @@
 {% extends "_base_auth.html" %}
 
-{% block title %}Verify OTP - Lenny{% endblock %}
+{% block title %}Check your email - Lenny{% endblock %}
 
 {% block content %}
 <div class="card">
-  {% if auth_mode == 'direct' %}
-  <div style="text-align: center;"><span class="badge badge--direct">Direct Auth</span></div>
-  {% else %}
-  <div style="text-align: center;"><span class="badge badge--oauth">OAuth Mode</span></div>
-  {% endif %}
+  {#
+    This page carries the "why" harder than any other, because with a
+    `login_hint` it is the FIRST thing the patron sees — the email step is
+    gone, so if the context were not here the flow would open on a demand for
+    a six-digit code with nothing explaining it.
+  #}
+  {% include "_purpose.html" %}
   <h1>Check your email</h1>
-  <p class="subtitle">We sent a one-time password to <span class="email">{{ email }}</span></p>
+  <p class="subtitle">We emailed a sign-in code to <span class="email">{{ email }}</span></p>
   {% if error %}
   <div class="error">{{ error }}</div>
   {% endif %}
   <form action="{{ post_url }}" method="POST" id="otpForm">
-    <label for="otp">One-Time Password</label>
-    <input type="text" id="otp" name="otp" class="otp-input" required placeholder="Enter OTP" maxlength="6" autocomplete="one-time-code"/>
+    <label for="otp">Sign-in code</label>
+    <input type="text" id="otp" name="otp" class="otp-input" required placeholder="6-digit code" maxlength="6" autocomplete="one-time-code" inputmode="numeric" autofocus/>
     <input type="hidden" name="email" value="{{ email }}"/>
     <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}"/>
     <input type="hidden" name="state" value="{{ state or '' }}"/>
     <input type="hidden" name="book_id" value="{{ book_id }}"/>
     <input type="hidden" name="action" value="{{ action }}"/>
     <input type="hidden" name="next" value="{{ next }}"/>
-    <button type="submit" class="btn btn--success">Verify &amp; Sign In</button>
+    <button type="submit" class="btn btn--primary">Continue</button>
   </form>
   <button type="button" id="resendBtn" class="btn btn--link">Resend code</button>
   <p id="resendStatus" class="resend-status" aria-live="polite"></p>
+  {% if client_name %}
+  <p class="next-step">
+    Next, you'll choose whether to allow {{ client_name }} to do this. Entering
+    your code doesn't grant anything on its own.
+  </p>
+  {% endif %}
 </div>
 <script>
   (function () {

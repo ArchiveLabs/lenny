@@ -71,7 +71,7 @@ granted by that patron, and never travels through the browser.**
 | Scope | What the patron is told |
 |---|---|
 | `loans:read` | See which books you have on loan |
-| `borrow` | Borrow and return books on your behalf |
+| `borrow` | Borrow books on your behalf |
 
 An unknown or unregistered scope is an **error**, not a silent narrowing — a
 client learns immediately rather than discovering a missing permission at call
@@ -282,7 +282,7 @@ The consent screen, on a laptop and on a phone, and the page shown when an app i
 not set up with the library:
 
 <p>
-  <img src="images/oauth2-consent.png" alt="Consent screen: which account is signing in, what the app will be able to do, where the patron returns to, and Allow / Not now" width="330">
+  <img src="images/oauth2-consent.png" alt="Consent screen: which account is signing in, what the app will be able to do, where the patron returns to, and Allow / Decline" width="330">
   <img src="images/oauth2-consent-phone.png" alt="The same consent screen on a phone" width="290">
   <img src="images/oauth2-error.png" alt="Error page: this app isn't set up with this library, nothing was shared, ask your librarian" width="330">
 </p>

@@ -260,8 +260,9 @@ class TestAuthorize:
 
     def test_consent_screen_is_usable(self, app_client, client, session_cookie):
         """The screen must render both choices visibly, read access before write,
-        and name where the patron is sent. "Not now" once had no background and
-        rendered as white text on white, so a patron could not see how to decline."""
+        and name where the patron is sent. The decline button once had no
+        background and rendered as white text on white, so a patron could not
+        see how to refuse."""
         obj, _ = client
         _, challenge = pkce()
         r = app_client.get(AUTHORIZE_URL, params=authorize_params(obj, challenge),
@@ -271,8 +272,13 @@ class TestAuthorize:
         assert 'class="btn btn--primary"' in html and 'value="allow"' in html
         assert 'class="btn btn--secondary"' in html and 'value="deny"' in html
         assert ".btn--secondary" in html, "the decline button has no style of its own"
-        assert html.index("loans:read") < html.index(">borrow<"), \
-            "the read scope should be listed before the one that acts"
+        # The raw scope names are no longer printed — they are the protocol's
+        # words for the sentences beside them, and said nothing to a patron the
+        # description did not. The ordering they used to pin still matters, so
+        # assert it on the descriptions the patron actually reads.
+        assert html.index("See which books you have on loan") < \
+            html.index("Borrow books on your behalf"), \
+            "the read permission should be listed before the one that acts"
         assert "You will return to" in html
         assert '<meta charset="utf-8">' in html
 
@@ -745,7 +751,11 @@ class TestConsentIntegrity:
         # Enablement phrasing: the patron is granting something, and the
         # sentence should say what — not "the consumer wants access", which
         # casts a service as the actor and the patron as an obstacle.
-        assert "allow" in body and "to borrow, return, and see your loans" in body
+        # "return" was removed deliberately: `return_item` takes only a
+        # cookie, so a token-only consumer cannot return a book and the
+        # screen must not ask permission for it (ArchiveLabs/lenny#240).
+        assert "allow" in body and "to borrow and see your loans" in body
+        assert "borrow, return," not in body
         assert "wants access to your library account" not in body, (
             "reverted to framing the consumer as the actor")
         assert "this library registered this application" in body
@@ -758,8 +768,13 @@ class TestConsentIntegrity:
         client's own credentials, and `oauth2-disable` cuts every patron off at
         once. Promising "revoke at any time" is the same class of bug as the
         self-registration copy above — the screen describing a control the
-        system does not have. If a connected-apps page is ever built, this test
-        is the one to change.
+        system does not have.
+
+        The reassurance paragraph that used to carry "ask your librarian to
+        disconnect" was removed at the maintainer's request, so this test no
+        longer asserts that line is present; what it guards is unchanged — the
+        screen must not promise a self-service revocation that does not exist.
+        If a connected-apps page is ever built, this test is the one to change.
         """
         obj, _ = client
         _, challenge = pkce()
@@ -769,8 +784,8 @@ class TestConsentIntegrity:
         # where the HTML happens to break is not what this test is about.
         body = " ".join(r.text.lower().split())
         assert "revoke this at any time" not in body
-        assert "ask your librarian" in body, (
-            "the patron is not told what they can actually do")
+        # No copy implying the patron can disconnect the app themselves.
+        assert "disconnect" not in body
 
 
 @pytest.mark.skipif(
@@ -870,7 +885,7 @@ class TestBorrowRespectsLendingPolicy:
 class TestConsentHandleIsSingleUse:
     """Round 2: the handle carried no nonce and no single-use marker, so one
     consent click authorised an unbounded number of grants for 600 seconds, and
-    clicking Not now did not invalidate anything."""
+    declining did not invalidate anything."""
 
     def test_attack_a_handle_cannot_be_replayed(
             self, app_client, client, session_cookie):

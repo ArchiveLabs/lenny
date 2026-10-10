@@ -119,23 +119,18 @@ _EMAIL_HINT = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _login_hint(value: Optional[str]) -> Optional[str]:
-    """A `login_hint` worth pre-filling the email box with, or None.
+    """A `login_hint` worth acting on, or None.
 
-    Deliberately PRE-FILL ONLY. It would be a better experience to send the
-    code on arrival and ask straight for the digits — that is what was asked
-    for — but it would turn a GET into an outbound mailer aimed at an address
-    the caller chose. A link, an `<img src>`, or a prefetch would then send
-    mail to a stranger with no interaction at all, and `/authorize` is
-    unauthenticated by design.
+    Shape-checked rather than validated: an address is only ever proved by
+    mailing it a code, so this just keeps junk from being rendered as if Lenny
+    believed it. Jinja escapes whatever survives.
 
-    Keeping a click in front of the send costs the patron one button and keeps
-    the side effect behind a POST, where it belongs. The typing — the part
-    that actually grated, having just proved who you are elsewhere — is still
-    gone.
-
-    Shape-checked rather than validated: this only decides what goes in a form
-    field the patron can edit, and Jinja escapes it. The check exists so junk
-    does not get rendered as if Lenny believed it.
+    A hint reaching this route in the query string is pre-fill only, and that
+    is not a style choice: `/oauth/authorize` is the public OPDS login route,
+    so a hint there was chosen by whoever wrote the link. Sending on arrival is
+    reserved for a hint inside a signed login context (`_login_context`), which
+    only `/oauth2/authorize` can mint and only after it has checked the client
+    and its redirect_uri.
     """
     if not value:
         return None
@@ -143,6 +138,105 @@ def _login_hint(value: Optional[str]) -> Optional[str]:
     if len(value) > 254 or not _EMAIL_HINT.match(value):
         return None
     return value
+
+
+def _login_context(ctx: Optional[str]) -> dict:
+    """The signed authorization context from `/oauth2/authorize`, or `{}`.
+
+    Carries the client's registered name, the resolved scopes, and — when the
+    consumer supplied one — the patron's address. Anything unsigned, tampered
+    with, or older than `LOGIN_CTX_TTL` reads as absent, which lands the caller
+    on the ordinary sign-in form rather than on an error.
+    """
+    if not ctx:
+        return {}
+    from lenny.routes.oauth2 import LOGIN_CTX_TTL, login_ctx_serializer
+    try:
+        payload = login_ctx_serializer().loads(ctx, max_age=LOGIN_CTX_TTL)
+    except Exception:
+        # BadSignature and SignatureExpired are the expected ones; a malformed
+        # blob can also fail in the base64/JSON layer underneath. All of them
+        # mean the same thing here — this did not come from us — and the caller
+        # gets the ordinary sign-in page either way.
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+# A prefetch or prerender is the browser guessing, not the patron arriving.
+_SPECULATIVE = ("prefetch", "prerender")
+
+
+def _is_top_level_navigation(request: Request) -> bool:
+    """True when this GET is a person landing on the page.
+
+    `Sec-Fetch-Mode`/`Sec-Fetch-Dest` are forbidden header names: a page's
+    JavaScript cannot set or override them, so an `<img src>`, a `fetch()`, or
+    an `<iframe>` pointed at this URL cannot disguise itself as a navigation.
+    That is the whole value — it means a third party cannot make someone
+    else's browser quietly spend a send.
+
+    It does NOT authenticate anybody, and it stops nothing that is scripted
+    directly: `curl` sets any header it likes. The bound on a determined
+    caller is the per-recipient cap inside `OTP.issue`, not this.
+
+    Absent headers read as False, so an older browser falls back to the
+    pre-filled form and signs in normally — the feature degrades, the flow
+    does not break.
+    """
+    headers = request.headers
+    mode = (headers.get("sec-fetch-mode") or "").lower()
+    dest = (headers.get("sec-fetch-dest") or "").lower()
+    if mode != "navigate" or dest != "document":
+        return False
+    purpose = ((headers.get("sec-purpose") or "")
+               + " " + (headers.get("purpose") or "")).lower()
+    return not any(word in purpose for word in _SPECULATIVE)
+
+
+def _scope_descriptions(scope: Optional[str]) -> list:
+    """Plain-language descriptions for the scopes in a signed context.
+
+    Ordered least-powerful first, the same order the consent screen uses, so
+    the two pages tell one story. Unknown names are dropped rather than shown
+    raw — a scope string is a protocol detail, not a sentence.
+    """
+    if not scope:
+        return []
+    from lenny.core.oauth2 import SCOPES
+    order = ["loans:read", "borrow"]
+    asked = [s for s in scope.split() if s in SCOPES]
+    return ([SCOPES[s] for s in order if s in asked]
+            + [SCOPES[s] for s in sorted(asked) if s not in order])
+
+
+def _node_host() -> str:
+    """This library's public hostname, for naming which library is lending.
+
+    Same source as the OAuth issuer — the deployment's configured public URL —
+    so the sign-in page and the consent page cannot disagree about where the
+    patron is.
+    """
+    from lenny.core.api import LennyAPI
+    return urlparse(LennyAPI.make_url("")).hostname or "this library"
+
+
+def _claim_send(send_id: Optional[str]) -> bool:
+    """True the first time this context's send id is presented, False after.
+
+    A reload, a back button, or a replayed URL must not mail a second code, so
+    the send is spent once and the page afterwards re-renders without one.
+
+    Stored in `cache` rather than in memory because the consent replay guard's
+    process-local dict is already a known gap under several workers (#209), and
+    a send that a second worker would honour is the same bug pointed at the
+    mailer. `limit=1` makes `is_throttled` a claim-once primitive: the first
+    call records and returns False, every later one returns True.
+    """
+    if not send_id:
+        return False
+    from lenny.core.cache import Cache
+    from lenny.routes.oauth2 import LOGIN_CTX_TTL
+    return not Cache.is_throttled("otp:autosend", send_id, 1, LOGIN_CTX_TTL)
 
 
 @router.api_route("/oauth/authorize", methods=["GET", "POST"])
@@ -154,6 +248,7 @@ async def oauth_authorize(
     state: Optional[str] = None,
     prompt: Optional[str] = None,
     login_hint: Optional[str] = None,
+    ctx: Optional[str] = None,
 ) -> Response:
     """
     Handles OTP-based authorization (OPDS Implicit flow).
@@ -211,11 +306,23 @@ async def oauth_authorize(
     current_state = body.get("state") or req_params.get("state")
     current_client_id = body.get("client_id") or req_params.get("client_id")
 
+    # What this sign-in is FOR. Present only when the patron arrived through
+    # `/oauth2/authorize`, which is the only caller that knows it and the only
+    # one that can sign it. A bare visit to this route gets `{}` and the plain
+    # sign-in page it has always had.
+    auth_ctx = _login_context(ctx or body.get("ctx"))
+    ctx_hint = _login_hint(auth_ctx.get("h"))
+
     _params: dict = {}
     if current_redirect_uri != "opds://authorize/":
         _params["redirect_uri"] = current_redirect_uri
     if current_state:
         _params["state"] = current_state
+    if ctx:
+        # Carried so the "why" survives a wrong code, a resend, and the POST
+        # that follows. It cannot cause a second send: only a GET sends, and
+        # only once per context.
+        _params["ctx"] = ctx
     post_url = "/v1/api/oauth/authorize"
     if _params:
         post_url += "?" + urlencode(_params)
@@ -229,7 +336,14 @@ async def oauth_authorize(
         "next": current_redirect_uri,
         "book_id": "oauth",
         "action": "oauth",
-        "login_hint": _login_hint(login_hint),
+        "login_hint": ctx_hint or _login_hint(login_hint),
+        # Who is asking, what for, and where — read by the templates so the
+        # patron learns why before being asked for anything. Taken from the
+        # signed context, so it is the operator's registration talking and not
+        # the query string.
+        "client_name": auth_ctx.get("n"),
+        "scope_descriptions": _scope_descriptions(auth_ctx.get("s")),
+        "node_host": _node_host(),
     }
 
     if request.method == "POST" and post_email and post_otp:
@@ -289,12 +403,55 @@ async def oauth_authorize(
             context["error"] = str(e)
             context["email"] = post_email
             return request.app.templates.TemplateResponse("otp_issue.html", context)
+        except RateLimitError as e:
+            # `OTP.issue` now caps sends per recipient, so this is reachable
+            # from the email form and the resend button. It is a different
+            # answer from "we could not send" and has to read as one, or a
+            # patron waits for a code that was deliberately not sent.
+            context["error"] = str(e)
+            context["email"] = post_email
+            return request.app.templates.TemplateResponse("otp_issue.html", context)
         except Exception:
             logger.exception("Unexpected error issuing OTP")
             context["error"] = "Failed to issue OTP. Please try again."
             return request.app.templates.TemplateResponse("otp_issue.html", context)
         context["email"] = post_email
         return request.app.templates.TemplateResponse("otp_redeem.html", context)
+
+    # Send on arrival. The consumer has already proved this address, so asking
+    # the patron to produce it again is a step that buys nothing.
+    #
+    # Four things must hold, and each closes a different door: the context is
+    # signed (so the request came through `/oauth2/authorize`'s client and
+    # redirect_uri checks); the method is GET from a real navigation (so no
+    # third-party page can spend a send from someone else's browser); the send
+    # id is unspent (so a reload does not mail twice); and `OTP.issue` applies
+    # the per-recipient cap (so a scripted caller cannot flood one mailbox).
+    # Any of them failing falls through to the pre-filled form — the patron
+    # clicks once, exactly as before, and nothing is broken.
+    if request.method == "GET" and ctx_hint:
+        if _is_top_level_navigation(request):
+            if not _claim_send(auth_ctx.get("j")):
+                # A reload or a back button: the code is already in their
+                # inbox, so ask for it rather than sending another.
+                context["email"] = ctx_hint
+                return request.app.templates.TemplateResponse(
+                    "otp_redeem.html", context)
+            try:
+                auth.OTP.issue(ctx_hint, client_ip)
+            except (LendingNotConfiguredError, OTPGenerationError,
+                    RateLimitError) as e:
+                context["error"] = str(e)
+                return request.app.templates.TemplateResponse(
+                    "otp_issue.html", context)
+            except Exception:
+                logger.exception("Unexpected error issuing OTP on arrival")
+                context["error"] = "Failed to issue OTP. Please try again."
+                return request.app.templates.TemplateResponse(
+                    "otp_issue.html", context)
+            context["email"] = ctx_hint
+            return request.app.templates.TemplateResponse(
+                "otp_redeem.html", context)
 
     return request.app.templates.TemplateResponse("otp_issue.html", context)
 

@@ -10,6 +10,7 @@ from lenny.core.openlibrary import ol_auth_headers, _REDACT_HOOKS
 from lenny.core.exceptions import LendingNotConfiguredError, OTPGenerationError
 from lenny.core.cache import Cache
 from lenny.core.exceptions import RateLimitError
+from lenny.core.utils import hash_email
 
 logging.basicConfig(
     level=LOG_LEVEL.upper(),
@@ -214,9 +215,20 @@ class OTP:
     
     @classmethod
     def is_send_rate_limited(cls, email: str) -> bool:
-        """Limit OTP send requests: 5 emails per 5 minutes per email."""
+        """Limit OTP sends: EMAIL_REQUEST_LIMIT per EMAIL_WINDOW_SECONDS, per
+        *normalized* recipient.
+
+        Keyed on `hash_email(email)` — the same `.strip().lower()` identity the
+        loan and the grant are recorded under — not the raw string. Keying on
+        the raw address let `Victim@x.com` and `victim@x.com` draw separate
+        budgets while mail delivers both to one inbox, so the cap has to fold
+        case the way delivery does. (Plus-addressing and provider-specific
+        dot-folding are deliberately not canonicalized here — there is no
+        portable rule for them — so the bound is per-normalized-address, not
+        strictly per-physical-mailbox.)
+        """
         return Cache.is_throttled(
-            "otp:send", email, EMAIL_REQUEST_LIMIT, EMAIL_WINDOW_SECONDS
+            "otp:send", hash_email(email), EMAIL_REQUEST_LIMIT, EMAIL_WINDOW_SECONDS
         )
 
     @classmethod
@@ -311,8 +323,33 @@ class OTP:
 
         Returns Open Library's success payload. Raises `OTPGenerationError` (with
         a `.code` carrying Open Library's own error string) if it refused —
-        never returns quietly on failure.
+        never returns quietly on failure. Raises `RateLimitError` when this
+        address has already been mailed `EMAIL_REQUEST_LIMIT` times inside
+        `EMAIL_WINDOW_SECONDS`.
+
+        The cap lives here rather than at a call site so that every way of
+        asking for a code — the email form, the resend button, and the
+        send-on-arrival path behind a signed `login_hint` — is bounded by the
+        same budget, and a future caller cannot reach the mailer without one.
+        `is_send_rate_limited` had no callers at all between f3be570 and this
+        commit, which left nginx's per-IP POST zone as the only send-side
+        control; that zone is keyed on the source address, so it bounds one
+        caller rather than one mailbox.
+
+        Keyed on the recipient's *normalized* address (see
+        `is_send_rate_limited`), which is what bounds how many codes one mailbox
+        can be made to receive — case-folded, so merely changing case cannot buy
+        a fresh budget. It does NOT bound plus-addressed or dot-folded aliases of
+        the same mailbox (no portable rule canonicalizes those), nor a caller
+        spread across genuinely different addresses; those remain the domain of
+        nginx's per-IP zone.
         """
+        if cls.is_send_rate_limited(email):
+            logger.warning("OTP issue refused: send limit reached for %s",
+                           cls._mask_email(email))
+            raise RateLimitError(
+                "Too many codes have been requested for this address. "
+                "Please wait a few minutes and try again.")
         return cls._post(
             "/account/otp/issue",
             {"email": email, "ip": ip_address},

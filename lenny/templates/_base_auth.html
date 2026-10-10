@@ -21,7 +21,15 @@
         --destructive: #8d3825;
         --destructive-foreground: #ffffff;
         --border: #e5e1d2;
-        --input: #d1cbb7;
+        /* The boundary of anything a patron operates — buttons, text fields.
+           WCAG 2.1 SC 1.4.11 wants 3:1 against the surface behind it; the
+           previous #d1cbb7 measured 1.62:1 on the card, so a white decline
+           button and every input had an edge that was decorative rather than
+           visible. #9a9074 is the lightest value in the same warm neutral that
+           clears it: 3.17:1 on the card, 3.01:1 on the page. --border stays
+           light because it only ever draws dividers and container edges, which
+           the criterion does not cover. */
+        --input: #9a9074;
         --ring: #1266ba;
         --success: #4b723b;
         --success-bg: #ecf3e8;
@@ -48,6 +56,11 @@
         padding: 40px;
         max-width: 400px;
         width: 100%;
+        /* The card is white on a near-white page (1.04:1), so its 1px border
+           was the only thing separating them. A soft shadow does the
+           separating instead, which is what makes it read as a sheet. */
+        box-shadow: 0 1px 2px rgba(61, 56, 46, 0.04),
+                    0 8px 24px rgba(61, 56, 46, 0.07);
       }
       .card--wide { max-width: 480px; text-align: center; }
       h1 { font-size: 19px; margin-bottom: 6px; color: var(--card-foreground); text-align: center; }
@@ -137,6 +150,9 @@
         letter-spacing: 3px;
         text-align: center;
       }
+      /* The tracking is for six typed digits; applied to the placeholder it
+         pulls the words apart and reads as a rendering fault. */
+      .otp-input::placeholder { letter-spacing: normal; }
       .badge {
         display: inline-block;
         padding: 3px 10px;
@@ -148,7 +164,54 @@
         margin-bottom: 14px;
       }
       .badge--oauth { background: var(--accent); color: var(--accent-foreground); border: 1px solid var(--border); }
-      .badge--direct { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+
+      /* ── Why this sign-in is happening ────────────────────────────────────
+         Rendered above the credential on both sign-in screens, and only when
+         the patron arrived from a consumer (`client_name` comes from the
+         signed login context, so a bare OPDS sign-in has none and gets the
+         plain page it always had).
+
+         The order is the point. The screens used to open with a one-time
+         password and never say what it was for, so a patron spent a step and
+         handed over a credential before learning that something wanted to
+         borrow on their behalf — and then met the consent screen as a
+         surprise. Context first, credential second, and a sentence saying a
+         choice is still coming. */
+      .purpose {
+        text-align: left;
+        background: var(--accent);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px 18px;
+        margin-bottom: 22px;
+      }
+      .purpose__lead {
+        font-size: 15px; line-height: 1.45; margin: 0;
+        color: var(--accent-foreground);
+      }
+      .purpose__lead strong { font-weight: 700; }
+      .purpose__list {
+        list-style: none; padding: 0; margin: 12px 0 0;
+        display: flex; flex-direction: column; gap: 7px;
+      }
+      .purpose__list li {
+        position: relative; padding-left: 24px;
+        font-size: 13.5px; line-height: 1.4; color: var(--accent-foreground);
+      }
+      /* A check rather than a bullet: these are things the patron is about to
+         be able to allow, not a list of facts. */
+      .purpose__list li::before {
+        content: ""; position: absolute; left: 4px; top: 4px;
+        width: 9px; height: 5px; border-left: 2px solid currentColor;
+        border-bottom: 2px solid currentColor; transform: rotate(-45deg);
+        opacity: 0.75;
+      }
+      .next-step {
+        margin: 18px 0 0; padding-top: 14px;
+        border-top: 1px solid var(--border);
+        font-size: 13px; line-height: 1.5;
+        color: var(--muted-foreground); text-align: left;
+      }
     </style>
   </head>
   <body>
