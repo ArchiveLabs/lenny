@@ -283,6 +283,22 @@ class TestTheRecipientIsRateLimited:
         with pytest.raises(RateLimitError):
             auth.OTP.issue(PATRON, "1.2.3.4")
 
+    def test_the_limit_folds_case_like_delivery_does(self, client, monkeypatch):
+        """A change of case is the same mailbox and must not buy a fresh budget.
+        The grant keys on hash_email (.strip().lower()); if the send cap keyed
+        on the raw string instead, `PATRON@...` would get its own 5 sends after
+        `patron@...` was exhausted — a per-recipient cap case-variants walk
+        straight through."""
+        from lenny.core import auth
+        from lenny.core.exceptions import RateLimitError
+
+        monkeypatch.setattr(auth.OTP, "_post",
+                            classmethod(lambda cls, *a, **k: {"success": True}))
+        for i in range(auth.EMAIL_REQUEST_LIMIT):
+            auth.OTP.issue(PATRON.lower(), "1.2.3.4")
+        with pytest.raises(RateLimitError):
+            auth.OTP.issue(PATRON.upper(), "1.2.3.4")
+
 
 class TestTheHintIsShapeChecked:
     @pytest.mark.parametrize("bad", [
