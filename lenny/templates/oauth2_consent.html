@@ -4,10 +4,17 @@
 
 {% block content %}
 <div class="card" role="main" aria-labelledby="consent-title">
-  {# "Last step" rather than "Authorize": it tells the patron where they are,
-     which is the thing that was missing when this screen arrived unannounced
-     after a sign-in. The sign-in pages promise a choice is coming; this is it. #}
-  <div style="text-align: center;"><span class="badge badge--oauth">Last step</span></div>
+  {#
+    No badge here, deliberately.
+
+    It read "Authorize", was renamed "Last step" while this really was the
+    third of three screens, and then the flow collapsed to one screen and
+    nothing re-read the label — so it told a patron they were finishing a
+    sequence that had never happened. It is true on the paths where a sign-in
+    precedes it and false on the ones where this is the only screen, and one
+    word does not justify a branch over which path the patron took. Anything
+    put back here has to be true on every path that renders this template.
+  #}
   {#
     Phrased as what the patron is enabling, not as what the consumer wants.
     "Open Library wants access to your library account" frames a service as

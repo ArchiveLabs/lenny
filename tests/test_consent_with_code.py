@@ -58,6 +58,13 @@ def clean():
     db.remove()
 
 
+@pytest.fixture(autouse=True)
+def lending_on(monkeypatch):
+    """Only the `/oauth/authorize` hop consults the lending gate, so the
+    collapsed path never needed this and the no-hint path 503s without it."""
+    monkeypatch.setattr("lenny.routes.oauth._require_lending", lambda: None)
+
+
 @pytest.fixture
 def outbox(monkeypatch):
     sent = []
@@ -266,3 +273,64 @@ class TestTheCopyMatchesWhatTheGrantConfers:
     def test_the_scope_table_does_not_promise_returning_either(self):
         from lenny.core.oauth2 import SCOPES
         assert "return" not in SCOPES["borrow"].lower()
+
+
+class TestNoCopyClaimsAPositionInASequence:
+    """The collapse changed the flow's shape, so every string describing that
+    shape had to be re-read.
+
+    The consent badge said "Last step". It was renamed from "Authorize" while
+    consent really was the third of three screens, and then the flow became one
+    screen and nothing re-read the label — it told a patron they were finishing
+    a sequence that never happened. The badge is gone rather than made
+    conditional: it is true on some paths and false on others, and one word is
+    not worth a branch.
+    """
+
+    def test_the_one_screen_claims_no_position(self, client, outbox):
+        text = visible(screen(client).text).lower()
+        for claim in ("last step", "step 1", "step 2", "step one", "step two",
+                      "almost done", "final step", "next,"):
+            assert claim not in text, f"the only screen still says {claim!r}"
+
+    def test_the_consent_screen_has_no_badge_at_all(self, client, outbox):
+        assert 'class="badge' not in screen(client).text
+
+    def test_the_signed_in_consent_screen_claims_no_position_either(self, client, outbox):
+        """A patron who already has a session also sees exactly one screen."""
+        c = TestClient(app, follow_redirects=False)
+        r = c.get(AUTHORIZE, params=params(client),
+                  cookies={"session": auth.create_session_cookie(PATRON)})
+        text = visible(r.text).lower()
+        assert "last step" not in text and 'class="badge' not in r.text
+
+    def test_the_sign_in_pages_may_still_promise_consent_because_it_follows(self, client, outbox):
+        """The opposite error is deleting copy that is still true. Without a
+        hint there IS a later consent screen, so saying so is accurate — and
+        this test fails if that stops being the case."""
+        c = TestClient(app, follow_redirects=False)
+        bounce = c.get(AUTHORIZE, params=params(client))   # no login_hint
+        page = c.get(bounce.headers["location"], headers=NAVIGATION)
+        assert "choose whether to allow" in visible(page.text), \
+            "the email step no longer warns that consent follows"
+        assert 'id="email"' in page.text
+
+    def test_and_consent_really_does_follow_on_that_path(self, client, outbox):
+        """Proves the sentence above rather than trusting it: sign in by code
+        on the no-hint path and land on the consent screen."""
+        c = TestClient(app, follow_redirects=False)
+        bounce = c.get(AUTHORIZE, params=params(client))
+        login_url = bounce.headers["location"]
+        page = c.get(login_url, headers=NAVIGATION)
+        post_url = re.search(r'action="([^"]+)"', page.text).group(1)
+        # email step -> code step
+        step2 = c.post(post_url, data={"email": PATRON, "redirect_uri": "",
+                                       "state": "", "book_id": "oauth",
+                                       "action": "oauth", "next": ""})
+        assert 'id="otpForm"' in step2.text, "did not reach the code step"
+        # code step -> back to /oauth2/authorize, which renders consent
+        done = c.post(re.search(r'action="([^"]+)"', step2.text).group(1),
+                      data={"email": PATRON, "otp": GOOD_CODE, "redirect_uri": "",
+                            "state": "", "book_id": "oauth", "action": "oauth",
+                            "next": ""}, follow_redirects=False)
+        assert done.status_code in (302, 303), f"no redirect home: {done.status_code}"
