@@ -311,8 +311,29 @@ class OTP:
 
         Returns Open Library's success payload. Raises `OTPGenerationError` (with
         a `.code` carrying Open Library's own error string) if it refused —
-        never returns quietly on failure.
+        never returns quietly on failure. Raises `RateLimitError` when this
+        address has already been mailed `EMAIL_REQUEST_LIMIT` times inside
+        `EMAIL_WINDOW_SECONDS`.
+
+        The cap lives here rather than at a call site so that every way of
+        asking for a code — the email form, the resend button, and the
+        send-on-arrival path behind a signed `login_hint` — is bounded by the
+        same budget, and a future caller cannot reach the mailer without one.
+        `is_send_rate_limited` had no callers at all between f3be570 and this
+        commit, which left nginx's per-IP POST zone as the only send-side
+        control; that zone is keyed on the source address, so it bounds one
+        caller rather than one mailbox.
+
+        Keyed on the recipient, deliberately: it is the only key an attacker
+        cannot change by moving to another address, and the only one that
+        bounds what a single mailbox can be made to receive.
         """
+        if cls.is_send_rate_limited(email):
+            logger.warning("OTP issue refused: send limit reached for %s",
+                           cls._mask_email(email))
+            raise RateLimitError(
+                "Too many codes have been requested for this address. "
+                "Please wait a few minutes and try again.")
         return cls._post(
             "/account/otp/issue",
             {"email": email, "ip": ip_address},

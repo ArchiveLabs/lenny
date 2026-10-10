@@ -38,6 +38,7 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from lenny.core import auth
 from lenny.core.external_auth import valid_prompt
+from lenny.routes.oauth import _login_hint
 from lenny.core.exceptions import (
     BookUnavailableError,
     LoanNotRequiredError,
@@ -132,6 +133,34 @@ def _consent_serializer() -> URLSafeTimedSerializer:
     """
     from lenny import configs
     return URLSafeTimedSerializer(configs.SEED, salt="oauth2-consent")
+
+
+# How long the signed login context is good for: the patron has to get through
+# the sign-in page inside this window, and a replay of the same context sends
+# nothing after it.
+LOGIN_CTX_TTL = 600
+
+
+def login_ctx_serializer() -> URLSafeTimedSerializer:
+    """Signs what the sign-in page is allowed to know and do.
+
+    The sign-in page is reachable two ways. `/oauth/authorize` on its own is
+    the public OPDS login route, which any reader may link to and which must
+    never do anything but render a form. The same page reached from here is
+    part of a request that has already been checked — registered client,
+    registered redirect_uri, PKCE challenge present — and may therefore say who
+    is asking and send the code without a second click.
+
+    A signature is what separates them, because nothing else can be. Both
+    arrive as unauthenticated GETs carrying query parameters, so a plain flag
+    would be typed by anyone, and re-deriving trust from `client_id` would
+    accept any id an attacker copied out of a public authorization URL. Only a
+    value this process minted proves the request came through the checks above.
+
+    Its own salt, so a consent handle cannot be presented as a login context.
+    """
+    from lenny import configs
+    return URLSafeTimedSerializer(configs.SEED, salt="oauth2-login-context")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,14 +314,34 @@ async def authorize(
         # intact. `prompt` is deliberately NOT part of the return trip, or the
         # patron would be asked to sign in again forever.
         this_request = f"/v1/api/oauth2/authorize?{urlencode(_echo(request))}"
-        # RFC 6749 §3.1.2.1 `login_hint`: the consumer already knows which
-        # patron this is, so pass it along and spare them typing an address
-        # they just proved they own somewhere else. It only ever PRE-FILLS the
-        # field — see `_login_hint` in routes/oauth.py for why it must not
-        # trigger the send by itself.
-        login = {"redirect_uri": this_request}
-        if login_hint:
-            login["login_hint"] = login_hint
+        # What the sign-in page may say and do, signed so it cannot be edited
+        # or invented. `login_ctx_serializer` explains why a signature is the
+        # only thing that can carry this.
+        #
+        # The client's name and the resolved scopes travel inside it so the
+        # page can lead with who is asking and what for, rather than demanding
+        # a credential before saying why. Both are taken from the registration
+        # and from `resolve_scope` above — never echoed from the query — so the
+        # sentence a patron reads is the operator's, not the caller's.
+        ctx = {
+            "j": secrets.token_urlsafe(12),
+            "c": client.client_id,
+            "n": client.name,
+            "s": granted_scope,
+        }
+        # RFC 6749 §3.1.2.1 `login_hint`: the consumer has already proved this
+        # address, so the patron should not have to produce it again.
+        #
+        # Dropped entirely on a fresh sign-in. `prompt=select_account` is what
+        # "Not you? Use a different account" sends, and the whole point of that
+        # link is to get away from this address — pre-filling it would undo the
+        # click and mailing it would be worse.
+        if not fresh and (hint := _login_hint(login_hint)):
+            ctx["h"] = hint
+        login = {
+            "redirect_uri": this_request,
+            "ctx": login_ctx_serializer().dumps(ctx),
+        }
         if fresh:
             login["prompt"] = fresh
         redirect = RedirectResponse(

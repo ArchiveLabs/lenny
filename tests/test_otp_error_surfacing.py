@@ -36,6 +36,19 @@ def _response(payload, status_code=200, text=None):
     )
 
 
+@pytest.fixture(autouse=True)
+def no_send_cap():
+    """`OTP.issue` caps sends per recipient, and these tests call it many times
+    with one address to walk Open Library's error codes.
+
+    Without this they start failing partway down the parametrised list with a
+    `RateLimitError` — which is the cap working correctly, on a file that is
+    not about the cap. The cap itself is covered in `test_login_hint.py`.
+    """
+    with patch("lenny.core.auth.OTP.is_send_rate_limited", return_value=False):
+        yield
+
+
 @pytest.fixture
 def ol_lending_enabled():
     """Bypass the lending-mode gate so tests exercise the HTTP path itself."""

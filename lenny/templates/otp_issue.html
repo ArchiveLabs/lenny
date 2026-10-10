@@ -4,24 +4,28 @@
 
 {% block content %}
 <div class="card">
-  {% if auth_mode == 'direct' %}
-  <div style="text-align: center;"><span class="badge badge--direct">Direct Auth</span></div>
-  {% else %}
-  <div style="text-align: center;"><span class="badge badge--oauth">OAuth Mode</span></div>
-  {% endif %}
-  <h1>Sign in to Lenny</h1>
+  {#
+    The badge here used to read "OAuth Mode" (or "Direct Auth", on a branch
+    that could never be taken — `auth_mode` was never once put in this
+    template's context, so every patron saw "OAuth Mode"). It named the
+    protocol Lenny happens to speak, which is of no use to the person reading
+    it and faintly alarming. What a patron needs in that spot is who is asking
+    and what for, which is what `.purpose` below says.
+  #}
+  {% include "_purpose.html" %}
+  <h1>{% if client_name %}Sign in to continue{% else %}Sign in to Lenny{% endif %}</h1>
   {% if login_hint %}
-  <p class="subtitle">We'll send a one-time code to <strong>{{ login_hint }}</strong>.</p>
+  <p class="subtitle">We'll email a sign-in code to <strong>{{ login_hint }}</strong>.</p>
   {% else %}
-  <p class="subtitle">Enter your email to receive a one-time password.</p>
+  <p class="subtitle">Enter your email and we'll send you a sign-in code.</p>
   {% endif %}
   {% if error %}
   <div class="error">{{ error }}</div>
   {% endif %}
   <form action="{{ post_url }}" method="POST" id="otpIssueForm">
-    {# Pre-filled from `login_hint` when the consumer told us who this is, but
-       still editable and still requiring a click: sending on arrival would
-       make a GET mail an address the caller chose. See `_login_hint`. #}
+    {# Pre-filled from the hint, and still editable: this page is reached when
+       the code could not be sent on arrival (no Sec-Fetch signal, a spent
+       context, or a refusal), so the patron finishes with one click. #}
     <label for="email">Email address</label>
     <input type="email" id="email" name="email" required placeholder="you@example.com"
            value="{{ login_hint or '' }}"{% if login_hint %} autofocus{% endif %}/>
@@ -31,8 +35,16 @@
     <input type="hidden" name="book_id" value="{{ book_id }}"/>
     <input type="hidden" name="action" value="{{ action }}"/>
     <input type="hidden" name="next" value="{{ next }}"/>
-    <button type="submit" class="btn btn--primary">Send OTP</button>
+    <button type="submit" class="btn btn--primary">Email me a sign-in code</button>
   </form>
+  {% if client_name %}
+  {# Says a choice is still coming, so the consent screen is an expected step
+     rather than a surprise after the patron thought they were done. #}
+  <p class="next-step">
+    Next, you'll choose whether to allow {{ client_name }} to do this. Signing
+    in doesn't grant anything on its own.
+  </p>
+  {% endif %}
 </div>
 <script>
   // A plain form POST navigates away rather than resolving a promise, so

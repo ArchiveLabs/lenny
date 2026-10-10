@@ -4,7 +4,10 @@
 
 {% block content %}
 <div class="card" role="main" aria-labelledby="consent-title">
-  <div style="text-align: center;"><span class="badge badge--oauth">Authorize</span></div>
+  {# "Last step" rather than "Authorize": it tells the patron where they are,
+     which is the thing that was missing when this screen arrived unannounced
+     after a sign-in. The sign-in pages promise a choice is coming; this is it. #}
+  <div style="text-align: center;"><span class="badge badge--oauth">Last step</span></div>
   {#
     Phrased as what the patron is enabling, not as what the consumer wants.
     "Open Library wants access to your library account" frames a service as
