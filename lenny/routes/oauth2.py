@@ -9,6 +9,7 @@ OAuth 2.0 authorization-server endpoints.
     POST /oauth2/revoke      — RFC 7009 revocation
     GET  /oauth2/loans       — protected resource, scope `loans:read`
     POST /oauth2/borrow      — protected resource, scope `borrow`
+    POST /oauth2/return      — protected resource, scope `borrow`
 
 and, mounted at the site root by `lenny.app`:
 
@@ -47,6 +48,7 @@ from lenny.routes.oauth import (
 from lenny.core.exceptions import (
     BookUnavailableError,
     LendingNotConfiguredError,
+    LoanNotFoundError,
     LoanNotRequiredError,
     OTPGenerationError,
     PatronLoanLimitError,
@@ -837,4 +839,47 @@ async def borrow(request: Request, edition_id: int = Form(...)) -> Response:
         "status": "borrowed",
         "edition_id": edition_id,
         "due_at": loan.due_date.isoformat() if loan.due_date else None,
+    })
+
+
+@router.post("/oauth2/return")
+async def return_(request: Request, edition_id: int = Form(...)) -> Response:
+    """Return on the patron's behalf. Requires `borrow`.
+
+    The mirror of `/oauth2/borrow`, and it shares the `borrow` scope on purpose:
+    every grant issued carries `loans:read borrow`, so returning under `borrow`
+    means no patron re-consents and no existing token is invalidated. Minting a
+    separate `return` scope would have silently broken every grant already out.
+
+    Delegates to `Item.unborrow`, which is the only place the return rule lives
+    (open-access items are not lendable; `exists_any` lets even an expired loan
+    be finalised as a patron action rather than an auto-expiry). The token holds
+    only the patron's email hash, so the lookup runs through the hashed path.
+
+    Note this is the OAuth2 surface. `return_item` in api.py is the OPDS surface
+    and is unaffected: its `@requires_item_auth()` wrapper already resolves an
+    OPDS client's session-cookie bearer through `verify_session_cookie`. The two
+    are parallel auth systems; this completes the second one.
+    """
+    tok, err = _bearer(request, "borrow")
+    if err:
+        return err
+
+    item = Item.exists(edition_id)
+    if item is None:
+        return _error("not_found", f"This library does not hold edition {edition_id}.",
+                      status=404)
+
+    try:
+        item.unborrow(tok.patron_email_hash, hashed=True)
+    except LoanNotRequiredError:
+        return _error("not_lendable",
+                      "This book is open access and does not need to be returned.")
+    except LoanNotFoundError:
+        return _error("no_active_loan",
+                      f"No active loan to return for edition {edition_id}.", status=404)
+
+    return JSONResponse(status_code=200, content={
+        "status": "returned",
+        "edition_id": edition_id,
     })

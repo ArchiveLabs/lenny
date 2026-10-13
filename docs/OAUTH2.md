@@ -65,13 +65,14 @@ granted by that patron, and never travels through the browser.**
 | `POST /v1/api/oauth2/revoke` | RFC 7009 |
 | `GET /v1/api/oauth2/loans` | scope `loans:read` |
 | `POST /v1/api/oauth2/borrow` | scope `borrow` |
+| `POST /v1/api/oauth2/return` | scope `borrow` |
 
 ### Scopes
 
 | Scope | What the patron is told |
 |---|---|
 | `loans:read` | See which books you have on loan |
-| `borrow` | Borrow books on your behalf |
+| `borrow` | Borrow and return books on your behalf |
 
 An unknown or unregistered scope is an **error**, not a silent narrowing — a
 client learns immediately rather than discovering a missing permission at call
@@ -242,12 +243,15 @@ the type decides whether a secret exists.
 | `GET /v1/api/oauth2/loans` | `loans:read` | the patron's loans, JSON |
 | `GET /v1/api/items/{id}/borrow` | `borrow` | borrows the item; same limits as any borrow |
 | `POST /v1/api/oauth2/borrow` | `borrow` | borrows the item, JSON |
+| `POST /v1/api/oauth2/return` | `borrow` | returns the item, JSON |
 
 Send it as `Authorization: Bearer <access token>`. A token with only
-`loans:read` cannot borrow. A token only ever sees its own patron's loans.
-Lending rules (per-patron limit, copies available, borrowing the same book twice
-is a no-op) are enforced by the same code as for a cookie login. Returning a book
-and reading it still need the patron's login cookie.
+`loans:read` cannot borrow or return. A token only ever sees its own patron's
+loans. Lending rules (per-patron limit, copies available, borrowing the same book
+twice is a no-op) are enforced by the same code as for a cookie login. `return`
+reuses the `borrow` scope, so a grant issued before this existed can return with
+no re-consent. Opening a book in the reader still needs the patron's login
+cookie.
 
 An app may send `scope=openid` (or `profile`, `email`, `offline_access`); these
 carry no permission here and are ignored, so a generic OIDC client works without
@@ -378,8 +382,9 @@ which apps may use Lenny's sign-in.
 
 ### Not done in this release
 
-Returning a book and opening it in the reader still require the patron's own
-login cookie, so an app that holds only a token cannot do either. Showing both
+Opening a book in the reader still requires the patron's own login cookie, so an
+app that holds only a token cannot read (returning by token is now supported via
+`POST /v1/api/oauth2/return`). Showing both
 flows by default, Device Authorization, a domain allow-list for the sign-in hint,
 and a client registry are tracked in
 [#237](https://github.com/ArchiveLabs/lenny/issues/237) because the revised OPDS

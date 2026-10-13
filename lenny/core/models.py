@@ -212,7 +212,14 @@ class Item(Base):
         items = db.query(cls).all()
         return {item.openlibrary_edition: item for item in items}
 
-    def unborrow(self, email: str):
+    def unborrow(self, email: str, hashed: bool = False):
+        """Return a borrowed book.
+
+        `hashed=True` means *email* is already a `hash_email()` digest — the
+        OAuth2 resource endpoints (`/oauth2/return`) hold only the hash, never
+        the address, exactly as `borrow` does. Forwarding the flag is what keeps
+        the value from being hashed a second time and missing the loan.
+        """
         if not self.is_login_required:
             raise LoanNotRequiredError
 
@@ -221,7 +228,7 @@ class Item(Base):
 
         # Use exists_any (no due_date filter) so expired loans can still be
         # explicitly returned — keeps returned_at as a patron action, not auto-expiry.
-        if loan := Loan.exists_any(self.id, email):
+        if loan := Loan.exists_any(self.id, email, hashed=hashed):
             return loan.finalize()
 
         raise LoanNotFoundError("Patron has no active loan for this book.")

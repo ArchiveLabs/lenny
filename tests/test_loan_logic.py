@@ -175,6 +175,38 @@ class TestLoanExistsAny:
             assert not any("due_date" in s for s in clause_strings)
 
 
+# ─── Item.unborrow hashed path (for the OAuth2 /return bearer endpoint) ───────
+
+class TestUnborrowHashedPath:
+    """A bearer-token return (POST /oauth2/return) presents an already-hashed
+    email. unborrow must forward `hashed` to `exists_any`, or the hash is hashed
+    a second time and the lookup misses a loan that exists."""
+
+    def _item(self, olid):
+        from lenny.core.models import FormatEnum, Item
+        return Item(openlibrary_edition=olid, encrypted=True, formats=FormatEnum.EPUB)
+
+    def test_hashed_true_is_forwarded_verbatim(self):
+        from lenny.core.models import Loan
+        item = self._item(1)
+        loan = MagicMock()
+        with patch.object(Loan, "exists_any", return_value=loan) as exists_any:
+            result = item.unborrow("deadbeefhash", hashed=True)
+        exists_any.assert_called_once_with(item.id, "deadbeefhash", hashed=True)
+        loan.finalize.assert_called_once()
+        assert result is loan.finalize.return_value
+
+    def test_default_is_the_plaintext_path(self):
+        """The cookie/OPDS path still passes a plaintext address (hashed=False)."""
+        from lenny.core.exceptions import LoanNotFoundError
+        from lenny.core.models import Loan
+        item = self._item(2)
+        with patch.object(Loan, "exists_any", return_value=None) as exists_any:
+            with pytest.raises(LoanNotFoundError):
+                item.unborrow("patron@example.com")
+        exists_any.assert_called_once_with(item.id, "patron@example.com", hashed=False)
+
+
 # ─── borrow_item route: PatronLoanLimitError → 403 ───────────────────────────
 
 class TestBorrowRouteErrors:

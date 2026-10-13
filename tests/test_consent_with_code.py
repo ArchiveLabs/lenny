@@ -281,23 +281,18 @@ class TestDecidingWithoutAValidCode:
 
 
 class TestTheCopyMatchesWhatTheGrantConfers:
-    def test_it_does_not_promise_returning(self, client, outbox):
-        """`return_item` (lenny/routes/api.py) takes a cookie and never calls
-        `get_authenticated_identity`, so a token-only consumer cannot return a
-        book. The consent screen must not say it can."""
+    def test_it_promises_returning(self, client, outbox):
+        """A `borrow` grant now confers returning: POST /oauth2/return finalises
+        a loan for a bearer token (ArchiveLabs/lenny#240, reversing #239's
+        temporary removal). The consent screen names it, so the copy and the
+        capability match again."""
         text = visible(screen(client).text).lower()
-        # Narrowly the *capability* claim. "You will return to openlibrary.org
-        # afterwards" is about navigation and is both true and wanted, so a
-        # bare search for "return" flags the wrong sentence.
-        promises = re.findall(r"return\w*\s+(?:books?|loans?|them|it)\b", text)
-        promises += re.findall(r"\breturn\b(?![\s]+to\b)", text)
-        assert not promises, \
-            f"the screen still promises returning, which a token cannot do: {promises}"
-        assert "borrow and return" not in text
+        assert "borrow and return books" in text, \
+            "the scope line should name returning, which a borrow token can now do"
 
-    def test_the_scope_table_does_not_promise_returning_either(self):
+    def test_the_scope_table_promises_returning_too(self):
         from lenny.core.oauth2 import SCOPES
-        assert "return" not in SCOPES["borrow"].lower()
+        assert "return" in SCOPES["borrow"].lower()
 
 
 class TestNoCopyClaimsAPositionInASequence:

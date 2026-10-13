@@ -21,15 +21,8 @@
     the actor and the patron as an obstacle; the patron is the one granting
     something and the sentence should say what.
 
-    This used to end "borrow, return, and see your loans", defended by a
-    comment here claiming returns were "already inside the `borrow` scope, so
-    naming them here is accurate rather than aspirational". That was wrong, and
-    wrong in the place a reviewer would look to check it: `return_item`
-    (lenny/routes/api.py) never calls `get_authenticated_identity` and takes
-    only a `session` cookie, so a token-only consumer cannot return a book at
-    all (docs/OAUTH2.md). The word is gone from the sentence and from
-    SCOPES["borrow"]. Put it back when returning by token exists — see
-    ArchiveLabs/lenny#240 — and not before.
+    "return" is in the sentence because a `borrow` grant now confers it:
+    POST /oauth2/return finalises a loan for a bearer token (ArchiveLabs/lenny#240).
   #}
   {#
     `node_host` is the node's own configured public hostname, not the word
@@ -40,7 +33,7 @@
     thing available.
   #}
   <h1 id="consent-title">Allow {{ client_name }} to connect with {{ node_host }}
-      to borrow and see your loans.</h1>
+      to borrow, return, and see your loans.</h1>
   {#
     Who you are comes before what you are granting. The patron has to be able to
     see which account this approval will attach to, and change it, at a glance:

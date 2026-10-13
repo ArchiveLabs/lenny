@@ -277,7 +277,7 @@ class TestAuthorize:
         # description did not. The ordering they used to pin still matters, so
         # assert it on the descriptions the patron actually reads.
         assert html.index("See which books you have on loan") < \
-            html.index("Borrow books on your behalf"), \
+            html.index("Borrow and return books on your behalf"), \
             "the read permission should be listed before the one that acts"
         assert "You will return to" in html
         assert '<meta charset="utf-8">' in html
@@ -661,6 +661,55 @@ class TestProtectedResources:
                             data={"edition_id": 999999999})
         assert r.status_code == 404
 
+    def _seed_item_with_loan(self, edition, email):
+        from lenny.core.models import FormatEnum, Item
+        from lenny.core.utils import hash_email
+        it = Item(openlibrary_edition=edition, encrypted=True, formats=FormatEnum.EPUB)
+        db.add(it)
+        db.commit()
+        it.borrow(hash_email(email), hashed=True)
+        return it
+
+    def test_return_finalises_a_loan_for_a_borrow_token(
+            self, app_client, client, session_cookie):
+        """The whole wire path: a token minted by the real PKCE exchange returns
+        a loan held by its own patron. Complements test_return_bearer.py, which
+        issues the token directly — two routes to the same endpoint."""
+        from lenny.core.models import Loan
+        from lenny.core.utils import hash_email
+        edition = 70000123
+        self._seed_item_with_loan(edition, PATRON_EMAIL)
+        token = self._token(app_client, client, session_cookie)
+        r = app_client.post("/v1/api/oauth2/return",
+                            headers={"Authorization": f"Bearer {token}"},
+                            data={"edition_id": edition})
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "returned"
+        db.expire_all()
+        active = db.query(Loan).filter(
+            Loan.patron_email_hash == hash_email(PATRON_EMAIL),
+            Loan.returned_at == None).all()
+        assert active == [], "the loan must be finalised"
+
+    def test_attack_return_requires_the_borrow_scope(
+            self, app_client, client, session_cookie):
+        """A token granted only loans:read must not be able to return — the scope
+        check precedes any lookup, so no item need exist."""
+        token = self._token(app_client, client, session_cookie, scope="loans:read")
+        r = app_client.post("/v1/api/oauth2/return",
+                            headers={"Authorization": f"Bearer {token}"},
+                            data={"edition_id": 70000124})
+        assert r.status_code == 403
+        assert r.json()["error"] == "insufficient_scope"
+
+    def test_return_on_a_missing_edition_is_404(self, app_client, client, session_cookie):
+        token = self._token(app_client, client, session_cookie)
+        r = app_client.post("/v1/api/oauth2/return",
+                            headers={"Authorization": f"Bearer {token}"},
+                            data={"edition_id": 999999999})
+        assert r.status_code == 404
+        assert r.json()["error"] == "not_found"
+
     def test_tokens_are_scoped_to_one_patron(self, app_client, client):
         """The endpoint takes no patron parameter, so a leaked token is worth
         one person's loans rather than everyone's. This pins that shape."""
@@ -751,11 +800,10 @@ class TestConsentIntegrity:
         # Enablement phrasing: the patron is granting something, and the
         # sentence should say what — not "the consumer wants access", which
         # casts a service as the actor and the patron as an obstacle.
-        # "return" was removed deliberately: `return_item` takes only a
-        # cookie, so a token-only consumer cannot return a book and the
-        # screen must not ask permission for it (ArchiveLabs/lenny#240).
-        assert "allow" in body and "to borrow and see your loans" in body
-        assert "borrow, return," not in body
+        # "return" is asked for again: POST /oauth2/return now lets a `borrow`
+        # token finalise a loan, so the screen names it honestly
+        # (ArchiveLabs/lenny#240, which reverses #239's temporary removal).
+        assert "allow" in body and "to borrow, return, and see your loans" in body
         assert "wants access to your library account" not in body, (
             "reverted to framing the consumer as the actor")
         assert "this library registered this application" in body

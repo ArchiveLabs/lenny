@@ -73,14 +73,14 @@ GRANT_MAX_TTL = 60 * 60 * 24 * 365     # 1 year
 # rather than silently narrowed, so a client learns immediately.
 SCOPES = {
     "loans:read": "See which books you have on loan",
-    # NOT "Borrow and return". `return_item` (lenny/routes/api.py) never calls
-    # `get_authenticated_identity` — its only credential is `session: Cookie`,
-    # where `borrow_item` passes `scope="borrow"` — so returning a book needs
-    # the patron's own login cookie and a token-only consumer cannot do it
-    # (docs/OAUTH2.md). Promising it here asked a patron to grant something the
-    # grant does not confer. Restore the word only together with a token path
-    # through return; see ArchiveLabs/lenny#240.
-    "borrow": "Borrow books on your behalf",
+    # "and return" is now accurate: POST /oauth2/return (lenny/routes/oauth2.py)
+    # finalises a loan for a `borrow`-scoped token, mirroring /oauth2/borrow. It
+    # reuses the `borrow` scope rather than minting a `return` one on purpose —
+    # every grant already issued carries `loans:read borrow`, so returning works
+    # without a re-consent. (api.py's `return_item` is the separate OPDS surface,
+    # served by its own session-cookie bearer, and is unrelated to this word.)
+    # See ArchiveLabs/lenny#240.
+    "borrow": "Borrow and return books on your behalf",
 }
 
 # OpenID Connect identity scopes. Lenny's own server is not an OIDC provider, but
