@@ -995,6 +995,9 @@ async def redeem_session(
     There is deliberately no identity parameter: `redir` and `ticket` are the
     whole input, so a caller cannot name a patron. The cookie carries the hash,
     not the address — Lenny never held the address for a grant patron.
+
+    Only a top-level navigation may establish a session, and the client that
+    minted the ticket must still be live — see the two guards below.
     """
     # Validate the return target BEFORE burning the ticket: a bad `redir` must
     # not cost the patron their one-use ticket, and it must never bounce off-site.
@@ -1004,10 +1007,36 @@ async def redeem_session(
             request, "invalid_return",
             "The return location is missing or is not a same-origin path.")
 
+    # This endpoint SETS a session cookie, so it must only act on a person
+    # deliberately following the link — not on an embedded or background
+    # cross-site request to it. `Sec-Fetch-*` are forbidden request headers a
+    # page's script cannot set or forge, so when a browser sends them we trust
+    # them and refuse anything that is not a document navigation. Absent headers
+    # — a pre-`Sec-Fetch` browser, which an attacker does not get to choose for a
+    # victim — fall through to the prior behaviour, so the guard reduces attack
+    # surface on every current browser without breaking old ones. See
+    # ArchiveLabs/lenny#254.
+    if (request.headers.get("sec-fetch-mode") or request.headers.get("sec-fetch-dest")) \
+            and not _is_top_level_navigation(request):
+        return _problem_for_patron(
+            request, "invalid_return",
+            "Open this reading link directly, not from within another page.")
+
     row, err = SessionTicket.redeem(ticket or "")
     if err:
         # One message for every failure (invalid, expired, already redeemed) so a
         # caller learns nothing about which tickets exist.
+        return _problem_for_patron(
+            request, "invalid_ticket",
+            "This reading link is no longer valid.")
+
+    # A ticket is single-use and lives ~60s, but a consumer can be disabled in
+    # that window; a disabled or deleted client's ticket must not still mint a
+    # session. `OAuthClient.get` returns None for a client that is gone or
+    # disabled. (The access token itself is never stored — by design — so
+    # token-level revocation inside the window is out of reach; the short TTL is
+    # what bounds that.)
+    if OAuthClient.get(row.client_id) is None:
         return _problem_for_patron(
             request, "invalid_ticket",
             "This reading link is no longer valid.")

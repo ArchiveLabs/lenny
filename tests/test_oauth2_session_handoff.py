@@ -88,14 +88,20 @@ def mint_ticket(email=ME, scope="borrow"):
     return r.json()["ticket"]
 
 
-def redeem(ticket, redir=READ_PATH, **extra):
+def redeem(ticket, redir=READ_PATH, headers=None, **extra):
     params = {}
     if ticket is not None:
         params["ticket"] = ticket
     if redir is not None:
         params["redir"] = redir
     params.update(extra)
-    return TestClient(app).get(SESSION, params=params, follow_redirects=False)
+    return TestClient(app).get(SESSION, params=params, headers=headers or {},
+                               follow_redirects=False)
+
+
+# Sec-Fetch header sets (forbidden headers a page cannot forge).
+NAV_HEADERS = {"sec-fetch-mode": "navigate", "sec-fetch-dest": "document"}
+SUBRESOURCE_HEADERS = {"sec-fetch-mode": "no-cors", "sec-fetch-dest": "image"}
 
 
 def set_cookie_header(resp, name="session"):
@@ -279,6 +285,53 @@ def test_redeem_accepts_a_same_origin_path():
     r = redeem(mint_ticket(ME), redir="/v1/api/items/42/read")
     assert r.status_code == 303
     assert r.headers["location"] == "/v1/api/items/42/read"
+
+
+# ── top-level-navigation gate (login-CSRF / fixation hardening) ───────────────
+
+def test_redeem_refuses_an_embedded_cross_site_request():
+    """Setting a session cookie must only happen for a person deliberately
+    following the link. A browser that sends Sec-Fetch headers marking the
+    request as an embedded/background sub-resource (an <img>, iframe, fetch) must
+    be refused — otherwise a third party could silently establish a session in
+    someone else's browser (ArchiveLabs/lenny#254)."""
+    r = redeem(mint_ticket(ME), headers=SUBRESOURCE_HEADERS)
+    assert r.status_code != 303, "an embedded cross-site request must not set a session"
+    assert set_cookie_header(r) is None
+
+
+def test_redeem_refuses_a_speculative_prefetch():
+    r = redeem(mint_ticket(ME), headers={**NAV_HEADERS, "sec-purpose": "prefetch"})
+    assert r.status_code != 303
+    assert set_cookie_header(r) is None
+
+
+def test_redeem_allows_a_top_level_navigation():
+    r = redeem(mint_ticket(ME), headers=NAV_HEADERS)
+    assert r.status_code == 303
+    assert set_cookie_header(r)
+
+
+def test_redeem_fails_open_when_sec_fetch_absent():
+    """A pre-Sec-Fetch browser (which an attacker does not get to choose for a
+    victim) still reads — the guard must not break old browsers."""
+    r = redeem(mint_ticket(ME), headers={})
+    assert r.status_code == 303
+    assert set_cookie_header(r)
+
+
+# ── client liveness at redeem ─────────────────────────────────────────────────
+
+def test_a_disabled_client_cannot_redeem_its_ticket():
+    """A ticket is single-use and ~60s, but a consumer can be disabled in that
+    window; a disabled client's ticket must not still mint a session."""
+    ticket = mint_ticket(ME)
+    row = db.query(SessionTicket).filter(SessionTicket.ticket_hash == _hash(ticket)).one()
+    OAuthClient.disable(row.client_id)
+    db.commit()
+    r = redeem(ticket)  # no Sec-Fetch headers → passes the nav gate (fail-open)
+    assert r.status_code != 303, "a disabled client's ticket must not establish a session"
+    assert set_cookie_header(r) is None
 
 
 # ── containment: a derived session cannot authorize a further grant ──────────
