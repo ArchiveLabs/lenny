@@ -275,35 +275,56 @@ class LennyAPI:
 
 
     @classmethod
-    def auth_check(cls, item, session: str=None, request: Request=None):
-        """
-        Checks if the user is allowed to access the book.
+    def auth_check(cls, item, *, email=None, email_hashed):
+        """Authorize an ALREADY-RESOLVED patron identity for `item`.
 
-        For encrypted items: verifies session, then checks for an active loan.
-        Does NOT auto-borrow — callers that want auto-borrow use the /borrow endpoint.
-        """
-        success = {"success": "authenticated"}
-        ip = request.client.host
-        redir = request.url.path
+        This does NOT authenticate. Identity resolution — a session cookie *or*
+        an OAuth2 bearer token — happens in the routes layer
+        (`get_authenticated_identity`), because recognizing a bearer token needs
+        `AccessToken`/scope machinery that `lenny.core` must not import back from
+        `lenny.routes`. The caller hands this method the resolved identity and
+        this method decides only whether that identity may read `item`.
 
+        `email_hashed` is the EXPLICIT discriminator and is **required** (no
+        default, keyword-only): True means `email` is already a
+        `patron_email_hash` (from a bearer token, or a hash-form cookie), False
+        means it is a plaintext address (from a plaintext cookie). The form is
+        never inferred from the value — a 64-char hex is not reliably
+        distinguishable from an address, and inferring is the thing that would
+        reintroduce a silent wrong-identity bug. It is threaded straight into
+        `Loan.exists(..., hashed=email_hashed)` so a hash is never re-hashed and
+        a plaintext address is never compared against stored hashes.
+
+        A missing `email_hashed` is a `TypeError` at call time rather than a
+        wrong answer at runtime: a caller who passes a hashed identity but
+        forgets the discriminator would otherwise get `Loan.exists(<hash>,
+        hashed=False)` — a hash compared against plaintext, finding nothing, and
+        telling a patron with a live loan to borrow the book, with no exception
+        and no log line. The required argument makes that omission impossible.
+
+        Returns exactly one of:
+          {"error": "unauthenticated", "required": [...], "message": ...}
+          {"error": "unauthorized", "url": <borrow url>, "message": ...}
+          {"success": "authenticated", "email": email, "email_hashed": email_hashed}
+
+        Choosing the browser-vs-OPDS-client response (a 303 into the
+        sign-in/borrow flow vs the OPDS authentication document) is the
+        decorator's job, not this method's.
+        """
         if item.is_login_required:
-            email_data = auth.verify_session_cookie(session, ip)
-            if not email_data:
+            if not email:
                 return {
                     "error": "unauthenticated",
-                    "url": f"/v1/api/authenticate?redir={redir}",
                     "required": ["email"],
-                    "message": "Not authenticated; POST to url to get a one-time-password"
+                    "message": "Not authenticated; sign in to read this book"
                 }
-            email = email_data.get("email") if isinstance(email_data, dict) else email_data
-            success['email'] = email
-            if not Loan.exists(item.id, email):
+            if not Loan.exists(item.id, email, hashed=email_hashed):
                 return {
                     "error": "unauthorized",
                     "url": f"/v1/api/items/{item.openlibrary_edition}/borrow",
                     "message": "Book must be borrowed before being read"
                 }
-        return success
+        return {"success": "authenticated", "email": email, "email_hashed": email_hashed}
     
     @classmethod
     def make_session_cookie(cls, email: str):

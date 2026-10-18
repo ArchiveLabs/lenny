@@ -201,10 +201,58 @@ def _external_auth_ready() -> bool:
 # OTP email-based rate limiting remains in auth.py via Cache.is_throttled.
 router = APIRouter()
 
-def requires_item_auth(do_function=None):
+def _auth_redirect(request: Request, result: dict) -> RedirectResponse:
+    """Send a browser into the right flow for a read-gate auth failure.
+
+    `unauthorized` (signed in, no active loan) → the borrow endpoint
+    `auth_check` already names, which borrows (the cookie is present) and then
+    lands the patron on the reader. `unauthenticated` → the sign-in flow,
+    carrying the originally requested path as the post-login target so the
+    patron returns to the reader after signing in.
+
+    The sign-in target is NOT the `/v1/api/authenticate?redir=...` URL that
+    `auth_check` historically returned — that route does not exist (it 404s),
+    and it never mattered while this decorator only ever emitted the OPDS
+    document. It is `/v1/api/oauth/authorize` (or `/oauth/external/start` when
+    external OIDC is fully configured), which is exactly what the node's own
+    OPDS authentication document advertises as `rel="authenticate"` — so a
+    browser is sent where a native OPDS client would send itself. Mirrors
+    `borrow_item`'s browser handling; `_safe_opds_redirect` permits the relative
+    `/v1/api/...` post-login target.
     """
-    Decorator checks item existence and gets email of
-    authenticated patron and passes them to the wrapped function
+    if result.get("error") == "unauthorized":
+        return RedirectResponse(url=result["url"], status_code=303)
+    target = request.url.path
+    if _external_auth_ready():
+        return RedirectResponse(
+            url=f"/v1/api/oauth/external/start?opds_redirect_uri={quote(target, safe='')}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=f"/v1/api/oauth/authorize?redirect_uri={quote(target, safe='')}",
+        status_code=303,
+    )
+
+
+def requires_item_auth(scope: str = "loans:read"):
+    """Gate the item-reading routes on an authenticated, borrowing patron.
+
+    Resolves the caller's identity from EITHER a session cookie or an OAuth2
+    bearer token (`get_authenticated_identity`), confirms an active loan
+    (`auth_check`), and passes the resolved `email`/`email_hashed` to the wrapped
+    route. Before this, the four routes behind the decorator took a session
+    cookie only — a token-bearing caller looked anonymous — while their siblings
+    (`/opds/{id}`, `/borrow`, `/profile`, `/shelf`) already accepted both.
+
+    `scope` is the token scope the route requires: `loans:read` to read,
+    `borrow` to return (returning reuses the borrow scope — see
+    `oauth2.SCOPES`). Pass the narrowest scope a route needs.
+
+    On failure it answers in the caller's own language: a browser (`_wants_html`)
+    is sent (303) into the sign-in flow — or, when already signed in without a
+    loan, into the borrow flow — landing back on the originally requested path;
+    a native OPDS client still receives the OPDS authentication document
+    byte-for-byte unchanged.
     """
     def decorator(func):
         @wraps(func)
@@ -219,19 +267,27 @@ def requires_item_auth(do_function=None):
             if format not in ("epub", ".epub"):
                 return JSONResponse(status_code=400, content={"detail": "Unsupported format"})
             if item := Item.exists(book_id):
-                result = LennyAPI.auth_check(item, session=session, request=request)
-                email = result.get('email', '')
+                # Identity resolution (cookie OR bearer token) lives here in the
+                # routes layer; auth_check only authorizes the resolved identity.
+                email, email_hashed = get_authenticated_identity(request, session, scope=scope)
+                result = LennyAPI.auth_check(item, email=email, email_hashed=email_hashed)
                 if 'error' in result:
+                    if _wants_html(request):
+                        return _auth_redirect(request, result)
                     return JSONResponse(
-                        status_code=401, 
+                        status_code=401,
                         content=auth_document(),
                         media_type="application/opds-authentication+json"
                     )
- 
+
+                # return_item needs to know the identity is a hash so it does not
+                # re-hash it in unborrow(); readers ignore it. Passed out-of-band
+                # on request.state to avoid exposing it as a bindable query param.
+                request.state.email_hashed = result["email_hashed"]
                 return await func(
                     request=request, book_id=book_id, format=format, session=session,
-                    email=email, item=item, *args, **kwargs
-                )            
+                    email=result.get("email") or "", item=item, *args, **kwargs
+                )
             return JSONResponse(status_code=404, content={"detail": "Item not found"})
         return wrapper
     return decorator
@@ -522,18 +578,25 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
     return request.app.templates.TemplateResponse("otp_issue.html", context)
 
 @router.api_route('/items/{book_id}/return', methods=['GET', 'POST'], status_code=status.HTTP_200_OK)
-@requires_item_auth()
+@requires_item_auth(scope="borrow")
 async def return_item(request: Request, book_id: int, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str='', beta: bool = False, auth_mode: Optional[str] = None):
     """
     Return a borrowed book.
-    
+
     After successful return, returns OPDS publication with borrow link
     (book is now available to borrow again).
+
+    Returning is an action, so the decorator requires the `borrow` scope (a
+    `loans:read` token may look but not return). `email` may be a plaintext
+    address (cookie) or a `patron_email_hash` (bearer token); the decorator
+    records which on `request.state.email_hashed`, and it is forwarded to
+    `unborrow(hashed=)` so a token's hash is not hashed a second time and misses
+    the loan.
     """
     is_direct_mode = is_direct_auth_mode(auth_mode, beta)
 
     try:
-        loan = item.unborrow(email)
+        loan = item.unborrow(email, hashed=getattr(request.state, "email_hashed", False))
         
         if is_direct_mode:
              redirect_url = f"/v1/api/opds/{book_id}"
