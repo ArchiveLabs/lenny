@@ -458,6 +458,20 @@ means a defence was removed, not that a refactor went wrong.
   refresh tokens. A database dump yields nothing replayable.
 - **The implicit grant is absent by design.** OAuth 2.1 removes it; the
   token-in-URL exposure is what this replaces.
+- **Session tickets are single-use**, ~60 seconds, claimed atomically (the same
+  `UPDATE ... WHERE redeemed_at IS NULL` as codes, proven under a concurrent
+  double-submit on Postgres), and bound to the token's `patron_email_hash` —
+  never an address, never a caller-supplied value. Redeeming one can only ever
+  establish a session for that one patron.
+- **Redeeming a ticket requires a top-level navigation.** `Sec-Fetch-*` are
+  forbidden headers a page cannot forge, so an embedded or background cross-site
+  request to the redeem URL is refused; a browser too old to send them falls
+  through, so the guard costs old browsers nothing and an attacker cannot choose
+  a victim's browser.
+- **A disabled client's ticket will not redeem.** Redeem re-checks the client is
+  live, so disabling a consumer takes effect inside the ticket's window too.
+- **`redir` is a same-origin path**, validated before the ticket is burned: no
+  absolute URL, no `//host`, no backslash, no scheme, no host.
 - **The consent screen states only what a patron can actually do.** There is no
   patron-facing disconnect yet: `/oauth2/revoke` needs the *client's* own
   credentials, and `oauth2-disable` cuts every patron off at once. So the
@@ -470,6 +484,38 @@ means a defence was removed, not that a refactor went wrong.
 Access tokens are deliberately **not IP-bound**, unlike session cookies
 (`core/auth.py`): a consumer calls from its own servers, so the address
 presenting the token is never the patron's.
+
+### What the session handoff does not fully close
+
+**Login-CSRF / session fixation.** Any handoff that sets a session from a link
+carries this surface: a party who holds their own grant could, within a ticket's
+~60-second life, cause another person's browser to follow a redeem link and be
+signed into the *first* party's account. The top-level-navigation guard blocks
+the embedded and background ways of delivering that, leaving a full-page redirect
+the person would visibly land on. The concrete harm if it happened is that the
+second person would be reading **as the first person's account** — their reading
+would accrue to, and be visible on, that account. That cuts directly against the
+reading-privacy property this whole design exists to protect (a node never maps a
+reading history to an address, which is why tokens carry only a hash). It is not
+negligible; it is bounded by three things — the ticket is single-use, it lives
+about a minute, and minting one requires a bearer token with the `borrow` scope —
+and it is accepted as the cost of offering token-to-session reading at all, the
+alternative being not to offer it. Decided for ArchiveLabs/lenny#254 by the Lenny
+division.
+
+**A redeemed session is a full browser session, not a scoped one.** A token
+whose client holds only `borrow` (not `loans:read`) can, after redeeming, reach
+loan-listing surfaces such as `/shelf`. This is a deliberate consequence of
+requiring `borrow` to mint — a session confers full browser authority and
+`borrow` is the higher scope — not an oversight. The default clients carry both
+scopes; a `borrow`-only registration is non-standard.
+
+**The ticket travels in the redeem URL.** Like an authorization code, it can land
+in access logs, browser history, and a same-origin `Referer` to the reader.
+Single-use + ~60s + the `strict-origin-when-cross-origin` referrer policy (which
+strips the query cross-origin) bound it. Dropping the query from the node's own
+access log is not done here: the `log_format` lives in the image's baked
+`nginx.conf` (http context), not the bind-mounted `conf.d`.
 
 ### Lifetimes
 
