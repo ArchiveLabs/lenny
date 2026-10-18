@@ -178,14 +178,40 @@ def is_direct_auth_mode(auth_mode: Optional[str] = None, beta: bool = False) -> 
 
 
 def _wants_html(request: Request) -> bool:
-    """True when the caller is a browser (not a native OPDS client).
+    """True when the caller PREFERS an HTML page over the OPDS document.
 
     Used to decide between OPDS JSON responses (auth doc, publication) and
-    user-friendly redirects (auth flow, reader). OPDS clients send specific
-    ``application/opds*`` Accept values; browsers send ``text/html``.
+    user-friendly redirects (auth flow, reader). A plain ``"text/html" in
+    accept`` substring test is wrong: a native OPDS client that merely tolerates
+    html — e.g. ``application/opds+json, text/html;q=0`` — would be routed to the
+    browser redirect and denied the authentication document it asked for,
+    breaking the "OPDS clients get the document unchanged" contract. So parse
+    q-values and take the browser branch only when html is strictly preferred
+    over any ``application/opds*`` type the caller listed.
+
+    ``*/*`` and a missing Accept are deliberately NOT html: a browser ``fetch()``
+    sends ``*/*`` and should receive JSON, not a redirect.
     """
     accept = (request.headers.get("accept") or "").lower()
-    return "text/html" in accept
+    html_q = opds_q = 0.0
+    for part in accept.split(","):
+        media, _, params = part.strip().partition(";")
+        media = media.strip()
+        if not media:
+            continue
+        q = 1.0
+        for param in params.split(";"):
+            param = param.strip()
+            if param.startswith("q="):
+                try:
+                    q = float(param[2:])
+                except ValueError:
+                    q = 0.0
+        if media in ("text/html", "application/xhtml+xml"):
+            html_q = max(html_q, q)
+        elif media.startswith("application/opds"):
+            opds_q = max(opds_q, q)
+    return html_q > 0 and html_q > opds_q
 
 
 def _external_auth_ready() -> bool:

@@ -127,6 +127,25 @@ def test_native_opds_client_gets_the_auth_document_unchanged(item):
     assert r.json() == auth_document(), "auth document body changed"
 
 
+def test_opds_client_that_explicitly_refuses_html_still_gets_the_document(item):
+    """An OPDS client that lists `text/html;q=0` (prefers OPDS, explicitly does
+    not want html) must receive the authentication document, not a browser
+    redirect. A substring `"text/html" in accept` check gets this wrong; content
+    negotiation has to honour q-values."""
+    r = client().get(READ, headers={"Accept": "application/opds+json, text/html;q=0"})
+    assert r.status_code == 401, r.text
+    assert r.headers["content-type"].startswith("application/opds-authentication+json")
+    assert r.json() == auth_document()
+
+
+def test_wildcard_accept_gets_opds_not_a_browser_redirect(item):
+    """A programmatic `fetch()` sends `*/*`; it must get the OPDS 401, never an
+    HTML redirect — `*/*` is not a preference for html."""
+    r = client().get(READ, headers={"Accept": "*/*"})
+    assert r.status_code == 401, r.text
+    assert r.headers["content-type"].startswith("application/opds-authentication+json")
+
+
 def test_opds_body_is_byte_identical_to_a_direct_auth_document_render(item):
     """Belt-and-braces on 'unchanged': the decorator's 401 body is byte-for-byte
     what a plain `JSONResponse(auth_document())` renders (same serializer the
