@@ -161,11 +161,26 @@ def get_authenticated_identity(
 
     `scope` is what the token must have been granted: `loans:read` to look,
     `borrow` to act. A cookie login is not scoped.
+
+    A third identity source is a session cookie minted by the OAuth2 session
+    handoff (`/oauth2/session`, ArchiveLabs/lenny#254): it carries the patron's
+    HASH under its own key rather than a plaintext address, because the grant it
+    came from never exposed one. It is resolved here — not in
+    `get_authenticated_email`, which must keep returning plaintext-or-None so the
+    catalog's personalisation never receives a hash — and flagged hashed so the
+    loan lookup is never asked to re-hash a hash. Like any cookie login it is not
+    scoped; the `borrow` scope was already required at mint time.
     """
     email = get_authenticated_email(request, session)
     if email:
         return email, False
+    if request is not None and not session:
+        session = extract_session(request, session)
     if session:
+        client_ip = request.client.host if (request is not None and request.client) else None
+        data = auth.verify_session_cookie(session, client_ip=client_ip)
+        if isinstance(data, dict) and data.get("patron_email_hash"):
+            return data["patron_email_hash"], True
         tok = AccessToken.authenticate(session)
         if tok and tok.has_scope(scope):
             return tok.patron_email_hash, True

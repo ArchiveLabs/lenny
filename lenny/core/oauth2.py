@@ -68,6 +68,11 @@ REFRESH_TOKEN_TTL = 60 * 60 * 24 * 90  # 90 days
 # keeps refreshing — indefinitely. The consent screen tells the patron their
 # access expires; this is what makes that true.
 GRANT_MAX_TTL = 60 * 60 * 24 * 365     # 1 year
+# A session ticket is a browser handoff, not a credential: it exists only long
+# enough for Open Library to redirect the patron here and for Lenny to exchange
+# it for a session cookie. It is single-use and burned on first redemption, so
+# the window only has to cover one redirect. See ArchiveLabs/lenny#254.
+SESSION_TICKET_TTL = 60                 # seconds
 
 # Scopes this server understands. Anything else is rejected at /authorize
 # rather than silently narrowed, so a client learns immediately.
@@ -894,6 +899,97 @@ class AccessToken(Base):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Session tickets (browser session handoff)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SessionTicket(Base):
+    """A single-use, ~60s handoff that a consumer exchanges for a browser session.
+
+    Reading is a browser activity: `/items/{id}/read` and the manifest and
+    resource fetches that follow it all authenticate on Lenny's `session` cookie,
+    never an `Authorization` header. A consumer holding an access token therefore
+    cannot deliver reading over the token alone (see ArchiveLabs/lenny#254). The
+    ticket closes that gap without ever putting the token in the browser:
+
+      1. Mint (back channel): the consumer POSTs its bearer token to
+         `/oauth2/session`; Lenny verifies it and returns one ticket.
+      2. Redeem (browser): the patron is redirected to GET `/oauth2/session`
+         with the ticket, which Lenny burns and exchanges for a `session` cookie.
+
+    The ticket carries NO token and NO address — only the patron hash the token
+    already proved. The plaintext ticket is returned once; only its SHA-256 is
+    stored, so a dump of this table yields nothing replayable, exactly like the
+    authorization codes and tokens above.
+    """
+
+    __tablename__ = "oauth_session_tickets"
+    __table_args__ = (Index("idx_oauth_session_tickets_expires", "expires_at"),)
+
+    id = Column(_PK, primary_key=True)
+    ticket_hash = Column(String(64), nullable=False, unique=True, index=True)
+    client_id = Column(String(64), ForeignKey("oauth_clients.client_id"), nullable=False)
+    # The patron the token proved. This is the ONLY authoritative identity: it is
+    # copied from the authenticated access token and never recomputed from an
+    # address nor accepted from the caller. Open Library's `login_hint` makes
+    # sha256(address) usually equal to this, but not reliably (the hint is
+    # optional, dropped on forced re-auth, and may differ under external OIDC),
+    # so deriving it from an address would silently establish a session for the
+    # wrong patron. See ArchiveLabs/lenny#254 and #239.
+    patron_email_hash = Column(String, nullable=False)
+    # The scope the mint required, kept for audit. Minting needs `borrow`
+    # because the session cookie confers full browser authority (borrow/return,
+    # not just read); gating on a weaker scope would let a read-only token
+    # escalate. See #254.
+    scope = Column(Text, nullable=False, default="")
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    redeemed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=func.now())
+
+    @classmethod
+    def issue(cls, *, client_id: str, patron_email_hash: str, scope: str = "") -> str:
+        """Mint a ticket. Only its hash is stored; the caller gets the one copy."""
+        ticket = _mint(32)
+        db.add(cls(
+            ticket_hash=_hash(ticket),
+            client_id=client_id,
+            patron_email_hash=patron_email_hash,
+            scope=scope,
+            expires_at=_now() + datetime.timedelta(seconds=SESSION_TICKET_TTL),
+        ))
+        db.commit()
+        return ticket
+
+    @classmethod
+    def redeem(cls, ticket: str) -> tuple[Optional["SessionTicket"], Optional[str]]:
+        """Consume a ticket. Returns `(row, error)`.
+
+        Burns the ticket atomically before returning it, so a concurrent second
+        redemption — the double-submit a browser prefetch or a double-click
+        produces — finds it already spent and exactly one caller establishes a
+        session. Check-then-write would let two redemptions both pass the expiry
+        check and both set a cookie; the `UPDATE ... WHERE redeemed_at IS NULL`
+        lets the database pick the single winner (rowcount == 1), the same
+        mechanism `AuthorizationCode.redeem` uses. An in-memory claim would not
+        survive multiple uvicorn workers, which is the case that matters here.
+        """
+        if not ticket:
+            return None, "invalid ticket"
+        row = db.query(cls).filter(cls.ticket_hash == _hash(ticket)).first()
+        if row is None:
+            return None, "invalid ticket"
+        if _as_utc(row.expires_at) <= _now():
+            return None, "ticket expired"
+
+        claimed = db.query(cls).filter(
+            cls.id == row.id, cls.redeemed_at.is_(None),
+        ).update({"redeemed_at": _now()}, synchronize_session=False)
+        db.commit()
+        if not claimed:
+            return None, "ticket already redeemed"
+        return row, None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Maintenance
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -935,6 +1031,12 @@ def sweep_expired(older_than_days: int = 1) -> int:
     deleted += db.query(AuthorizationCode).filter(
         AuthorizationCode.expires_at < cutoff,
         AuthorizationCode.id.notin_(still_referenced),
+    ).delete(synchronize_session=False)
+    # Session tickets live 60 seconds and are burned on use, but an unredeemed
+    # one leaves a row; drop anything long past the cutoff. Nothing references a
+    # ticket, so there is no ordering constraint as there is for codes.
+    deleted += db.query(SessionTicket).filter(
+        SessionTicket.expires_at < cutoff,
     ).delete(synchronize_session=False)
     db.commit()
     return deleted

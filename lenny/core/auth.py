@@ -179,6 +179,27 @@ def create_session_cookie(email: str, ip: str = None) -> str:
         data["ip"] = ip
     return serializer.dumps(data)
 
+def create_hashed_session_cookie(patron_email_hash: str, ip: str = None) -> str:
+    """Returns a signed session cookie that carries a patron HASH, not an address.
+
+    Used only by the OAuth2 session handoff (`/oauth2/session`, ArchiveLabs/lenny#254):
+    a grant proves a patron but never exposes their address, so the session it
+    establishes cannot carry one. The hash lives under its own `patron_email_hash`
+    key — an EXPLICIT discriminator, never a hash smuggled into `email` — so a
+    consumer that only understands the plaintext form reads no `email` and fails
+    closed rather than treating the hash as an address. `get_authenticated_identity`
+    is the one reader that understands this form and flags the identity hashed, so
+    the loan lookup is never asked to re-hash a hash.
+
+    Same serializer and salt as `create_session_cookie`, so `verify_session_cookie`
+    authenticates and IP-binds it identically.
+    """
+    serializer = _get_serializer()
+    data = {"patron_email_hash": patron_email_hash}
+    if ip:
+        data["ip"] = ip
+    return serializer.dumps(data)
+
 def get_authenticated_email(session) -> Optional[str]:
     """Retrieves and verifies email from signed cookie. Rejects old-format (non-dict) cookies."""
     try:

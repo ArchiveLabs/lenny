@@ -57,10 +57,12 @@ from lenny.core.exceptions import (
 from lenny.core.models import Item, Loan
 from lenny.core.oauth2 import (
     SCOPES,
+    SESSION_TICKET_TTL,
     AccessToken,
     AuthorizationCode,
     GrantRevoked,
     OAuthClient,
+    SessionTicket,
 )
 from lenny.core.utils import hash_email
 
@@ -211,6 +213,16 @@ _PROBLEMS = {
         "This app can't sign you in yet",
         "The app's return address isn't one this library has on file for it.",
     ),
+    "invalid_ticket": (
+        "This reading link has expired",
+        "Reading links are good for only a minute and only once. Return to Open "
+        "Library and open the book again to get a fresh one.",
+    ),
+    "invalid_return": (
+        "This reading link looks wrong",
+        "The place it wanted to send you isn't a page on this library, so we "
+        "didn't follow it. Return to Open Library and open the book again.",
+    ),
 }
 
 
@@ -252,6 +264,43 @@ def _redirect_error(redirect_uri: str, code: str, description: str,
     if state:
         params["state"] = state
     return _redirect_to(redirect_uri, **params)
+
+
+def _safe_redir_path(redir: Optional[str]) -> Optional[str]:
+    """Validate the browser redirect target of `/oauth2/session` as a same-origin
+    path. Returns the path if safe, else None — the caller then refuses rather
+    than redirecting, so a bad value can never bounce the patron off-site.
+
+    Same-origin here means PATH-ONLY: it must begin with a single '/' and name
+    no scheme and no host. The rejections mirror `acceptable_redirect`'s
+    hardening against strings that read as one origin to a browser and another to
+    `urlparse`:
+
+    - `//host` and `/\\host` are protocol-relative — a browser reads them as
+      absolute, off-site URLs — so a leading '/' must be followed by neither a
+      slash nor a backslash.
+    - any scheme or netloc (`https://evil`, `javascript:`, `/@host`) is refused.
+    - control characters, whitespace and backslashes are not path syntax and the
+      two ends of the flow disagree on how to parse them.
+
+    Unlike a client's registered `redirect_uri` (which is an absolute URL by
+    design, validated by `acceptable_redirect`), this is a destination WITHIN
+    this node, so the rule is stricter: a path, nothing more.
+    """
+    if not redir or not isinstance(redir, str):
+        return None
+    if not redir.startswith("/"):
+        return None
+    if redir.startswith("//") or redir.startswith("/\\"):
+        return None
+    if ("\\" in redir
+            or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in redir)
+            or any(ch.isspace() for ch in redir)):
+        return None
+    parsed = urlparse(redir)
+    if parsed.scheme or parsed.netloc:
+        return None
+    return redir
 
 
 def _authenticated_patron(request: Request) -> Optional[str]:
@@ -883,3 +932,90 @@ async def return_(request: Request, edition_id: int = Form(...)) -> Response:
         "status": "returned",
         "edition_id": edition_id,
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Session handoff — turn a grant into a browser session so the patron can read
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/oauth2/session")
+async def mint_session(request: Request) -> Response:
+    """Mint a single-use session ticket for the token's patron. Requires `borrow`.
+
+    The back-channel half of the handoff (ArchiveLabs/lenny#254). A consumer that
+    holds a grant cannot deliver reading over the token, because every read
+    resource authenticates on Lenny's `session` cookie, which only a browser can
+    hold. So the consumer calls this with its bearer token and gets a short-lived
+    ticket it can safely put in a browser redirect; the token itself never leaves
+    this back channel.
+
+    The scope is `borrow`, not `loans:read`, on purpose: the session this ticket
+    ultimately establishes confers full browser authority — the cookie-gated
+    browser routes include borrow and return, not just read — so gating the mint
+    on a weaker scope would let a read-only token escalate to borrowing. Every
+    grant already carries `loans:read borrow`, so requiring `borrow` grants the
+    consumer nothing it could not already do via `/oauth2/borrow`.
+
+    The ticket is bound to `tok.patron_email_hash` — the identity the token
+    proved. That hash is never recomputed from an address nor accepted from the
+    caller (see the SessionTicket docstring and #254): it is read only off the
+    authenticated token.
+    """
+    tok, err = _bearer(request, "borrow")
+    if err:
+        return err
+
+    ticket = SessionTicket.issue(
+        client_id=tok.client_id,
+        patron_email_hash=tok.patron_email_hash,
+        scope="borrow",
+    )
+    # A ticket is a 60-second credential; keep it out of shared caches and proxy
+    # logs, exactly as the token and loans endpoints do.
+    return JSONResponse(
+        {"ticket": ticket, "expires_in": SESSION_TICKET_TTL},
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+
+
+@router.get("/oauth2/session")
+async def redeem_session(
+    request: Request,
+    ticket: Optional[str] = None,
+    redir: Optional[str] = None,
+) -> Response:
+    """Redeem a ticket in the browser: burn it, set the `session` cookie, redirect.
+
+    The browser half of the handoff (ArchiveLabs/lenny#254). The patron arrives
+    here by a top-level navigation Open Library sent them on; this burns the
+    single-use ticket and sets the same `session` cookie `authorize_decision`
+    sets (httponly, secure, SameSite=Lax, path=/, 7-day COOKIE_TTL), then 303s to
+    `redir` so the next hop — the reader — carries the cookie.
+
+    Identity comes only from the burned ticket's stored `patron_email_hash`.
+    There is deliberately no identity parameter: `redir` and `ticket` are the
+    whole input, so a caller cannot name a patron. The cookie carries the hash,
+    not the address — Lenny never held the address for a grant patron.
+    """
+    # Validate the return target BEFORE burning the ticket: a bad `redir` must
+    # not cost the patron their one-use ticket, and it must never bounce off-site.
+    safe_redir = _safe_redir_path(redir)
+    if safe_redir is None:
+        return _problem_for_patron(
+            request, "invalid_return",
+            "The return location is missing or is not a same-origin path.")
+
+    row, err = SessionTicket.redeem(ticket or "")
+    if err:
+        # One message for every failure (invalid, expired, already redeemed) so a
+        # caller learns nothing about which tickets exist.
+        return _problem_for_patron(
+            request, "invalid_ticket",
+            "This reading link is no longer valid.")
+
+    client_ip = request.client.host if request.client else None
+    session_cookie = auth.create_hashed_session_cookie(row.patron_email_hash, client_ip)
+    done = RedirectResponse(url=safe_redir, status_code=303)
+    done.set_cookie(key="session", value=session_cookie,
+                    max_age=auth.COOKIE_TTL, httponly=True, secure=True,
+                    samesite="Lax", path="/")
+    return done
