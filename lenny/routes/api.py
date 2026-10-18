@@ -162,14 +162,21 @@ def get_authenticated_identity(
     `scope` is what the token must have been granted: `loans:read` to look,
     `borrow` to act. A cookie login is not scoped.
 
-    A third identity source is a session cookie minted by the OAuth2 session
-    handoff (`/oauth2/session`, ArchiveLabs/lenny#254): it carries the patron's
-    HASH under its own key rather than a plaintext address, because the grant it
-    came from never exposed one. It is resolved here — not in
-    `get_authenticated_email`, which must keep returning plaintext-or-None so the
-    catalog's personalisation never receives a hash — and flagged hashed so the
-    loan lookup is never asked to re-hash a hash. Like any cookie login it is not
-    scoped; the `borrow` scope was already required at mint time.
+    Precedence is deliberate and pinned by tests: a plaintext cookie login wins,
+    and the bearer lookup is skipped when one is present. So the plaintext case
+    goes through `get_authenticated_email` first — it is the shared resolver the
+    catalog's personalisation also uses, and the seam those precedence tests
+    patch; resolving plaintext anywhere else would silently repeal that contract.
+
+    Only when there is no plaintext email do we look further: a cookie minted by
+    the OAuth2 session handoff (`/oauth2/session`, ArchiveLabs/lenny#254) carries
+    the patron's `patron_email_hash` instead of an address (the grant never
+    exposed one), and a bearer token carries it too. Both are flagged hashed so
+    the loan lookup is never asked to re-hash a hash. This re-verifies the cookie
+    once on the hash path — accepted: it is a new, infrequent path, the common
+    plaintext path still verifies exactly once, and the only alternative
+    (resolving plaintext here instead of in `get_authenticated_email`) breaks the
+    precedence contract above.
     """
     email = get_authenticated_email(request, session)
     if email:
