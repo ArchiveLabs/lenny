@@ -35,11 +35,21 @@ App Access whichever sign-in method the node uses.
 
 ## Why it exists
 
-Lenny stores "logged in" as a cookie on its own domain. A consumer cannot POST
-to Lenny and receive a usable session — `Set-Cookie` lands on the consumer's
-HTTP client, not the patron's browser, and the cookie is `Domain`-scoped,
-`HttpOnly`, `SameSite=Lax`. So a consumer has no way to answer *"what does this
-patron have on loan?"*
+Lenny stores "logged in" as a cookie on its own domain. A `Set-Cookie` in a
+response to the consumer's HTTP client never reaches the patron's browser, and
+the cookie is `Domain`-scoped, `HttpOnly`, `SameSite=Lax`. So the consumer's own
+calls — *"what does this patron have on loan?"*, borrow, return — cannot lean on
+a session; they are answered with a per-patron bearer token instead.
+
+Reading is the exception, because it is a browser activity: `/items/{id}/read`
+and the readium manifest and resources it then fetches all authenticate on the
+session cookie, and a bearer token cannot stand in for one (a browser navigation
+and its fetches carry cookies, never an `Authorization` header). The **session
+handoff** (`GET,POST /v1/api/oauth2/session`, below) bridges exactly that gap: it
+lets a consumer turn its grant into a browser session for the patron **without
+the access token ever travelling through the browser**. The token is exchanged on
+the back channel for a short-lived, single-use ticket, and only the ticket rides
+the redirect; redeeming it sets the session cookie. See ArchiveLabs/lenny#254.
 
 Every shortcut is worse than the standard:
 
@@ -66,6 +76,8 @@ granted by that patron, and never travels through the browser.**
 | `GET /v1/api/oauth2/loans` | scope `loans:read` |
 | `POST /v1/api/oauth2/borrow` | scope `borrow` |
 | `POST /v1/api/oauth2/return` | scope `borrow` |
+| `POST /v1/api/oauth2/session` | scope `borrow`; back channel, mints a single-use ticket |
+| `GET /v1/api/oauth2/session?ticket=…&redir=…` | browser; burns the ticket, sets the session cookie, 303s to `redir` |
 
 ### Scopes
 
@@ -73,6 +85,23 @@ granted by that patron, and never travels through the browser.**
 |---|---|
 | `loans:read` | See which books you have on loan |
 | `borrow` | Borrow and return books on your behalf |
+
+Minting a session ticket requires **`borrow`**, not `loans:read`. The cookie it
+establishes is an ordinary patron browser session, which confers everything a
+logged-in patron can do in the browser — borrow and return, not only read — so
+gating the mint on the weaker scope would let a read-only token escalate.
+Reading needs an active loan regardless, and every grant already carries
+`loans:read borrow`, so nothing re-consents.
+
+**The patron's identity is the hash carried inside the access token, and only
+that.** It is never recomputed from an email address and never accepted from the
+caller: the mint reads `patron_email_hash` off the authenticated token, the
+ticket stores only that hash, and redeem takes no identity parameter. Open
+Library sends the address as a binding `login_hint`, so `sha256(address)` is
+*usually* equal to the token's hash — but not reliably (the hint is optional, is
+dropped on a forced re-authentication, and may differ under external OIDC, and
+grants predating the hint carry whatever was proved then), so deriving identity
+from an address would silently establish a session for the wrong patron.
 
 An unknown or unregistered scope is an **error**, not a silent narrowing — a
 client learns immediately rather than discovering a missing permission at call
@@ -244,6 +273,7 @@ the type decides whether a secret exists.
 | `GET /v1/api/items/{id}/borrow` | `borrow` | borrows the item; same limits as any borrow |
 | `POST /v1/api/oauth2/borrow` | `borrow` | borrows the item, JSON |
 | `POST /v1/api/oauth2/return` | `borrow` | returns the item, JSON |
+| `POST /v1/api/oauth2/session` | `borrow` | a single-use ticket to hand the patron a reading session (redeem in the browser at `GET /v1/api/oauth2/session?ticket=…&redir=…`) |
 
 Send it as `Authorization: Bearer <access token>`. A token with only
 `loans:read` cannot borrow or return. A token only ever sees its own patron's
