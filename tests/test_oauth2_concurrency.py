@@ -40,7 +40,12 @@ from sqlalchemy import text  # noqa: E402
 from lenny.core import oauth2  # noqa: E402
 from lenny.core.db import Base, engine  # noqa: E402
 from lenny.core.db import session as db  # noqa: E402
-from lenny.core.oauth2 import AccessToken, AuthorizationCode, OAuthClient  # noqa: E402
+from lenny.core.oauth2 import (  # noqa: E402
+    AccessToken,
+    AuthorizationCode,
+    OAuthClient,
+    SessionTicket,
+)
 
 REDIRECT = "https://consumer.example.org/callback"
 PATRON = "concurrency-patron-hash"
@@ -51,7 +56,8 @@ def clean_tables():
     Base.metadata.create_all(engine)
     yield
     db.remove()
-    for table in ("oauth_access_tokens", "oauth_authorization_codes", "oauth_clients",
+    for table in ("oauth_session_tickets",
+                  "oauth_access_tokens", "oauth_authorization_codes", "oauth_clients",
                   "loans", "items"):
         db.execute(text(f"DELETE FROM {table}"))
     db.commit()
@@ -224,6 +230,46 @@ class TestAuthorizationCodeIsSingleUse:
                 client_id=client.client_id,
                 patron_email_hash=row.patron_email_hash,
                 scope=row.scope, authorization_code_id=row.id)
+
+
+class TestSessionTicketIsSingleUse:
+    """The session handoff's ticket must be redeemable exactly once, including
+    under a concurrent double-submit (ArchiveLabs/lenny#254).
+
+    This is where the burn is actually tested. On SQLite the whole suite shares
+    one connection, so `.update(... WHERE redeemed_at IS NULL)` returns 0 on a
+    second redemption whether or not the guard is present — the sequential
+    single-use test in tests/test_oauth2_session_handoff.py therefore CANNOT
+    distinguish a guarded redeem from an unguarded one, and passes either way.
+    Only here, against real Postgres, does removing the guard let a second
+    redemption succeed. Same reason the code/refresh races above live here.
+    """
+
+    def test_a_ticket_cannot_be_redeemed_twice_concurrently(self, client):
+        """Two simultaneous redemptions of one ticket must yield exactly one
+        success — the browser double-submit (prefetch, double-click, retry) a
+        production node with several uvicorn workers will see."""
+        ticket = SessionTicket.issue(
+            client_id=client.client_id, patron_email_hash=PATRON, scope="borrow")
+
+        def redeem():
+            row, err = SessionTicket.redeem(ticket)
+            return err is None
+
+        outcomes = run_concurrently(redeem)
+        assert sum(outcomes) == 1, (
+            f"a single-use ticket was redeemed {sum(outcomes)} times")
+
+    def test_a_ticket_is_burned_on_first_redemption(self, client):
+        """Sequential single-use. On Postgres the second redemption's atomic
+        claim sees the row already spent and returns an error — this is the test
+        that goes red if the `WHERE redeemed_at IS NULL` guard is removed."""
+        ticket = SessionTicket.issue(
+            client_id=client.client_id, patron_email_hash=PATRON, scope="borrow")
+        row, err = SessionTicket.redeem(ticket)
+        assert err is None and row is not None
+        again, err2 = SessionTicket.redeem(ticket)
+        assert again is None and err2 == "ticket already redeemed"
 
 
 class TestRefreshTokenRotation:

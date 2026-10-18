@@ -186,6 +186,14 @@ def test_redeem_sets_the_session_cookie_with_authorize_decision_flags():
 
 
 def test_a_ticket_is_single_use():
+    """Smoke test only. On SQLite (one shared connection) the second redemption's
+    atomic claim returns rowcount 0 whether or not the `WHERE redeemed_at IS NULL`
+    guard is present, so this cannot distinguish a guarded redeem from an
+    unguarded one — it passes either way. The authoritative single-use proof,
+    including the concurrent double-submit, is in tests/test_oauth2_concurrency.py
+    against real Postgres, where forcing the claim to succeed turns both the
+    sequential and concurrent tests red. Kept here as a fast end-to-end that the
+    burned-ticket path refuses and sets no cookie."""
     ticket = mint_ticket(ME)
     first = redeem(ticket)
     assert first.status_code == 303 and set_cookie_header(first)
