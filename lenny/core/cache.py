@@ -105,7 +105,7 @@ class Cache:
             return 0
 
     @classmethod
-    def is_throttled(cls, scope, key, limit, ttl):
+    def is_throttled(cls, scope, key, limit, ttl, fail_closed=False):
         """Check if a key has exceeded its rate limit.
 
         Counts existing unexpired entries, then records the current
@@ -117,6 +117,11 @@ class Cache:
         record must not be split across separate commits/rollbacks here,
         since a Postgres advisory lock releases at transaction end, and an
         early release is the same race this exists to close.
+
+        If the cache itself fails (count or record), `fail_closed=True` reports
+        the key as throttled instead of letting the attempt through. Use it
+        where the limit is a security control (OTP guesses and sends): a
+        database fault must not become unlimited guesses.
         """
         _lock_throttle_key(scope, key)
 
@@ -130,6 +135,8 @@ class Cache:
         except Exception as e:
             db.rollback()
             logger.warning(f"Cache count failed: {str(e)}")
+            if fail_closed:
+                return True
             current_count = 0
 
         if current_count < limit:
@@ -142,6 +149,8 @@ class Cache:
             except Exception as e:
                 db.rollback()
                 logger.warning(f"Cache record failed: {str(e)}")
+                if fail_closed:
+                    return True
         else:
             db.commit()  # nothing written — releases the lock
 

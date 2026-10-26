@@ -1,4 +1,4 @@
-"""Share links for the library: the OPDS feed, a per-book OPDS address and the Internet Archive reader link.
+"""Share links for the library: the OPDS feed, a per-book OPDS address and the built-in reader link.
 They come from the configured public address (LENNY_PROXY, else host and port), never from the request."""
 
 import os
@@ -44,7 +44,7 @@ def test_links_come_from_the_configured_domain(app_module, headers):
     assert body["opds_feed"] == "https://lender.briet.app/v1/api/opds"
     assert body["opds_book_template"] == "https://lender.briet.app/v1/api/opds/{olid}"
     assert body["opds_search"] == "https://lender.briet.app/v1/api/opds/search?query={query}"
-    assert body["reader_url"] == "https://reader.archive.org/?opds=https://lender.briet.app/v1/api/opds"       # the form the reader takes
+    assert body["reader_url"] == "https://lender.briet.app/"       # the built-in reader, at the node root
 
 
 def test_without_a_domain_the_host_and_port_from_the_setup_are_used(app_module, headers):

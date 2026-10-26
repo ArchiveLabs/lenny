@@ -193,8 +193,7 @@ url:
 		exit 1; \
 	fi; \
 	OPDS_URL="$$TUNNEL_URL/v1/api/opds"; \
-	ENCODED_OPDS=$$(python3 -c "import urllib.parse; print(urllib.parse.quote('$$OPDS_URL', safe=''))"); \
-	READER_URL="https://reader.archive.org/catalog?home=$$ENCODED_OPDS"; \
+	READER_URL="$$TUNNEL_URL/"; \
 	echo "[+] OPDS Feed: $$OPDS_URL"; \
 	echo "[+] Reader URL: $$READER_URL"
 

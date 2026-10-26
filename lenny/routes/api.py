@@ -13,6 +13,7 @@ import logging
 import os
 import re
 import httpx
+import requests
 from functools import wraps
 from typing import Optional, Generator, List
 from urllib.parse import urlencode
@@ -50,6 +51,7 @@ from fastapi.responses import (
     JSONResponse,
 )
 from lenny.core import auth, librarians
+from lenny.core.db import run_blocking
 from lenny.core.api import LennyAPI, auth_document
 from lenny.core import ol_bootstrap
 from lenny.core.cache import Cache
@@ -104,6 +106,34 @@ def _run_upload(fn, *args, **kwargs):
         return fn(*args, **kwargs)
     finally:
         db.remove()
+# Item titles, covers and authors come from Open Library. When it cannot be reached the listing says so
+# (503, which the UI can show) instead of crashing with a 500 or pretending the library is empty.
+_OL_DOWN = (httpx.HTTPError, requests.RequestException)
+
+
+def _post_borrow_without_metadata(book_id, auth_mode_direct: bool) -> dict:
+    """The post-borrow publication when Open Library cannot supply the title: same read and return links."""
+    from urllib.parse import quote
+    api = f"{LennyAPI.make_url('').rstrip('/')}/v1/api/"
+    manifest = quote(f"{api}items/{book_id}/readium/manifest.json", safe="")
+    return_href, return_type = f"{api}items/{book_id}/return", "application/opds-publication+json"
+    if auth_mode_direct:
+        return_href, return_type = return_href + "?beta=true", "text/html"
+    return {
+        "metadata": {"title": "Unknown Title"},
+        "links": [
+            {"rel": "self", "href": f"{api}opds/{book_id}", "type": "application/opds-publication+json"},
+            {"rel": "http://opds-spec.org/acquisition", "href": f"{api[:-len('v1/api/')]}read/manifest/{manifest}", "type": "text/html", "title": "Read"},
+            {"rel": "http://opds-spec.org/acquisition/return", "href": return_href, "type": return_type, "title": "Return"},
+            {"rel": "profile", "href": f"{api}profile", "type": "application/opds-profile+json", "title": "User Profile"},
+        ],
+    }
+
+
+def _ol_unavailable() -> HTTPException:
+    return HTTPException(status_code=503, detail="Open Library is unreachable, so book details cannot be loaded right now. Try again shortly.")
+
+
 COOKIES_MAX_AGE = 604800  # 1 week
 
 def extract_session(request: Request, session: Optional[str] = None) -> Optional[str]:
@@ -361,10 +391,13 @@ async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limi
             status_code=400,
             detail="Invalid `modified_since`: expected an ISO 8601 date or timestamp",
         )
-    return LennyAPI.get_enriched_items(
-        fields=fields, offset=offset, limit=limit, encrypted=encrypted,
-        modified_since=modified_since_dt,
-    )
+    try:
+        return LennyAPI.get_enriched_items(
+            fields=fields, offset=offset, limit=limit, encrypted=encrypted,
+            modified_since=modified_since_dt,
+        )
+    except _OL_DOWN:
+        raise _ol_unavailable()
 
 @router.get("/opds")
 async def get_opds_catalog(request: Request, offset: Optional[int]=None, limit: Optional[int]=None, beta: bool = False, auth_mode: Optional[str] = None, modified_since: Optional[str] = None, session: Optional[str] = Cookie(None)):
@@ -516,8 +549,15 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
                 status_code=303,
             )
 
+        try:
+            publication = build_post_borrow_publication(book_id, auth_mode_direct=is_direct_mode)
+        except _OL_DOWN as e:
+            # The loan already exists; only the title and cover come from Open Library. Answer with the links
+            # that matter rather than a 500 that makes a successful borrow look like a failure.
+            logger.warning("Open Library unreachable after borrow, book_id=%s: %s", book_id, e)
+            publication = _post_borrow_without_metadata(book_id, is_direct_mode)
         return Response(
-            content=json.dumps(build_post_borrow_publication(book_id, auth_mode_direct=is_direct_mode)),
+            content=json.dumps(publication),
             media_type="application/opds-publication+json"
         )
 
@@ -575,7 +615,7 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
     if request.method == "POST":
         if post_email and post_otp:
             try:
-                session_cookie = auth.OTP.authenticate(post_email, post_otp, client_ip)
+                session_cookie = await run_blocking(auth.OTP.authenticate, post_email, post_otp, client_ip)
             except LendingNotConfiguredError as e:
                 context["error"] = str(e)
                 return request.app.templates.TemplateResponse("otp_issue.html", context)
@@ -608,7 +648,7 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
             # body on every failure path, so this used to promise the patron an
             # email that was never sent, with nothing logged on either side.
             try:
-                auth.OTP.issue(post_email, client_ip)
+                await run_blocking(auth.OTP.issue, post_email, client_ip)
             except LendingNotConfiguredError as e:
                 context["error"] = str(e)
                 return request.app.templates.TemplateResponse("otp_issue.html", context)
@@ -757,10 +797,13 @@ async def admin_get_items(
     # stalling every other concurrent request on the worker, not just this
     # one — measured as the intermittent multi-second spikes on unrelated
     # admin routes. run_in_threadpool moves the blocking work off the loop.
-    enriched = await run_in_threadpool(
-        LennyAPI.get_enriched_items,
-        fields=fields, offset=offset, limit=limit, encrypted=encrypted,
-    )
+    try:
+        enriched = await run_in_threadpool(
+            LennyAPI.get_enriched_items,
+            fields=fields, offset=offset, limit=limit, encrypted=encrypted,
+        )
+    except _OL_DOWN:
+        raise _ol_unavailable()
     # Each record also says how many copies are free, so the admin list can show it.
     return await run_in_threadpool(LennyAPI.with_availability, enriched)
 
@@ -1120,7 +1163,9 @@ async def get_shelf(request: Request, session: Optional[str] = Cookie(None), aut
 
 
 @router.api_route("/logout", methods=["GET", "POST"])
-async def logout(response: Response, session: str = Cookie(None)):
+async def logout(request: Request, response: Response, session: str = Cookie(None)):
+    # The cookie or the bearer token the client holds: either is the same signed session.
+    await run_blocking(auth.revoke_session_cookie, extract_session(request, session))
     response.delete_cookie(
         key="session",
         path="/",

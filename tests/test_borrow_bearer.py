@@ -119,3 +119,16 @@ def test_the_per_patron_limit_still_applies_to_a_token(item, monkeypatch):
     monkeypatch.setattr(configs, "get_loan_limit", lambda: 0)
     assert borrow(token_for(ME, "borrow")).status_code == 403
     assert loans_of(ME) == []
+
+
+def test_a_borrow_still_succeeds_when_open_library_times_out_afterwards(item):
+    """The loan is made before the response is built; Open Library only supplies the title."""
+    import requests
+    token = token_for(ME, "borrow")
+    with patch("lenny.routes.api.build_post_borrow_publication", side_effect=requests.exceptions.ReadTimeout("slow")):
+        r = TestClient(app).get(f"/v1/api/items/{EDITION}/borrow", headers={"Authorization": f"Bearer {token}"},
+                                follow_redirects=False)
+    assert r.status_code == 200, r.text
+    assert len(loans_of(ME)) == 1
+    rels = {link["rel"] for link in r.json()["links"]}
+    assert {"http://opds-spec.org/acquisition", "http://opds-spec.org/acquisition/return"} <= rels

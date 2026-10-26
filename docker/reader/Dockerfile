@@ -30,6 +30,14 @@ RUN git clone https://github.com/edrlab/thorium-web.git && \
     cd thorium-web && \
     git checkout "$THORIUM_REF"
     
+# Upstream compares hostnames exactly, so the default `*.trycloudflare.com` entry never matches.
+# Let a leading `*.` match any subdomain, so a tunnel URL that changes on restart still passes.
+RUN node -e '\
+const f="thorium-web/src/next-lib/helpers/verifyManifest.ts",fs=require("fs"),s=fs.readFileSync(f,"utf8"),\
+o="return url.hostname === domainUrl.hostname;";\
+if(s.split(o).length!==2)throw new Error("verifyManifest anchor not found");\
+fs.writeFileSync(f,s.replace(o,"return url.hostname === domainUrl.hostname || (domainUrl.hostname.startsWith(\"*.\") \&\& url.hostname.endsWith(domainUrl.hostname.slice(1)));"))'
+
 RUN corepack enable
 
 WORKDIR /app/thorium-web

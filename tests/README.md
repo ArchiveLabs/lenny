@@ -4,7 +4,7 @@ This directory contains all the automated tests for the Lenny application.
 
 ## Running Tests
 
-To run the tests, navigate to the root directory of the project and execute the following command:
+Install the test dependencies first (`pip install -r requirements-dev.txt`). To run the tests, navigate to the root directory of the project and execute the following command:
 
 ```bash
 pytest

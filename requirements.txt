@@ -8,7 +8,6 @@ certifi==2025.4.26
 cffi==1.17.1
 charset-normalizer==3.4.2
 click==8.2.0
-dotenv==0.9.9
 fastapi==0.115.4
 greenlet==3.2.2
 h11==0.16.0
@@ -23,18 +22,12 @@ jmespath==1.0.1
 MarkupSafe==3.0.2
 packaging==25.0
 pluggy==1.6.0
-psycopg2==2.9.10
 psycopg2-binary==2.9.10
 pycparser==2.22
-pycryptodome==3.22.0
 pydantic==2.9.2
 pydantic_core==2.23.4
-pytest==8.3.5
-pytest-env==1.1.5
 python-dateutil==2.9.0.post0
-python-dotenv==1.1.0
 python-multipart==0.0.30
-PyYAML==6.0.2
 requests==2.32.3
 s3transfer==0.10.4
 six==1.17.0

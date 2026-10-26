@@ -31,6 +31,25 @@ class LennyBase:
 
 Base = declarative_base(cls=LennyBase)
 
+async def run_blocking(fn, *args, **kwargs):
+    """Run blocking `fn` in the thread pool so a slow call (Open Library, the
+    mailer) cannot stall every other request on this worker.
+
+    `session` is thread-local and the app's cleanup middleware only clears the
+    event-loop thread's, so the pool thread clears its own when done; otherwise
+    a failed transaction would be inherited by whichever request lands there next.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    def call():
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            session.remove()
+
+    return await run_in_threadpool(call)
+
+
 def init():
     """Initialize database session.
 

@@ -6,7 +6,7 @@ Links an admin can copy and share for this library.
     GET /admin/library/links
 
 The OPDS feed (what reading apps subscribe to), a per-book OPDS address, and the
-address that opens the feed in Internet Archive's reader (reader.archive.org).
+address of this node's built-in OPDS reader (its own root).
 
 They are built from the address the owner configured for this Lenny, the same one the OPDS
 feed and the OAuth metadata advertise (`LENNY_PROXY` in .env, else `LENNY_HOST`/`LENNY_PORT`).
@@ -14,7 +14,7 @@ Never from the request, so nothing about them is guessed from how the admin happ
 """
 
 import ipaddress
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request
 
@@ -23,7 +23,6 @@ from lenny.routes.api import _require_admin
 
 router = APIRouter()
 
-READER = "https://reader.archive.org/?opds="
 OPDS_PATH = "/v1/api/opds"
 
 
@@ -42,8 +41,8 @@ def _is_private(host: str) -> bool:
 @router.get("/admin/library/links")
 async def library_links(request: Request):
     """Copyable links for this library: `opds_feed`, `opds_search` (replace `{query}`), `opds_book_template`
-    (replace `{olid}` with a book's edition number), `reader_url` (the feed opened in Internet Archive's
-    reader, `https://reader.archive.org/?opds=<feed>`), plus `base_url`, `source` and `is_public`.
+    (replace `{olid}` with a book's edition number), `reader_url` (this node's built-in reader, served at its
+    root, `<base_url>/`), plus `base_url`, `source` and `is_public`.
     `source` is `configured` when LENNY_PROXY is set, else `host_and_port`. `is_public` false means the address
     only works on this machine or network: set LENNY_PROXY to the domain or tunnel (for example
     `https://lender.briet.app`) for links that work for others."""
@@ -55,5 +54,5 @@ async def library_links(request: Request):
         "base_url": base, "source": "configured" if configs.PROXY else "host_and_port",
         "is_public": not _is_private(urlsplit(base).netloc),
         "opds_feed": feed, "opds_search": f"{feed}/search?query={{query}}", "opds_book_template": f"{feed}/{{olid}}",
-        "reader_url": f"{READER}{quote(feed, safe=':/')}",
+        "reader_url": f"{base}/",
     }

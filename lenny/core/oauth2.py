@@ -105,11 +105,21 @@ MAX_REDIRECT_URI_LEN = 2048
 # Consumers every node trusts out of the box. Created once at startup if absent;
 # an operator who disables one keeps it disabled (the row stays, so it is never
 # recreated), and can bring it back from the admin page.
+OWN_ORIGIN = "{own-origin}"  # resolved by ensure_default_clients
+
 DEFAULT_CLIENTS = [
     {
         "client_id": "reader-archive-org",
         "name": "Book Server",
         "redirect_uris": ["https://reader.archive.org"],
+        "is_confidential": False,
+    },
+    {
+        # The built-in OPDS client (docker/opds-client) served at this node's
+        # root. Its redirect_uri is the node's own origin, known only at runtime.
+        "client_id": "lenny-opds-client",
+        "name": "Lenny OPDS client",
+        "redirect_uris": [OWN_ORIGIN],
         "is_confidential": False,
     },
 ]
@@ -1051,9 +1061,23 @@ def ensure_default_clients() -> list[str]:
     """
     from sqlalchemy.exc import IntegrityError
 
+    from lenny.core.api import LennyAPI
+
+    own_origin = LennyAPI.make_url("")
     created = []
     for spec in DEFAULT_CLIENTS:
-        if OAuthClient.find(spec["client_id"]):
+        spec = {**spec, "redirect_uris": [own_origin if u == OWN_ORIGIN else u for u in spec["redirect_uris"]]}
+        row = OAuthClient.find(spec["client_id"])
+        if row:
+            # The node's public URL can change between starts (a tunnel), so keep
+            # its own client pointed at it. The built-in client is managed by the
+            # node: its redirect list is exactly the node's origin, so a stale
+            # tunnel address never stays trusted. Register a separate client for
+            # anything else. Fixed defaults are left as the operator has them.
+            if own_origin in spec["redirect_uris"] and row.disabled_at is None and \
+                    row.redirect_uris != own_origin:
+                row.redirect_uris = own_origin
+                db.commit()
             continue
         try:
             OAuthClient.register(**spec)

@@ -685,6 +685,29 @@ class TestOAuthExternalCallbackRoute:
         assert location == "/v1/api/opds"
 
 
+    def test_callback_to_own_http_origin_carries_token_in_fragment(self, app_client, monkeypatch):
+        """The built-in client on a plain-http local node must get its token back,
+        not a bare redirect that drops it."""
+        from lenny import configs as lenny_configs
+        from itsdangerous import URLSafeTimedSerializer
+        for k, v in {"EXTERNAL_AUTH_ENABLED": True, "OAUTH_CLIENT_ID": "cid",
+                     "OAUTH_CLIENT_SECRET": "csec", "OAUTH_DISCOVERY_URL": "https://provider.example.com",
+                     "OAUTH_REDIRECT_URI": "http://localhost:8080/cb", "OAUTH_FLOW": "pkce"}.items():
+            monkeypatch.setattr(lenny_configs, k, v)
+        cookie = URLSafeTimedSerializer(lenny_configs.SEED, salt="oidc-state").dumps(
+            {"s": "st", "n": "n", "cv": "v", "opds_uri": "http://localhost:8080", "opds_state": "xyz"})
+
+        from lenny.core.external_auth import ExternalAuthService
+        with patch.object(ExternalAuthService, "complete_flow", AsyncMock(return_value="p@example.com")):
+            resp = app_client.get("/v1/api/oauth/external/callback?code=c&state=st",
+                                  cookies={"_oidc_state": cookie}, follow_redirects=False)
+
+        assert resp.status_code == 303
+        location = resp.headers["location"]
+        assert location.startswith("http://localhost:8080#")
+        assert "access_token=" in location and "state=xyz" in location
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Route: GET/POST /oauth/authorize — OTP fallback redirect
 # ─────────────────────────────────────────────────────────────────────────────
@@ -888,6 +911,30 @@ class TestSafeOpdsRedirect:
 
     def test_empty_string_returns_empty(self):
         assert self._redirect("") == ""
+
+    def _own(self, url: str, origin: str = "http://localhost:8080") -> str:
+        from unittest.mock import patch
+        with patch("lenny.routes.oauth.LennyAPI.make_url", return_value=origin):
+            return self._redirect(url)
+
+    def test_own_origin_allowed_even_over_http_and_without_allowlist(self):
+        assert self._own("http://localhost:8080") == "http://localhost:8080"
+        assert self._own("http://localhost:8080/") == "http://localhost:8080/"
+
+    def test_own_origin_https(self):
+        assert self._own("https://lenny.example.org", "https://lenny.example.org") == "https://lenny.example.org"
+
+    def test_own_origin_lookalikes_blocked(self):
+        for url in (
+            "http://localhost:8081",
+            "http://localhost:8080.evil.com/",
+            "http://localhost:8080@evil.com/",
+            "http://localhost:8080\\@evil.com/",
+            "https://localhost:8080",
+            "http://localhost:8080/#x",
+            "http://localhost:8080/ x",
+        ):
+            assert self._own(url) == "", url
 
     def test_protocol_relative_blocked(self):
         assert self._redirect("//evil.com/steal") == ""

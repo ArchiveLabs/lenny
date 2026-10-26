@@ -367,7 +367,14 @@ class LennyAPI:
             ol_by_olid = cached[1]
         else:
             q = f"edition_key:({' OR '.join(f'OL{eid}M' for eid in edition_ids)})"
-            ol_by_olid = {int(book.olid): book for book in OpenLibrary.search(query=q, fields=fields)}
+            try:
+                ol_by_olid = {int(book.olid): book for book in OpenLibrary.search(query=q, fields=fields)}
+            except (_requests.exceptions.RequestException, _httpx.HTTPError) as e:
+                if not cached:
+                    raise
+                # Open Library is down: a listing from a few minutes ago beats none. Not re-cached, so the next call retries.
+                logger.warning(f"Open Library unreachable; serving the last known listing: {e}")
+                return {olid: book + {"lenny": imap[olid]} for olid, book in cached[1].items() if olid in imap}
             # ponytail: crude cap instead of real LRU eviction — fine for a
             # cache this size/TTL, revisit if the key space grows a lot.
             if len(cls._enrich_cache) > 256:

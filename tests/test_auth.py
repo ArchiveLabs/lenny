@@ -55,8 +55,7 @@ def test_otp_authenticate_with_ip():
     email = "test@example.com"
     ip = "10.0.0.1"
     
-    # Generate an OTP (pass None for issued_minute to use current time)
-    otp = auth.OTP.generate(email, None)
+    otp = "123456"
     
     # Mock the external OTP redeem call to return success
     import unittest.mock as mock

@@ -33,7 +33,7 @@
 - [About the Project](#about-the-project)
 - [Features](#features)
 - [OPDS 2.0 Feed](#opds-20-feed)
-- [Internet Archive Bookserver app + Lenny OPDS sync](#bookserver-app-sync)
+- [Built-in OPDS client](#built-in-opds-client)
 - [Technologies](#technologies)
 - [Endpoints](#endpoints)
 - [Getting Started](#getting-started)
@@ -198,22 +198,13 @@ Now any code change is picked up immediately by uvicorn. To switch back to produ
 
 ---
 
-## Bookserver app sync
+## Built-in OPDS client
 
-Sync your Lenny OPDS feed with Archive.org's [Bookserver app](https://reader.archive.org). To have a personalized Lenny catalog with a great user interface.
-> [!IMPORTANT]
-> Bookserver app is Internet Archive's closed product, it doesn't come with lenny instance which you can own
+Lenny ships its own browsing app (the [opds-client](https://github.com/ArchiveLabs/opds-client), pinned in `docker/opds-client/Dockerfile`) at the root of your instance, e.g. `http://localhost:8080/`. It only browses this node's own OPDS feed (`/v1/api/opds`) and signs in through Lenny's own OAuth; feeds from other origins are refused. Sign in works from the node's configured public URL (`LENNY_PROXY` or host/port); opening the node through any other address is refused by the OAuth redirect check.
 
-Lenny registers Book Server as a trusted app on every node by itself. Turn it off, or add other readers, under **Settings → App Access** (see [docs/OAUTH2.md](docs/OAUTH2.md)).
+**Reading.** Borrowing a book opens it in Lenny's own reader ([Thorium Web](https://github.com/edrlab/thorium-web), served at `/read`), so a patron never leaves your node. The admin Library page has an **Open in Lenny reader** button, and a book's **Share** button copies a link that opens that book in the reader: `<your address>/?opds=<book feed>`. The raw feed (`/v1/api/opds`) and a single book's feed (`/v1/api/opds/<id>`) are still there for reading apps such as Thorium Reader or KOReader.
 
-```sh
-make url 
-```
-
-- Gernerates URl ODPS link & Lenny server + Archive's Book server app sync URL Link.
-
----
-
+The reader only opens manifests from addresses listed in `MANIFEST_ALLOWED_DOMAINS` in `reader.env` (default `127.0.0.1,localhost,*.trycloudflare.com`). A leading `*.` matches any subdomain, so a changing tunnel hostname works. For your own domain, add its hostname and rebuild the reader (`make rebuild`), because the list is baked in at build time. Signing out ends the session on the server as well as in the browser.
 
 ---
 

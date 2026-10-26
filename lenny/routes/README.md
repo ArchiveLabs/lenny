@@ -296,7 +296,7 @@ actually downloadable (190 books, about 195 MB), not everything Open Library lis
 
 ### Library Links
 
-- **GET /admin/library/links** — copyable links for sharing this library, admin only: `opds_feed`, `opds_search` (replace `{query}`), `opds_book_template` (replace `{olid}` with a book's edition number), `reader_url` (`https://reader.archive.org/?opds=<feed>`, the feed opened in Internet Archive's reader), `base_url`, `source` and `is_public`. They are built from the address the owner configured (`LENNY_PROXY` in `.env`, e.g. `https://lender.briet.app`, else `LENNY_HOST`/`LENNY_PORT`), the same one the feed and the OAuth metadata advertise, never from the request. `is_public: false` means that address only works on this machine or network (localhost, a private IP, `.local`): set `LENNY_PROXY`.
+- **GET /admin/library/links** — copyable links for sharing this library, admin only: `opds_feed`, `opds_search` (replace `{query}`), `opds_book_template` (replace `{olid}` with a book's edition number), `reader_url` (`<base_url>/`, this node's built-in reader), `base_url`, `source` and `is_public`. They are built from the address the owner configured (`LENNY_PROXY` in `.env`, e.g. `https://lender.briet.app`, else `LENNY_HOST`/`LENNY_PORT`), the same one the feed and the OAuth metadata advertise, never from the request. `is_public: false` means that address only works on this machine or network (localhost, a private IP, `.local`): set `LENNY_PROXY`.
 
 ## Authentication
 Most endpoints require a valid session cookie. Use `/authenticate` to obtain one via email and OTP.

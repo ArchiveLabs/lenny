@@ -33,6 +33,7 @@ from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from lenny import configs
 from lenny.core import auth
+from lenny.core.db import run_blocking
 from lenny.core.api import LennyAPI, auth_document
 from lenny.core.exceptions import (
     InvalidOLCredentialsError,
@@ -348,7 +349,7 @@ async def oauth_authorize(
 
     if request.method == "POST" and post_email and post_otp:
         try:
-            session_cookie = auth.OTP.authenticate(post_email, post_otp, client_ip)
+            session_cookie = await run_blocking(auth.OTP.authenticate, post_email, post_otp, client_ip)
         except LendingNotConfiguredError as e:
             context["error"] = str(e)
             return request.app.templates.TemplateResponse("otp_issue.html", context)
@@ -395,7 +396,7 @@ async def oauth_authorize(
         # Advance to the "enter your code" screen only once Open Library confirms
         # it issued one — it reports failure as HTTP 200 with a JSON error body.
         try:
-            auth.OTP.issue(post_email, client_ip)
+            await run_blocking(auth.OTP.issue, post_email, client_ip)
         except LendingNotConfiguredError as e:
             context["error"] = str(e)
             return request.app.templates.TemplateResponse("otp_issue.html", context)
@@ -438,7 +439,7 @@ async def oauth_authorize(
                 return request.app.templates.TemplateResponse(
                     "otp_redeem.html", context)
             try:
-                auth.OTP.issue(ctx_hint, client_ip)
+                await run_blocking(auth.OTP.issue, ctx_hint, client_ip)
             except (LendingNotConfiguredError, OTPGenerationError,
                     RateLimitError) as e:
                 context["error"] = str(e)
@@ -677,8 +678,8 @@ async def oauth_external_callback(
             }
             resp = request.app.templates.TemplateResponse("oauth_success.html", success_context)
             return _clear_state_cookie(_set_session(resp))
-        if opds_uri.startswith("https://"):
-            # Absolute HTTPS redirect_uri (browser-based OPDS client, e.g. bookreader).
+        if opds_uri.startswith(("https://", "http://")):
+            # Absolute HTTPS (or this node's own http:// origin, see _is_own_origin) redirect_uri (browser-based OPDS client, e.g. bookreader).
             # Append the token as query params — same pattern as the OTP flow.
             fragment = LennyAPI.build_oauth_fragment(session_cookie, opds_state_val or None)
             final_resp = RedirectResponse(url=f"{opds_uri}#{urlencode(fragment)}", status_code=303)
@@ -731,11 +732,25 @@ def _safe_redirect(url: str) -> str:
     return url or "/v1/api/opds"
 
 
+def _is_own_origin(url: str) -> bool:
+    """Whether *url* is on this node's own configured origin (the built-in OPDS client).
+
+    Compared against the configured public origin, never the Host header, and by
+    exact scheme+netloc so `https://node@evil.com` and lookalike hosts never match.
+    Unlike the allowlist this admits `http://` — a local node has no TLS.
+    """
+    if "#" in url or "\\" in url or any(ch.isspace() or ord(ch) < 0x20 for ch in url):
+        return False
+    own, parsed = urlparse(LennyAPI.make_url("")), urlparse(url)
+    return parsed.scheme in {"http", "https"} and (parsed.scheme, parsed.netloc) == (own.scheme, own.netloc)
+
+
 def _safe_opds_redirect(url: str) -> str:
     """Validate an OPDS redirect_uri from the caller.
 
     Allows:
       - ``opds://`` scheme  — native OPDS clients (Thorium, etc.)
+      - This node's own origin — the built-in OPDS client
       - ``https://`` URLs   — browser-based OPDS clients (bookreader, etc.)
                               The OPDS implicit flow requires absolute redirect_uri;
                               parity with the OTP path which also accepts these.
@@ -753,6 +768,8 @@ def _safe_opds_redirect(url: str) -> str:
     if not url:
         return ""
     if url.startswith("opds://"):
+        return url
+    if _is_own_origin(url):
         return url
     if url.startswith("https://"):
         allowed_raw = os.environ.get("LENNY_OPDS_ALLOWED_HOSTS", "")

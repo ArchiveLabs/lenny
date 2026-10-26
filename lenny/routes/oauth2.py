@@ -38,6 +38,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from lenny.core import auth
+from lenny.core.db import run_blocking
 from lenny.core.external_auth import valid_prompt
 from lenny.routes.api import _external_auth_ready
 from lenny.routes.oauth import (
@@ -397,7 +398,7 @@ async def authorize(
             pending_email = hint
         else:
             try:
-                auth.OTP.issue(hint, client_ip)
+                await run_blocking(auth.OTP.issue, hint, client_ip)
             except Exception as exc:
                 # Fall through to the ordinary login hop, which renders the
                 # address form and reports the reason properly.
@@ -603,7 +604,7 @@ async def authorize_decision(
             error = "Enter the code we emailed you."
         else:
             try:
-                session_cookie = auth.OTP.authenticate(
+                session_cookie = await run_blocking(auth.OTP.authenticate, 
                     pending_email, otp.strip(), client_ip)
             except LendingNotConfiguredError as e:
                 # This one names an environment variable and the admin panel.

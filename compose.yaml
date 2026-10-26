@@ -119,6 +119,15 @@ services:
     networks:
       - lenny_network
 
+  opds:
+    build:
+      context: .
+      dockerfile: docker/opds-client/Dockerfile
+    container_name: lenny_opds
+    restart: unless-stopped
+    networks:
+      - lenny_network
+
   readium:
     image: ghcr.io/readium/readium:0.6.3
     container_name: lenny_readium

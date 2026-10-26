@@ -54,11 +54,29 @@ def admin():
 # ─── the default Book Server client ──────────────────────────────────────────
 
 def test_a_fresh_node_gets_book_server():
-    assert ensure_default_clients() == ["reader-archive-org"]
+    assert ensure_default_clients() == ["reader-archive-org", "lenny-opds-client"]
     c = OAuthClient.get("reader-archive-org")
     assert c.name == "Book Server" and c.is_confidential is False
     assert c.allows_redirect("https://reader.archive.org")
     assert not c.allows_redirect("https://reader.archive.org/evil")
+
+
+def test_the_built_in_client_is_bound_to_this_nodes_own_origin_only():
+    from lenny.core.api import LennyAPI
+    ensure_default_clients()
+    own = LennyAPI.make_url("")
+    c = OAuthClient.get("lenny-opds-client")
+    assert c.is_confidential is False
+    assert c.allows_redirect(own)
+    assert not c.allows_redirect("https://evil.example")
+
+
+def test_the_built_in_client_follows_the_node_when_its_public_url_changes():
+    from unittest.mock import patch
+    ensure_default_clients()
+    with patch("lenny.core.api.LennyAPI.make_url", return_value="https://new.example.org"):
+        assert ensure_default_clients() == []
+    assert OAuthClient.get("lenny-opds-client").allows_redirect("https://new.example.org")
 
 
 def test_seeding_twice_changes_nothing():
