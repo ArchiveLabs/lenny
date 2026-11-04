@@ -273,7 +273,7 @@ def client():
     from fastapi import Response
     from fastapi.testclient import TestClient
 
-    def render(name, context):
+    def render(request, name, context):
         return Response(content=f"template={name}\nerror={context.get('error', '')}",
                         media_type="text/html")
 

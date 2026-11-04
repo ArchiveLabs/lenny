@@ -373,7 +373,7 @@ def requires_item_auth(scope: str = "loans:read"):
 @router.get('/', status_code=status.HTTP_200_OK)
 async def home(request: Request):
     kwargs = {"request": request}
-    return request.app.templates.TemplateResponse("index.html", kwargs)
+    return request.app.templates.TemplateResponse(request, "index.html", kwargs)
 
 @router.get('/health', status_code=status.HTTP_200_OK)
 async def health():
@@ -618,22 +618,22 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
                 session_cookie = await run_blocking(auth.OTP.authenticate, post_email, post_otp, client_ip)
             except LendingNotConfiguredError as e:
                 context["error"] = str(e)
-                return request.app.templates.TemplateResponse("otp_issue.html", context)
+                return request.app.templates.TemplateResponse(request, "otp_issue.html", context)
             except RateLimitError as e:
                 context["error"] = str(e)
                 context["email"] = post_email
-                return request.app.templates.TemplateResponse("otp_redeem.html", context)
+                return request.app.templates.TemplateResponse(request, "otp_redeem.html", context)
             except OTPGenerationError as e:
                 # Open Library refused for a reason that is not "wrong password"
                 # — stale credentials, rate limiting, an outage. Say which,
                 # instead of blaming the patron's typing.
                 context["error"] = str(e)
                 context["email"] = post_email
-                return request.app.templates.TemplateResponse("otp_redeem.html", context)
+                return request.app.templates.TemplateResponse(request, "otp_redeem.html", context)
             if not session_cookie:
                 context["error"] = "Authentication failed. Invalid OTP."
                 context["email"] = post_email
-                return request.app.templates.TemplateResponse("otp_redeem.html", context)
+                return request.app.templates.TemplateResponse(request, "otp_redeem.html", context)
 
             response = RedirectResponse(url=post_url, status_code=302)
             response.set_cookie(
@@ -651,19 +651,19 @@ async def borrow_item(request: Request, response: Response, book_id: int, format
                 await run_blocking(auth.OTP.issue, post_email, client_ip)
             except LendingNotConfiguredError as e:
                 context["error"] = str(e)
-                return request.app.templates.TemplateResponse("otp_issue.html", context)
+                return request.app.templates.TemplateResponse(request, "otp_issue.html", context)
             except OTPGenerationError as e:
                 context["error"] = str(e)
                 context["email"] = post_email
-                return request.app.templates.TemplateResponse("otp_issue.html", context)
+                return request.app.templates.TemplateResponse(request, "otp_issue.html", context)
             except Exception:
                 logger.exception("Unexpected error issuing OTP")
                 context["error"] = "Failed to issue OTP. Please try again."
-                return request.app.templates.TemplateResponse("otp_issue.html", context)
+                return request.app.templates.TemplateResponse(request, "otp_issue.html", context)
             context["email"] = post_email
-            return request.app.templates.TemplateResponse("otp_redeem.html", context)
+            return request.app.templates.TemplateResponse(request, "otp_redeem.html", context)
 
-    return request.app.templates.TemplateResponse("otp_issue.html", context)
+    return request.app.templates.TemplateResponse(request, "otp_issue.html", context)
 
 @router.api_route('/items/{book_id}/return', methods=['GET', 'POST'], status_code=status.HTTP_200_OK)
 @requires_item_auth(scope="borrow")

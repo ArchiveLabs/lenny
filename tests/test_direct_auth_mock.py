@@ -17,7 +17,7 @@ from lenny.app import app
 from fastapi import Response
 
 # Allow checking what template was rendered
-def mock_render(name, context):
+def mock_render(request, name, context):
     return Response(content=f"Rendered: {name}", media_type="text/html")
 
 
