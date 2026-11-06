@@ -239,7 +239,7 @@ def _problem_for_patron(request: Request, code: str, description: str, status: i
     if "text/html" not in (request.headers.get("accept") or "").lower():
         return _error(code, description, status)
     heading, explanation = _PROBLEMS.get(code, ("Sign-in problem", description))
-    page = request.app.templates.TemplateResponse("oauth2_error.html", {
+    page = request.app.templates.TemplateResponse(request, "oauth2_error.html", {
         "request": request, "code": code, "description": description,
         "heading": heading, "explanation": explanation,
         "client_id": (request.query_params.get("client_id") or "")[:64],
@@ -476,7 +476,7 @@ async def authorize(
         **({"e": pending_email} if pending_email else {}),
     })
 
-    response = request.app.templates.TemplateResponse("oauth2_consent.html", {
+    response = request.app.templates.TemplateResponse(request, "oauth2_consent.html", {
         "request": request,
         "client_name": client.name,
         "scopes": [(s, SCOPES[s]) for s in granted_scope.split()],
@@ -528,7 +528,7 @@ def _render_consent(request: Request, payload: dict, handle: str,
     """
     client = OAuthClient.get(payload["c"])
     scopes = [(s, SCOPES[s]) for s in payload["s"].split() if s in SCOPES]
-    page = request.app.templates.TemplateResponse("oauth2_consent.html", {
+    page = request.app.templates.TemplateResponse(request, "oauth2_consent.html", {
         "request": request,
         "client_name": client.name if client else "the application",
         "scopes": scopes,
@@ -657,7 +657,7 @@ async def authorize_decision(
     # existing OPDS flow does.
     if urlparse(redirect_uri).scheme not in ("http", "https"):
         client = OAuthClient.get(payload["c"])
-        done = request.app.templates.TemplateResponse("oauth2_handoff.html", {
+        done = request.app.templates.TemplateResponse(request, "oauth2_handoff.html", {
             "request": request, "target": target,
             "client_name": client.name if client else "the application",
         })

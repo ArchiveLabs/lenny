@@ -141,6 +141,23 @@ def test_changing_your_own_password_hands_back_a_fresh_token(api):
     assert auth.admin_librarian(r.json()["token"]).id == ann.id
 
 
+def _all_routes(app):
+    """Every concrete route on `app`, whatever FastAPI wraps them in.
+
+    Older FastAPI hands back one flat APIRoute per endpoint. Newer releases
+    wrap each ``include_router`` in an opaque router object with no ``.path``,
+    so walking ``app.routes`` finds nothing and the ``seen`` floor below is
+    what notices. Expanding those wrappers keeps this test looking at the same
+    routes on both.
+    """
+    for route in app.routes:
+        expand = getattr(route, "effective_route_contexts", None)
+        if expand is None:
+            yield route
+        else:
+            yield from expand()
+
+
 # ── every /admin route wants the secret AND a token ───────────────────────
 
 def test_every_admin_route_refuses_half_a_pair(api):
@@ -151,7 +168,7 @@ def test_every_admin_route_refuses_half_a_pair(api):
     secret = {"X-Admin-Internal-Secret": "s3cret"}
     c = TestClient(app, raise_server_exceptions=False)
     seen = 0
-    for route in app.routes:
+    for route in _all_routes(app):
         path = getattr(route, "path", "")
         if "/admin/" not in path and not path.endswith("/upload"):
             continue

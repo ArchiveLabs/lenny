@@ -352,16 +352,16 @@ async def oauth_authorize(
             session_cookie = await run_blocking(auth.OTP.authenticate, post_email, post_otp, client_ip)
         except LendingNotConfiguredError as e:
             context["error"] = str(e)
-            return request.app.templates.TemplateResponse("otp_issue.html", context)
+            return request.app.templates.TemplateResponse(request, "otp_issue.html", context)
         except (OTPGenerationError, RateLimitError) as e:
             # Not a wrong password — Open Library refused for its own reason.
             context["error"] = str(e)
             context["email"] = post_email
-            return request.app.templates.TemplateResponse("otp_redeem.html", context)
+            return request.app.templates.TemplateResponse(request, "otp_redeem.html", context)
         if not session_cookie:
             context["error"] = "Authentication failed. Invalid OTP."
             context["email"] = post_email
-            return request.app.templates.TemplateResponse("otp_redeem.html", context)
+            return request.app.templates.TemplateResponse(request, "otp_redeem.html", context)
 
         fragment = LennyAPI.build_oauth_fragment(session_cookie, current_state)
 
@@ -374,7 +374,7 @@ async def oauth_authorize(
                 "expires_in": auth.COOKIE_TTL,
                 "state": current_state,
             }
-            resp = request.app.templates.TemplateResponse("oauth_success.html", success_context)
+            resp = request.app.templates.TemplateResponse(request, "oauth_success.html", success_context)
         else:
             resp = RedirectResponse(
                 url=f"{current_redirect_uri}#{urlencode(fragment)}",
@@ -399,11 +399,11 @@ async def oauth_authorize(
             await run_blocking(auth.OTP.issue, post_email, client_ip)
         except LendingNotConfiguredError as e:
             context["error"] = str(e)
-            return request.app.templates.TemplateResponse("otp_issue.html", context)
+            return request.app.templates.TemplateResponse(request, "otp_issue.html", context)
         except OTPGenerationError as e:
             context["error"] = str(e)
             context["email"] = post_email
-            return request.app.templates.TemplateResponse("otp_issue.html", context)
+            return request.app.templates.TemplateResponse(request, "otp_issue.html", context)
         except RateLimitError as e:
             # `OTP.issue` now caps sends per recipient, so this is reachable
             # from the email form and the resend button. It is a different
@@ -411,13 +411,13 @@ async def oauth_authorize(
             # patron waits for a code that was deliberately not sent.
             context["error"] = str(e)
             context["email"] = post_email
-            return request.app.templates.TemplateResponse("otp_issue.html", context)
+            return request.app.templates.TemplateResponse(request, "otp_issue.html", context)
         except Exception:
             logger.exception("Unexpected error issuing OTP")
             context["error"] = "Failed to issue OTP. Please try again."
-            return request.app.templates.TemplateResponse("otp_issue.html", context)
+            return request.app.templates.TemplateResponse(request, "otp_issue.html", context)
         context["email"] = post_email
-        return request.app.templates.TemplateResponse("otp_redeem.html", context)
+        return request.app.templates.TemplateResponse(request, "otp_redeem.html", context)
 
     # Send on arrival. The consumer has already proved this address, so asking
     # the patron to produce it again is a step that buys nothing.
@@ -437,24 +437,24 @@ async def oauth_authorize(
                 # inbox, so ask for it rather than sending another.
                 context["email"] = ctx_hint
                 return request.app.templates.TemplateResponse(
-                    "otp_redeem.html", context)
+                    request, "otp_redeem.html", context)
             try:
                 await run_blocking(auth.OTP.issue, ctx_hint, client_ip)
             except (LendingNotConfiguredError, OTPGenerationError,
                     RateLimitError) as e:
                 context["error"] = str(e)
                 return request.app.templates.TemplateResponse(
-                    "otp_issue.html", context)
+                    request, "otp_issue.html", context)
             except Exception:
                 logger.exception("Unexpected error issuing OTP on arrival")
                 context["error"] = "Failed to issue OTP. Please try again."
                 return request.app.templates.TemplateResponse(
-                    "otp_issue.html", context)
+                    request, "otp_issue.html", context)
             context["email"] = ctx_hint
             return request.app.templates.TemplateResponse(
-                "otp_redeem.html", context)
+                request, "otp_redeem.html", context)
 
-    return request.app.templates.TemplateResponse("otp_issue.html", context)
+    return request.app.templates.TemplateResponse(request, "otp_issue.html", context)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -676,7 +676,7 @@ async def oauth_external_callback(
                 "expires_in": auth.COOKIE_TTL,
                 "state": opds_state_val,
             }
-            resp = request.app.templates.TemplateResponse("oauth_success.html", success_context)
+            resp = request.app.templates.TemplateResponse(request, "oauth_success.html", success_context)
             return _clear_state_cookie(_set_session(resp))
         if opds_uri.startswith(("https://", "http://")):
             # Absolute HTTPS (or this node's own http:// origin, see _is_own_origin) redirect_uri (browser-based OPDS client, e.g. bookreader).
