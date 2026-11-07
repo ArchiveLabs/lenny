@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import hmac
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Union
@@ -57,7 +58,14 @@ def encode_book_path(book_id: str, format=".epub") -> str:
     return encoded.replace('/', '_').replace('+', '-').replace('=', '')
 
 def hash_email(email: str) -> str:
-    return hashlib.sha256(email.strip().lower().encode('utf-8')).hexdigest()
+    """Patron identity: HMAC-SHA256 keyed with LENNY_EMAIL_HASH_KEY over sha256(normalized email).
+
+    The inner sha256 hex is what Lenny stored before the hash was keyed, so the
+    migration (alembic e2b4c6d8f0a1) can rewrite old rows as HMAC(key, old).
+    """
+    from lenny import configs  # read at call time so tests can swap the key
+    digest = hashlib.sha256(email.strip().lower().encode('utf-8')).hexdigest()
+    return hmac.new(configs.EMAIL_HASH_KEY.encode('utf-8'), digest.encode('ascii'), hashlib.sha256).hexdigest()
 
 
 def parse_modified_since(value: Union[str, datetime, None]) -> Optional[datetime]:

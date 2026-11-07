@@ -8,6 +8,7 @@ import requests
 
 os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("LENNY_SEED", "test-seed-for-unit-tests-only-32b!")
+os.environ.setdefault("LENNY_EMAIL_HASH_KEY", "test-email-hash-key-for-unit-tests")
 
 from lenny.core import upstream  # noqa: E402
 from lenny.core.upstream import Guard, UpstreamUnavailable  # noqa: E402

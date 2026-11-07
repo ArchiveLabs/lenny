@@ -147,7 +147,7 @@ sync_env_file() {
             | head -1
         ) || true
 
-        local value
+        local value generated=0
         value=$(echo "$default_line" | cut -d= -f2-)
 
         # If the value is a shell variable reference ($VAR or ${VAR...}),
@@ -166,13 +166,19 @@ sync_env_file() {
                 local genpass_len
                 genpass_len=$(echo "$default" | grep -oE '[0-9]+' | head -1)
                 value=$(genpass "${genpass_len:-32}")
+                generated=1
             else
                 value=""
             fi
         fi
 
         echo "${var}=${value}" >> "$env_file"
-        echo "    Added: ${var}=${value}"
+        # Never echo a generated secret into the update log.
+        if [ "$generated" -eq 1 ]; then
+            echo "    Added: ${var}=<generated>"
+        else
+            echo "    Added: ${var}=${value}"
+        fi
         added=$((added + 1))
     done
 

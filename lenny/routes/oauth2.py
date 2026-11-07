@@ -371,7 +371,7 @@ async def authorize(
     email = None if fresh else _authenticated_patron(request)
 
     # A session for a different address than the consumer named cannot be used
-    # to answer this request. Loans key on `patron_email_hash`, a SHA-256 of
+    # to answer this request. Loans key on `patron_email_hash`, a keyed hash of
     # the lowercased address (`lenny/core/utils.hash_email`), so a grant
     # recorded against the session would hand the consumer a working token for
     # a loan it can never read — nothing errors, the book simply never appears.

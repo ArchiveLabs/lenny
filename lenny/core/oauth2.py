@@ -941,7 +941,7 @@ class SessionTicket(Base):
     # The patron the token proved. This is the ONLY authoritative identity: it is
     # copied from the authenticated access token and never recomputed from an
     # address nor accepted from the caller. Open Library's `login_hint` makes
-    # sha256(address) usually equal to this, but not reliably (the hint is
+    # hash_email(address) usually equal to this, but not reliably (the hint is
     # optional, dropped on forced re-auth, and may differ under external OIDC),
     # so deriving it from an address would silently establish a session for the
     # wrong patron. See ArchiveLabs/lenny#254 and #239.

@@ -53,6 +53,10 @@ else
   LENNY_SSL_CRT="${LENNY_SSL_CRT:-}"
   LENNY_SSL_KEY="${LENNY_SSL_KEY:-}"
   LENNY_SEED="${LENNY_SEED:-$(genpass 32)}"
+  # Keys the patron identity hash. Separate from LENNY_SEED so rotating the seed
+  # never breaks patron history. Back it up with the database: if it is lost,
+  # every patron's loans and OAuth grants stop matching.
+  LENNY_EMAIL_HASH_KEY="${LENNY_EMAIL_HASH_KEY:-$(genpass 32)}"
   # Which peer addresses uvicorn will trust to have set X-Forwarded-For.
   # MUST NOT be '*': nginx uses $proxy_add_x_forwarded_for, so it APPENDS the
   # observed address to whatever the client sent. With '*' uvicorn takes the
@@ -131,6 +135,8 @@ LENNY_PORT=$LENNY_PORT
 LENNY_WORKERS=$LENNY_WORKERS
 LENNY_ADMIN_NODE_HEAP_MB=$LENNY_ADMIN_NODE_HEAP_MB
 LENNY_SEED=$LENNY_SEED
+# Keys patron identity hashes. Back up with the database; never change it.
+LENNY_EMAIL_HASH_KEY=$LENNY_EMAIL_HASH_KEY
 LENNY_LOG_LEVEL=$LENNY_LOG_LEVEL
 LENNY_PRODUCTION=$LENNY_PRODUCTION
 LENNY_SSL_CRT=$LENNY_SSL_CRT

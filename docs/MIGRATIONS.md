@@ -21,6 +21,16 @@ make redeploy
 
 > ⚠️ **Do not use `make build`, `make rebuild`, or `make resetdb` for updates** — these wipe the database volume and all your data. They are only for fresh installs or intentional resets.
 
+### Patron hash key (`LENNY_EMAIL_HASH_KEY`)
+
+Patrons are identified by a hash of their email keyed with `LENNY_EMAIL_HASH_KEY` (in `.env`). Revision `e2b4c6d8f0a1` rewrites every stored patron hash with that key, once.
+
+- `make update` adds the key to `.env` if it is missing, backs up the database, then the migration runs on start. Nothing else to do.
+- If you update with `git pull && make redeploy` instead, add the key yourself first, or the API refuses to start: `echo "LENNY_EMAIL_HASH_KEY=$(openssl rand -hex 24)" >> .env`.
+- **Back up the key with the database.** A database restored without its key loads fine, but no patron's loans or app sign-ins match. Never change the key on an install that has patrons.
+- Browser sessions created by an app sign-in (the OAuth2 session handoff) are signed out once by this update. Patrons sign in again; their loans are kept.
+- The migration cannot be rolled back. To go back, restore the pre-update backup from `backups/`.
+
 ### Checking Migration Status
 
 ```bash
