@@ -136,6 +136,12 @@ def _login_hint(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
     value = value.strip()
+    # Order is load-bearing (ReDoS guard — CodeQL py/polynomial-redos, #266 #11).
+    # The `len(value) > 254` cap MUST stay the LEFT operand so Python's `or`
+    # short-circuit applies it BEFORE the regex runs. _EMAIL_HINT's `[^@\s]+`
+    # runs can backtrack super-linearly, so the pattern must only ever see a
+    # bounded (<=254-char) input. Do not reorder this `or` or drop the cap —
+    # test_login_hint.py::test_length_cap_short_circuits_before_the_regex pins it.
     if len(value) > 254 or not _EMAIL_HINT.match(value):
         return None
     return value
