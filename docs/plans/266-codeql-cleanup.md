@@ -14,29 +14,31 @@ belongs to Mek. This PR collects the verdicts; Mek runs the dismissals.
 
 ### Real code fixes
 
-- [ ] **#5–#9** `lenny/routes/api.py` (lines ~1607, 1648, 1863, 2083, 2191) —
-      five `except OSError as exc:` blocks return `f"...: {exc}"` to the caller,
-      leaking a filesystem path. Log the exception server-side (`logger.exception`),
-      return a fixed message, keep the `error` code field unchanged.
-- [ ] **#11** `lenny/routes/oauth.py:139` — `len(value) > 254 or not _EMAIL_HINT.match(value)`
-      is safe only because Python short-circuits the length cap before the regex.
-      Add a comment pinning the order, and a regression test that fails if the order
-      is swapped (proven red-first).
-- [ ] **#12, #13** `tests/test_external_auth.py:848`, `tests/test_oauth2_endpoints.py:787`
-      — substring checks flagged by `py/incomplete-url-substring-sanitization`. Rewrite
-      to compare a host parsed from the known URL constant instead of a hardcoded
-      host literal.
+- [x] **#5–#9** `lenny/routes/api.py` — the five flagged `except OSError`
+      blocks now log server-side (`logger.exception`) and return a fixed message;
+      the `error` code field is unchanged. **Fixed the whole class**: all 22
+      `except OSError`/`except Exception` handlers in `lenny/routes/` were checked;
+      9 interpolated the exception into a response body (the 5 flagged + 4 more at
+      api.py:1462/1483/1525/1809 that CodeQL did not flag), all 9 fixed. (commit `d2d64da`)
+- [x] **#11** `lenny/routes/oauth.py:139` — comment pins the length-cap-before-regex
+      order; regression test in `test_login_hint.py` proven red-first (green → swap
+      operands → red, regex saw a 613-char value → restore → green). (commit `53abae8`)
+- [x] **#12, #13** `tests/test_external_auth.py`, `tests/test_oauth2_endpoints.py`
+      — rewrote both assertions to compare `urlparse(...).hostname` parsed from the
+      URL constant instead of a hardcoded host literal. (commit `11a88c7`)
 
-### Verdicts, not fixes (recorded in the PR body)
+### Verdicts, not fixes (collected for the lead; no UI dismissals here)
 
-- [ ] **#1** `external_auth.py:113` — false positive (flow *name*, not a credential)
-- [ ] **#2, #3** `scripts/oauth2_client.py:229,271` — by design (registration CLI)
-- [ ] **#4** `ol_bootstrap.py:252` — by design, **but first confirm** the documented
-      run path does not tee stdout into a persistent log (if it does: stop, tell Mek)
-- [ ] **#10** `oauth2.py:205` — false positive (`description` is caller-controlled, not an exception)
-- [ ] **#14–#20** `api.py` redirects (479, 539, 548, 575, 580, 638, 693) — **read all seven**
-      individually, one verdict each
-- [ ] **#21–#24** `oauth2.py:200,1047`, `oauth.py:290,380` — false positive (exact-match allowlist)
+- [x] **#1** `external_auth.py:113` — false positive (flow *name*, not a credential)
+- [x] **#2, #3** `scripts/oauth2_client.py:229,271` — by design (registration CLI)
+- [x] **#4** `ol_bootstrap.py:252` — by design; **confirmed** the documented run path
+      (`make ol-login` → `ol_configure.sh`) captures stdout into a shell variable and
+      does **not** tee it into a persistent log. No real finding.
+- [x] **#10** `oauth2.py:205` — false positive (`description` is caller-controlled, not an exception)
+- [x] **#14–#20** `api.py` redirects (479, 539, 548, 575, 580, 638, 693) — **all seven
+      read individually**; all false positive (same-origin relative paths / `make_url()`)
+- [x] **#21–#24** `oauth.py:290,380`, `oauth2.py:200,1047` — false positive
+      (exact-match allowlist / same-origin path validators CodeQL can't follow)
 
 ## Definition of done
 
