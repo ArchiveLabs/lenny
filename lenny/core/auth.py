@@ -179,6 +179,8 @@ def create_session_cookie(email: str, ip: str = None) -> str:
         data["ip"] = ip
     return serializer.dumps(data)
 
+HASHED_COOKIE_KEY_VERSION = 1
+
 def create_hashed_session_cookie(patron_email_hash: str, ip: str = None) -> str:
     """Returns a signed session cookie that carries a patron HASH, not an address.
 
@@ -193,9 +195,13 @@ def create_hashed_session_cookie(patron_email_hash: str, ip: str = None) -> str:
 
     Same serializer and salt as `create_session_cookie`, so `verify_session_cookie`
     authenticates and IP-binds it identically.
+
+    `k` marks the hash as keyed (from LENNY_SEED). Cookies minted before the
+    hash was keyed lack it and carry a hash no loan matches any more, so
+    `get_authenticated_identity` treats them as signed out.
     """
     serializer = _get_serializer()
-    data = {"patron_email_hash": patron_email_hash}
+    data = {"patron_email_hash": patron_email_hash, "k": HASHED_COOKIE_KEY_VERSION}
     if ip:
         data["ip"] = ip
     return serializer.dumps(data)

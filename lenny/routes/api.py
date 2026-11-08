@@ -217,6 +217,9 @@ def get_authenticated_identity(
         client_ip = request.client.host if (request is not None and request.client) else None
         data = auth.verify_session_cookie(session, client_ip=client_ip)
         if isinstance(data, dict) and data.get("patron_email_hash"):
+            # A hash cookie from before the hash was keyed would strand loans under a dead identity.
+            if data.get("k") != auth.HASHED_COOKIE_KEY_VERSION:
+                return None, False
             return data["patron_email_hash"], True
         tok = AccessToken.authenticate(session)
         if tok and tok.has_scope(scope):

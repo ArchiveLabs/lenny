@@ -97,7 +97,7 @@ Reading needs an active loan regardless, and every grant already carries
 that.** It is never recomputed from an email address and never accepted from the
 caller: the mint reads `patron_email_hash` off the authenticated token, the
 ticket stores only that hash, and redeem takes no identity parameter. Open
-Library sends the address as a binding `login_hint`, so `sha256(address)` is
+Library sends the address as a binding `login_hint`, so `hash_email(address)` is
 *usually* equal to the token's hash — but not reliably (the hint is optional, is
 dropped on a forced re-authentication, and may differ under external OIDC, and
 grants predating the hint carry whatever was proved then), so deriving identity
