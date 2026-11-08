@@ -163,6 +163,18 @@ app.add_middleware(
 # an exact-string compare, so the guard silently stopped applying and emitted no
 # signal. Matching the resolved endpoint instead cannot drift with the mount.
 # GHSA-rf64-p839-cgwq.
+#
+# THIS IS A MANUAL ALLOWLIST AND CANNOT BE AUTO-ENFORCED. Any endpoint that
+# emits a consent handle or an authorization code in a response a browser could
+# read cross-origin MUST be added here BY HAND. A test that tried to enforce
+# completeness automatically was written, reviewed, and removed: a static
+# analysis of "which route emits a secret" under-approximates — a future route
+# returning the code via a non-template response (HTMLResponse, RedirectResponse)
+# renders no detectable marker, so the test passed green while the route shipped
+# unguarded, which is worse than no test because it stops anyone looking. The
+# durable fix for that class is to default-deny CORS for the whole router and
+# allowlist the safe exceptions; that is a larger, app-wide change tracked
+# separately (Option A follow-up to GHSA-rf64-p839-cgwq), not landed here.
 _CONSENT_SCREEN_ENDPOINTS = frozenset((
     oauth2_routes.authorize,
     oauth2_routes.authorize_decision,
@@ -178,6 +190,12 @@ def _serves_consent_screen(scope) -> bool:
     (returning False here) for anything that did not resolve to a route, such as
     a 404 or a trailing-slash redirect — neither of which carries the consent
     page, so there is nothing to protect in those responses.
+
+    LIMITATION (shipped, not just a test gap): the match is by endpoint-object
+    IDENTITY, so wrapping or re-decorating `authorize`/`authorize_decision` with
+    something that replaces the function object would change the identity and
+    silently disable this guard. If you wrap these endpoints, update the set to
+    the new objects.
     """
     return getattr(scope.get("route"), "endpoint", None) in _CONSENT_SCREEN_ENDPOINTS
 
