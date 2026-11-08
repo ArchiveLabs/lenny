@@ -42,8 +42,9 @@ belongs to Mek. This PR collects the verdicts; Mek runs the dismissals.
 
 ## Definition of done
 
-- [ ] Every one of the 24 alerts carries a verdict in the PR body
-- [ ] The five `api.py` stack-trace sites return a fixed message and log the detail
-- [ ] #11 has a regression test, proven red against the swapped order
-- [ ] #12/#13 resolved deliberately (parsed-host comparison)
-- [ ] PR body separates what was verified by RUNNING from what by READING
+- [x] Every one of the 24 alerts carries a verdict in the PR body
+- [x] The `api.py` stack-trace sites return a fixed message and log the detail
+      (all 9 leak sites of the class, not just the 5 flagged)
+- [x] #11 has a regression test, proven red against the swapped order
+- [x] #12/#13 resolved deliberately (parsed-host comparison)
+- [x] PR body separates what was verified by RUNNING from what by READING
