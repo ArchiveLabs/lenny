@@ -20,8 +20,10 @@ Every assertion here has been watched fail against the pre-fix source — see th
 PR body's red-first record.
 """
 
+import ast
 import base64
 import hashlib
+import inspect
 import os
 import secrets
 
@@ -156,10 +158,6 @@ class TestConsentIsNotGrantedToAnyOrigin:
 
 class TestGuardKeysOnResolvedRoute:
 
-    def test_endpoint_set_names_both_consent_handlers(self):
-        assert oauth2_routes.authorize in _CONSENT_SCREEN_ENDPOINTS
-        assert oauth2_routes.authorize_decision in _CONSENT_SCREEN_ENDPOINTS
-
     def test_guard_keys_on_resolved_route_not_observed_path(
             self, client, session_cookie):
         """Mount the REAL oauth2 router under a DIFFERENT prefix than the literal
@@ -203,7 +201,97 @@ class TestGuardKeysOnResolvedRoute:
         """A trailing slash is a 307 redirect, not the consent page: the router
         resolves no route (so the guard correctly does not fire) and the body
         carries no consent handle. This documents the real behaviour — the slash
-        case does not serve a page the guard would need to protect."""
+        case does not serve a page the guard would need to protect.
+
+        Note (red-first record): this assertion also passes against the pre-fix
+        source, which likewise 307s, so it proves documentation, not the guard.
+        """
         r = app_client.get(AUTHORIZE_URL + "/", follow_redirects=False)
         assert r.status_code in (307, 308), r.status_code
         assert 'name="request"' not in r.text
+
+
+# ── Completeness: no future consent surface can ship unguarded ────────────────
+
+# Templates an oauth2 route may render WITHOUT the CORS guard, because they carry
+# no consent handle and no authorization code. Everything else an oauth2 route
+# renders is treated as consent-bearing and MUST be guarded (fail-closed): a new
+# template added later trips this test until it is either guarded or vetted and
+# added here with a reason. `oauth2_error.html` is a plain problem page.
+_NON_CONSENT_OAUTH2_TEMPLATES = frozenset({"oauth2_error.html"})
+
+
+def _module_template_reach():
+    """Map each top-level function in lenny/routes/oauth2.py to the HTML
+    templates it may render, following calls to other functions in the SAME
+    module — so `authorize_decision -> _render_consent -> oauth2_consent.html`
+    is seen, which a grep of authorize_decision's own body would miss (the
+    reviewer's exact concern).
+
+    Blind spot, stated plainly: it only sees string-literal template names in
+    this module. A template whose name is computed, or one rendered by a helper
+    in another module, would not be detected; if that becomes possible this test
+    must grow a response-level check. `test_the_analysis_is_not_blind` below
+    fails if the analysis ever stops seeing the known consent routes, so it
+    cannot silently degrade into a test that passes by covering nothing.
+    """
+    tree = ast.parse(inspect.getsource(oauth2_routes))
+    funcs = {n.name: n for n in tree.body
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    direct_templates, direct_calls = {}, {}
+    for name, node in funcs.items():
+        tmpls, calls = set(), set()
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str) \
+                    and sub.value.endswith(".html"):
+                tmpls.add(sub.value)
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) \
+                    and sub.func.id in funcs:
+                calls.add(sub.func.id)
+        direct_templates[name], direct_calls[name] = tmpls, calls
+
+    def reach(name, seen=None):
+        seen = seen if seen is not None else set()
+        if name in seen or name not in funcs:
+            return set()
+        seen.add(name)
+        found = set(direct_templates[name])
+        for callee in direct_calls[name]:
+            found |= reach(callee, seen)
+        return found
+
+    return {name: reach(name) for name in funcs}
+
+
+class TestEveryConsentRenderingRouteIsGuarded:
+    """Replaces the old tautology (`set contains the two functions we put in it`)
+    with the real invariant: every oauth2 route that can render consent-bearing
+    content is covered by the guard, so a future consent surface cannot ship
+    unguarded with no red test (GHSA-rf64 angle 1)."""
+
+    def test_no_oauth2_route_renders_consent_content_unguarded(self):
+        reach = _module_template_reach()
+        offenders = []
+        for route in oauth2_routes.router.routes:
+            endpoint = getattr(route, "endpoint", None)
+            if endpoint is None:
+                continue
+            consent_bearing = reach.get(endpoint.__name__, set()) - _NON_CONSENT_OAUTH2_TEMPLATES
+            if consent_bearing and endpoint not in _CONSENT_SCREEN_ENDPOINTS:
+                offenders.append(
+                    (getattr(route, "path", "?"), endpoint.__name__, sorted(consent_bearing)))
+        assert not offenders, (
+            "oauth2 route(s) render consent-bearing templates but are not in "
+            "_CONSENT_SCREEN_ENDPOINTS, so the CORS guard will not fire on them: "
+            + repr(offenders))
+
+    def test_the_analysis_is_not_blind(self):
+        """Liveness: the analysis MUST see authorize and authorize_decision as
+        consent-bearing. If it stops, the test above would pass vacuously — a
+        control that reports green while blind."""
+        reach = _module_template_reach()
+        for fn in ("authorize", "authorize_decision"):
+            consent = reach.get(fn, set()) - _NON_CONSENT_OAUTH2_TEMPLATES
+            assert consent, (
+                f"{fn} should render a consent-bearing template; the analysis "
+                f"saw {reach.get(fn)} — it has gone blind")

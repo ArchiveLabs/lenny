@@ -204,6 +204,11 @@ async def no_cross_origin_reads_of_oauth2_authorize(request, call_next):
     headers CORSMiddleware reflected rather than overwrite them with a value.
     """
     response = await call_next(request)
+    # A CORS preflight (OPTIONS) is answered by CORSMiddleware before the router
+    # runs, so scope["route"] is unset and this guard does not strip the
+    # preflight's ACAO/ACAC. That is harmless: a preflight carries no body, and
+    # the actual GET/POST consent response still routes through here and is
+    # stripped, so no handle or code is ever readable cross-origin.
     if _serves_consent_screen(request.scope):
         for header in ("Access-Control-Allow-Origin",
                        "Access-Control-Allow-Credentials"):
