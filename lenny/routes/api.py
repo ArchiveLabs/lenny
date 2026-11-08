@@ -1456,17 +1456,20 @@ def _apply_lending_state(mode: str) -> None:
         prev_mode = configs.read_lending_mode()
         try:
             ol_bootstrap.update_env_file(OL_ENV_PATH, {"LENNY_LENDING_MODE": mode})
-        except OSError as exc:
+        except OSError:
+            # Log the detail (which includes a filesystem path) server-side;
+            # don't return it to the caller.
+            logger.exception("Failed to persist lending mode to env file")
             raise HTTPException(
                 status_code=500,
-                detail=f"Could not persist lending mode: {exc}",
+                detail="Could not persist lending mode",
             )
         try:
             ol_bootstrap.update_env_file(
                 AUTH_ENV_PATH,
                 {"LENNY_EXTERNAL_AUTH_ENABLED": str(external_enabled).lower()},
             )
-        except OSError as exc:
+        except OSError:
             # Best-effort rollback of the first write so disk never holds a
             # half-switch. Plain env files can't do true 2-phase commit, so if
             # the rollback itself fails we log loudly rather than silently.
@@ -1478,9 +1481,10 @@ def _apply_lending_state(mode: str) -> None:
                     "write failed — instance may be in an inconsistent lending state.",
                     mode,
                 )
+            logger.exception("Failed to persist external-auth flag to env file")
             raise HTTPException(
                 status_code=500,
-                detail=f"Could not persist external-auth flag: {exc}",
+                detail="Could not persist external-auth flag",
             )
 
         configs.LENDING_MODE = mode
@@ -1519,10 +1523,13 @@ def _apply_external_enabled(enabled: bool) -> None:
                 ol_bootstrap.update_env_file(
                     AUTH_ENV_PATH, {"LENNY_EXTERNAL_AUTH_ENABLED": "false"}
                 )
-            except OSError as exc:
+            except OSError:
+                # Log the detail (which includes a filesystem path)
+                # server-side; don't return it to the caller.
+                logger.exception("Failed to persist auth.env")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Could not persist auth.env: {exc}",
+                    detail="Could not persist auth.env",
                 )
             configs.EXTERNAL_AUTH_ENABLED = False
 
@@ -1601,12 +1608,15 @@ async def admin_ol_login(request: Request, body: OLLoginRequest = Body(...)):
                 },
             )
             _apply_ol_env_in_process(access, secret, body.email, lending_mode="ol")
-    except OSError as exc:
+    except OSError:
+        # Log the detail (which includes a filesystem path) server-side; don't
+        # return it to the caller. Keep the `error` code — callers depend on it.
+        logger.exception("Failed to persist OL credentials to env file")
         return JSONResponse(
             status_code=500,
             content={
                 "error": "env_write_failed",
-                "message": f"Authenticated but could not persist credentials: {exc}",
+                "message": "Authenticated but could not persist credentials",
             },
         )
 
@@ -1642,12 +1652,15 @@ async def admin_ol_logout(request: Request):
                 },
             )
             _apply_ol_env_in_process(None, None, None, lending_mode="none")
-    except OSError as exc:
+    except OSError:
+        # Log the detail (which includes a filesystem path) server-side; don't
+        # return it to the caller. Keep the `error` code — callers depend on it.
+        logger.exception("Failed to clear OL credentials from env file")
         return JSONResponse(
             status_code=500,
             content={
                 "error": "env_write_failed",
-                "message": f"Could not clear credentials from ol.env: {exc}",
+                "message": "Could not clear credentials from ol.env",
             },
         )
 
@@ -1797,10 +1810,13 @@ async def toggle_ia_auth(request: Request, body: dict = Body(...)):
                 AUTH_ENV_PATH, {"IA_AUTH_ENABLED": "true" if enabled else "false"}
             )
             configs.IA_AUTH_ENABLED = enabled
-    except OSError as exc:
+    except OSError:
+        # Log the detail (which includes a filesystem path) server-side;
+        # don't return it to the caller.
+        logger.exception("Failed to persist IA_AUTH_ENABLED to env file")
         raise HTTPException(
             status_code=500,
-            detail=f"Could not persist IA_AUTH_ENABLED to auth.env: {exc}",
+            detail="Could not persist IA_AUTH_ENABLED to auth.env",
         )
 
     return JSONResponse({"ia_auth_enabled": enabled})
@@ -1857,10 +1873,13 @@ async def put_loan_settings(request: Request):
     # configs.* is unchanged and the response returns the error.
     try:
         ol_bootstrap.update_env_file(LOAN_ENV_PATH, updates)
-    except OSError as exc:
+    except OSError:
+        # Log the detail (which includes a filesystem path) server-side; don't
+        # return it to the caller. Keep the `error` code — callers depend on it.
+        logger.exception("Failed to update loan env file")
         return JSONResponse(
             status_code=500,
-            content={"error": "env_write_failed", "message": f"Could not update loan.env: {exc}"},
+            content={"error": "env_write_failed", "message": "Could not update loan.env"},
         )
 
     if "LENNY_LOAN_LIMIT" in updates:
@@ -2077,10 +2096,13 @@ async def post_loan_limits_settings(request: Request):
 
     try:
         ol_bootstrap.update_env_file(LOAN_ENV_PATH, updates)
-    except OSError as exc:
+    except OSError:
+        # Log the detail (which includes a filesystem path) server-side; don't
+        # return it to the caller. Keep the `error` code — callers depend on it.
+        logger.exception("Failed to update loan env file")
         return JSONResponse(
             status_code=500,
-            content={"error": "env_write_failed", "message": f"Could not update loan.env: {exc}"},
+            content={"error": "env_write_failed", "message": "Could not update loan.env"},
         )
 
     if "LENNY_LOAN_LIMIT" in updates:
@@ -2185,10 +2207,13 @@ async def update_auth_config(request: Request, body: dict = Body(...)):
             try:
                 ExternalAuthService.save_config(updates, AUTH_ENV_PATH)
                 ExternalAuthService.apply_in_process(updates)
-            except OSError as exc:
+            except OSError:
+                # Log the detail (which includes a filesystem path) server-side;
+                # don't return it. Keep the `error` code — callers depend on it.
+                logger.exception("Failed to persist external-auth config to env file")
                 return JSONResponse(
                     status_code=500,
-                    content={"error": "env_write_failed", "message": f"Could not persist config: {exc}"},
+                    content={"error": "env_write_failed", "message": "Could not persist config"},
                 )
 
         if has_enabled:
