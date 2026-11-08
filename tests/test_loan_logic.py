@@ -11,7 +11,6 @@ from unittest.mock import patch, MagicMock, call
 
 os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("LENNY_SEED", "test-seed-for-unit-tests-only-32b!")
-os.environ.setdefault("LENNY_EMAIL_HASH_KEY", "test-email-hash-key-for-unit-tests")
 os.environ.setdefault("ADMIN_INTERNAL_SECRET", "test-internal-secret")
 
 

@@ -1,4 +1,4 @@
-"""The patron identity hash is keyed with LENNY_EMAIL_HASH_KEY, and the migration
+"""The patron identity hash is keyed from LENNY_SEED, and the migration
 that keys existing rows keeps every patron's loans and OAuth grants reachable."""
 
 import hashlib
@@ -13,7 +13,6 @@ import sqlalchemy
 
 os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("LENNY_SEED", "test-seed-for-unit-tests-only-32b!")
-os.environ.setdefault("LENNY_EMAIL_HASH_KEY", "test-email-hash-key-for-unit-tests")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.requests import Request  # noqa: E402
@@ -82,18 +81,22 @@ def test_hash_is_keyed():
     assert h != old_hash(ME), "an unkeyed sha256 must no longer be the identity"
 
 
+def test_the_key_is_derived_not_the_raw_seed():
+    assert configs.EMAIL_HASH_KEY != configs.LENNY_SEED.encode()
+
+
 def test_a_different_key_gives_a_different_hash(monkeypatch):
     h = hash_email(ME)
-    monkeypatch.setattr(configs, "EMAIL_HASH_KEY", "some-other-install-key")
+    monkeypatch.setattr(configs, "EMAIL_HASH_KEY", b"some-other-install-key")
     assert hash_email(ME) != h
 
 
 def test_startup_fails_without_the_key():
-    env = {k: v for k, v in os.environ.items() if k != "LENNY_EMAIL_HASH_KEY"}
+    env = {k: v for k, v in os.environ.items() if k != "LENNY_SEED"}
     r = subprocess.run([sys.executable, "-c", "import lenny.configs"], env=env,
                        capture_output=True, text=True)
     assert r.returncode != 0
-    assert "LENNY_EMAIL_HASH_KEY is not set" in r.stderr
+    assert "LENNY_SEED is not set" in r.stderr
 
 
 # ── stale handoff cookies ────────────────────────────────────────────────────
@@ -124,7 +127,7 @@ def test_migration_keeps_loans_and_grants_reachable():
     db.commit()
     assert not Loan.exists(item.id, ME), "precondition: old rows don't match the keyed hash"
 
-    assert load_migration().rehash(db.connection(), configs.EMAIL_HASH_KEY.encode()) == 1
+    assert load_migration().rehash(db.connection(), configs.EMAIL_HASH_KEY) == 1
     db.commit()
     db.expire_all()
 

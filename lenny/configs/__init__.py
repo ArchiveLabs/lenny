@@ -7,6 +7,8 @@
     :license: see LICENSE for more details
 """
 
+import hashlib
+import hmac
 import os
 from typing import Optional
 
@@ -47,15 +49,15 @@ READIUM_PORT = int(os.environ.get('READIUM_PORT', 15080))
 READIUM_BASE_URL = f"http://lenny_readium:{READIUM_PORT}"
 
 LENNY_SEED = os.environ.get('LENNY_SEED')
-# Keys the patron identity hash (lenny.core.utils.hash_email). Separate from
-# LENNY_SEED so rotating the seed never breaks patron history. Losing or
-# changing it orphans every loan and OAuth grant: back it up with the database.
-EMAIL_HASH_KEY = os.environ.get('LENNY_EMAIL_HASH_KEY')
-if not EMAIL_HASH_KEY:
+if not LENNY_SEED:
     raise RuntimeError(
-        "LENNY_EMAIL_HASH_KEY is not set. Run `make update` (or docker/configure.sh "
-        "on a fresh install) to generate it in .env. If this install had one, restore "
-        "it from backup: a new key makes every existing patron's loans unreachable.")
+        "LENNY_SEED is not set. Run docker/configure.sh (fresh install) or `make update` "
+        "to generate it in .env. If this install had one, restore it from backup: a new "
+        "seed makes every existing patron's loans unreachable.")
+# Keys the patron identity hash (lenny.core.utils.hash_email). Derived from the
+# seed so it is never the same key the cookies are signed with. Changing
+# LENNY_SEED orphans every loan and OAuth grant: back it up with the database.
+EMAIL_HASH_KEY = hmac.new(LENNY_SEED.encode('utf-8'), b'lenny:patron-email-hash', hashlib.sha256).digest()
 # Boot/default values. These are cached per-worker at import; the authoritative
 # cross-worker source is loan.env, read fresh by get_loan_limit() /
 # get_loan_duration_days() below. The globals remain the fallback (and the

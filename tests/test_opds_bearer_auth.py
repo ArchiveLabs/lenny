@@ -16,7 +16,6 @@ import sqlalchemy
 
 os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("LENNY_SEED", "test-seed-for-unit-tests-only-32b!")
-os.environ.setdefault("LENNY_EMAIL_HASH_KEY", "test-email-hash-key-for-unit-tests")
 
 from lenny.core.db import Base, engine  # noqa: E402
 from lenny.core.db import session as db  # noqa: E402

@@ -7,7 +7,7 @@ tested and reused.
 Patron identity disclosure
 --------------------------
 `Loan.patron_email_hash` is a one-way HMAC-SHA256 of the patron's email,
-keyed with the per-install `LENNY_EMAIL_HASH_KEY` (see
+keyed from the per-install `LENNY_SEED` (see
 `lenny.core.utils.hash_email`). It is intentionally not reversible, no
 plaintext is stored, and a list of addresses cannot be matched against it
 without the key. Admin UI shows the first 12 hex chars of the

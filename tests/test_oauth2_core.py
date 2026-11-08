@@ -18,7 +18,6 @@ import sqlalchemy
 
 os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("LENNY_SEED", "oauth2-unit-test-seed-32-chars-ok")
-os.environ.setdefault("LENNY_EMAIL_HASH_KEY", "test-email-hash-key-for-unit-tests")
 
 from lenny.core import oauth2  # noqa: E402
 from lenny.core.db import Base, engine  # noqa: E402

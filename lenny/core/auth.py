@@ -196,7 +196,7 @@ def create_hashed_session_cookie(patron_email_hash: str, ip: str = None) -> str:
     Same serializer and salt as `create_session_cookie`, so `verify_session_cookie`
     authenticates and IP-binds it identically.
 
-    `k` marks the hash as keyed (LENNY_EMAIL_HASH_KEY). Cookies minted before the
+    `k` marks the hash as keyed (from LENNY_SEED). Cookies minted before the
     hash was keyed lack it and carry a hash no loan matches any more, so
     `get_authenticated_identity` treats them as signed out.
     """

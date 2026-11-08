@@ -17,7 +17,6 @@ import pytest
 
 os.environ.setdefault("TESTING", "true")
 os.environ.setdefault("LENNY_SEED", "oauth2-endpoint-test-seed-32-char")
-os.environ.setdefault("LENNY_EMAIL_HASH_KEY", "test-email-hash-key-for-unit-tests")
 
 from fastapi.testclient import TestClient  # noqa: E402
 

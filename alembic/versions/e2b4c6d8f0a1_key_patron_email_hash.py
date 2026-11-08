@@ -1,4 +1,4 @@
-"""key patron email hash with LENNY_EMAIL_HASH_KEY
+"""key patron email hash with a key derived from LENNY_SEED
 
 Before this revision a patron was identified by sha256(normalized email), an
 unkeyed hash anyone holding a DB copy and a list of addresses could reverse.
@@ -43,8 +43,8 @@ def rehash(conn, key: bytes) -> int:
 
 
 def upgrade() -> None:
-    from lenny import configs  # raises at import if LENNY_EMAIL_HASH_KEY is missing
-    rehash(op.get_bind(), configs.EMAIL_HASH_KEY.encode("utf-8"))
+    from lenny import configs  # raises at import if LENNY_SEED is missing
+    rehash(op.get_bind(), configs.EMAIL_HASH_KEY)
 
 
 def downgrade() -> None:
