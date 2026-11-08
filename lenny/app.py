@@ -152,8 +152,38 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+# The consent screen is served by exactly these two endpoints: the GET renders
+# it, the POST submits the patron's decision. The guard below recognises them by
+# the route the router actually matched (`request.scope["route"].endpoint`),
+# which is the same function object no matter what external URL reaches it.
+#
+# The previous version keyed on `request.url.path == "/v1/api/oauth2/authorize"`
+# — the externally observed path — and failed OPEN wherever that path differed:
+# an ASGI root_path, a mount prefix, or a trailing-slash redirect all walk past
+# an exact-string compare, so the guard silently stopped applying and emitted no
+# signal. Matching the resolved endpoint instead cannot drift with the mount.
+# GHSA-rf64-p839-cgwq.
+_CONSENT_SCREEN_ENDPOINTS = frozenset((
+    oauth2_routes.authorize,
+    oauth2_routes.authorize_decision,
+))
+
+
+def _serves_consent_screen(scope) -> bool:
+    """True when this request resolved to an OAuth2 consent-screen endpoint.
+
+    Keyed on the matched route's endpoint, never on the observed URL path, so a
+    mount prefix or root_path cannot make the guard silently stop applying.
+    `scope["route"]` is populated by the router during `call_next`; it is absent
+    (returning False here) for anything that did not resolve to a route, such as
+    a 404 or a trailing-slash redirect — neither of which carries the consent
+    page, so there is nothing to protect in those responses.
+    """
+    return getattr(scope.get("route"), "endpoint", None) in _CONSENT_SCREEN_ENDPOINTS
+
+
 # Added after CORSMiddleware, so it is the outermost layer and sees the response
-# last — which is what lets it override the CORS headers that middleware sets.
+# last — which is what lets it strip the CORS headers that middleware set.
 @app.middleware("http")
 async def no_cross_origin_reads_of_oauth2_authorize(request, call_next):
     """Keep the consent screen out of reach of other origins' JavaScript.
@@ -167,12 +197,18 @@ async def no_cross_origin_reads_of_oauth2_authorize(request, call_next):
     today, but it is a cookie set in another module and nothing here owns it.
 
     Nothing should ever read this page with JavaScript; it is a navigation
-    target. Saying so explicitly costs nothing.
+    target. The denial here is the *absence* of the CORS headers — not
+    `Access-Control-Allow-Origin: null`, which would NOT deny: `null` is a real
+    origin that sandboxed iframes and `data:` documents send, so setting it
+    grants exactly that attacker-reachable origin. So we remove the permissive
+    headers CORSMiddleware reflected rather than overwrite them with a value.
     """
     response = await call_next(request)
-    if request.url.path == "/v1/api/oauth2/authorize":
-        response.headers["Access-Control-Allow-Origin"] = "null"
-        response.headers["Access-Control-Allow-Credentials"] = "false"
+    if _serves_consent_screen(request.scope):
+        for header in ("Access-Control-Allow-Origin",
+                       "Access-Control-Allow-Credentials"):
+            if header in response.headers:
+                del response.headers[header]
     return response
 
 
