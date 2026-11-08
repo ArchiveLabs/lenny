@@ -784,7 +784,11 @@ class TestConsentIntegrity:
         _, challenge = pkce()
         r = app_client.get(AUTHORIZE_URL, params=authorize_params(obj, challenge),
                            cookies={"session": session_cookie}, follow_redirects=False)
-        assert "consumer.example.org" in r.text, (
+        # Compare the host parsed from the registered redirect_uri rather than a
+        # hardcoded substring (CodeQL py/incomplete-url-substring-sanitization,
+        # #266 #13): the assertion now tracks REDIRECT instead of a literal.
+        expected_host = urlparse(REDIRECT).hostname
+        assert expected_host and expected_host in r.text, (
             "the consent screen does not show where the patron will be sent")
 
     def test_consent_says_the_library_vetted_this_client(

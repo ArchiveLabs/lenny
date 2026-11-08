@@ -22,6 +22,7 @@ import secrets
 import tempfile
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -845,7 +846,11 @@ class TestAuthorizeRejectsUnusableRedirectUri:
                 f"/v1/api/oauth/authorize?redirect_uri={self.OPDS_CLIENT}",
                 follow_redirects=False,
             )
-        assert "reader.example.org" in caplog.text
+        # Compare the host parsed from the client URI rather than a hardcoded
+        # substring (CodeQL py/incomplete-url-substring-sanitization, #266 #12):
+        # the assertion now tracks OPDS_CLIENT instead of a literal.
+        expected_host = urlparse(self.OPDS_CLIENT).hostname
+        assert expected_host and expected_host in caplog.text
         assert "LENNY_OPDS_ALLOWED_HOSTS" in caplog.text
 
 
