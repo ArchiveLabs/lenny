@@ -129,7 +129,7 @@ services:
       - lenny_network
 
   readium:
-    image: ghcr.io/readium/readium:0.6.3
+    image: ghcr.io/readium/readium:0.10.1
     container_name: lenny_readium
     ports:
       - "${READIUM_PORT:-15080}"

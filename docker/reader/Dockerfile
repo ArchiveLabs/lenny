@@ -24,7 +24,8 @@ RUN apt-get update && apt-get install -y git
 # this value invalidates the build cache from this line onward — deterministic
 # on both BuildKit and the classic builder — so `make update` re-clones and
 # checks out the new commit. No floating HEAD = no surprise upstream drift.
-ARG THORIUM_REF=071c8bbf57d67396d9f7b2dca622099529a15b0a
+# v1.7.0
+ARG THORIUM_REF=8d49c2b116e93ca50d4ccfdcb3226efde7bc49c8
 
 RUN git clone https://github.com/edrlab/thorium-web.git && \
     cd thorium-web && \

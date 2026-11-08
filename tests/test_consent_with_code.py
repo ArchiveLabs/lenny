@@ -6,7 +6,7 @@ anything asked for a decision. The consent now carries the code field, so the
 request is stated once and answered once.
 
 The binding is the part that matters and it is not cosmetic. A loan keys on
-`patron_email_hash`, a SHA-256 of the lowercased address
+`patron_email_hash`, a keyed hash of the lowercased address
 (`lenny/core/utils.hash_email`, used by `Loan.patron_email_hash`). If the grant
 were recorded against any address other than the one Open Library will use, the
 consumer would hold a working token for a loan it cannot read — a dead end with

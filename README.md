@@ -396,6 +396,8 @@ This single command handles everything automatically:
 
 Your data (database, books, S3 storage) is preserved across updates. A database backup is saved to `backups/` before every update. If anything goes wrong, re-run `make update` — every step is idempotent.
 
+> **Back up `LENNY_SEED` together with your database, and never change it.** It lives in `.env` and, besides signing sessions, keys the hash that identifies patrons. A database restored with a different seed still loads, but no patron's loans or app sign-ins match any more.
+
 ### First-time upgrade (existing installations)
 
 If your Lenny installation predates the update engine (no `make update` command yet), you need a one-time manual bootstrap:
