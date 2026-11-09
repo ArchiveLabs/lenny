@@ -152,29 +152,11 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
-# The consent screen is served by exactly these two endpoints: the GET renders
-# it, the POST submits the patron's decision. The guard below recognises them by
-# the route the router actually matched (`request.scope["route"].endpoint`),
-# which is the same function object no matter what external URL reaches it.
-#
-# The previous version keyed on `request.url.path == "/v1/api/oauth2/authorize"`
-# — the externally observed path — and failed OPEN wherever that path differed:
-# an ASGI root_path, a mount prefix, or a trailing-slash redirect all walk past
-# an exact-string compare, so the guard silently stopped applying and emitted no
-# signal. Matching the resolved endpoint instead cannot drift with the mount.
-# GHSA-rf64-p839-cgwq.
-#
-# THIS IS A MANUAL ALLOWLIST AND CANNOT BE AUTO-ENFORCED. Any endpoint that
-# emits a consent handle or an authorization code in a response a browser could
-# read cross-origin MUST be added here BY HAND. A test that tried to enforce
-# completeness automatically was written, reviewed, and removed: a static
-# analysis of "which route emits a secret" under-approximates — a future route
-# returning the code via a non-template response (HTMLResponse, RedirectResponse)
-# renders no detectable marker, so the test passed green while the route shipped
-# unguarded, which is worse than no test because it stops anyone looking. The
-# durable fix for that class is to default-deny CORS for the whole router and
-# allowlist the safe exceptions; that is a larger, app-wide change tracked
-# separately (Option A follow-up to GHSA-rf64-p839-cgwq), not landed here.
+# The consent screen (GET renders it, POST submits the decision). The guard
+# below matches on the route the router resolved, not on the observed URL path,
+# so a mount prefix or root_path cannot silently switch it off. This is a manual
+# allowlist: any new endpoint that emits a consent handle or authorization code
+# must be added here by hand. GHSA-rf64-p839-cgwq.
 _CONSENT_SCREEN_ENDPOINTS = frozenset((
     oauth2_routes.authorize,
     oauth2_routes.authorize_decision,
@@ -186,47 +168,28 @@ def _serves_consent_screen(scope) -> bool:
 
     Keyed on the matched route's endpoint, never on the observed URL path, so a
     mount prefix or root_path cannot make the guard silently stop applying.
-    `scope["route"]` is populated by the router during `call_next`; it is absent
-    (returning False here) for anything that did not resolve to a route, such as
-    a 404 or a trailing-slash redirect — neither of which carries the consent
-    page, so there is nothing to protect in those responses.
-
-    LIMITATION (shipped, not just a test gap): the match is by endpoint-object
-    IDENTITY, so wrapping or re-decorating `authorize`/`authorize_decision` with
-    something that replaces the function object would change the identity and
-    silently disable this guard. If you wrap these endpoints, update the set to
-    the new objects.
+    Match is by endpoint-object identity, so wrapping or re-decorating these
+    endpoints would change the identity and disable the guard — update the set.
     """
     return getattr(scope.get("route"), "endpoint", None) in _CONSENT_SCREEN_ENDPOINTS
 
 
-# Added after CORSMiddleware, so it is the outermost layer and sees the response
-# last — which is what lets it strip the CORS headers that middleware set.
+# Added after CORSMiddleware, so it is the outermost layer and strips the CORS
+# headers that middleware set.
 @app.middleware("http")
 async def no_cross_origin_reads_of_oauth2_authorize(request, call_next):
     """Keep the consent screen out of reach of other origins' JavaScript.
 
-    The app-wide policy is `allow_origin_regex=".*"` with
-    `allow_credentials=True`, which reflects whatever Origin asks. That is a
-    deliberate choice for OPDS clients, but this endpoint is cookie
-    authenticated and renders a consent handle, so reflecting an attacker's
-    origin would let their page read the handle and submit it — an
-    authorization code with no click. `SameSite=Lax` happens to prevent that
-    today, but it is a cookie set in another module and nothing here owns it.
-
-    Nothing should ever read this page with JavaScript; it is a navigation
-    target. The denial here is the *absence* of the CORS headers — not
-    `Access-Control-Allow-Origin: null`, which would NOT deny: `null` is a real
-    origin that sandboxed iframes and `data:` documents send, so setting it
-    grants exactly that attacker-reachable origin. So we remove the permissive
-    headers CORSMiddleware reflected rather than overwrite them with a value.
+    The app-wide policy reflects any Origin with credentials (for OPDS clients),
+    but this cookie-authenticated page renders a consent handle, so a reflected
+    attacker origin could read it. The denial is the *absence* of the CORS
+    headers — not `Access-Control-Allow-Origin: null`, which is a real origin
+    sandboxed iframes and `data:` documents send and so would grant, not deny —
+    so we remove the headers CORSMiddleware reflected rather than overwrite them.
     """
     response = await call_next(request)
-    # A CORS preflight (OPTIONS) is answered by CORSMiddleware before the router
-    # runs, so scope["route"] is unset and this guard does not strip the
-    # preflight's ACAO/ACAC. That is harmless: a preflight carries no body, and
-    # the actual GET/POST consent response still routes through here and is
-    # stripped, so no handle or code is ever readable cross-origin.
+    # A preflight (OPTIONS) is answered before the router runs, so scope["route"]
+    # is unset and it is not stripped; harmless, as a preflight carries no body.
     if _serves_consent_screen(request.scope):
         for header in ("Access-Control-Allow-Origin",
                        "Access-Control-Allow-Credentials"):
