@@ -8,6 +8,7 @@ inputs change. Red-first: each sensitivity test first mutates an input and watch
 the hash move, then restores and watches it return.
 """
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -103,3 +104,40 @@ def test_admin_build_arg_in_hash():
     # The other images do not bake this value.
     for other in ("api", "reader", "opds"):
         assert tag(other, env=env) == base[other]
+
+
+def test_update_path_folds_env_next_public_api_url():
+    """Regression for the CI/consume drift: `make start` sources .env but
+    `make update` does not, so without lenny_load_baked_env the two paths would
+    compute different admin tags for the same install — one failing loudly, the
+    other silently pulling the shared empty-URL image. The shared helper must
+    load NEXT_PUBLIC_API_URL from .env when it is unset, so the update path
+    resolves the SAME tag `make start` does.
+    """
+    env_file = ROOT / ".env"
+    if env_file.exists():
+        pytest.skip("real .env present; not clobbering it")
+
+    custom = "https://api.example.org"
+    try:
+        env_file.write_text(f"NEXT_PUBLIC_API_URL={custom}\n")
+        # Update path: NEXT_PUBLIC_API_URL is NOT in the environment; the value
+        # lives only in .env. Source the helper and resolve tags.
+        script = (
+            f'source "{ROOT}/docker/utils/images.sh"; '
+            "unset NEXT_PUBLIC_API_URL; "
+            "lenny_export_image_tags; "
+            'printf "%s" "$LENNY_ADMIN_TAG"'
+        )
+        clean_env = {k: v for k, v in os.environ.items() if k != "NEXT_PUBLIC_API_URL"}
+        resolved = subprocess.run(
+            ["bash", "-c", script], cwd=ROOT, capture_output=True, text=True,
+            env=clean_env, check=True,
+        ).stdout.strip()
+    finally:
+        env_file.unlink(missing_ok=True)
+
+    expected = tag("admin", env=dict(os.environ, NEXT_PUBLIC_API_URL=custom))
+    empty = tag("admin", env=dict(os.environ, NEXT_PUBLIC_API_URL=""))
+    assert resolved == expected, "update path must fold the custom .env value into the admin tag"
+    assert resolved != empty, "custom-value install must not resolve to the shared empty-URL image"

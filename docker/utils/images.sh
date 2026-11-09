@@ -16,12 +16,28 @@ lenny_svc_tag_var() {
     printf 'LENNY_%s_TAG' "$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
 }
 
+# Ensure the per-install build args that are folded into an image hash are set
+# IDENTICALLY on every entry point. `make start` (lenny.sh) sources .env before
+# resolving tags, but `make update` does not (its pipeline steps run as separate
+# subprocesses), so without this the two paths would compute different admin
+# hashes for the same install — one pulling the shared empty-URL image, the
+# other failing loudly. NEXT_PUBLIC_API_URL is the only such arg today.
+lenny_load_baked_env() {
+    local root="${LENNY_ROOT:-$(git -C "$_images_dir" rev-parse --show-toplevel 2>/dev/null)}"
+    if [ -z "${NEXT_PUBLIC_API_URL+x}" ] && [ -n "$root" ] && [ -f "$root/.env" ]; then
+        local v
+        v="$(grep -E '^NEXT_PUBLIC_API_URL=' "$root/.env" | tail -1 | cut -d= -f2-)"
+        export NEXT_PUBLIC_API_URL="$v"
+    fi
+}
+
 # Resolve the content-hash tag for every prebaked service and export it as the
 # compose variable compose.yaml reads. After this, `${LENNY_<SVC>_TAG}` selects
 # the exact image whose inputs match the local tree — not `latest`, which could
 # silently be a different build.
 lenny_export_image_tags() {
     local svc var tag
+    lenny_load_baked_env
     for svc in $LENNY_IMAGE_SERVICES; do
         var="$(lenny_svc_tag_var "$svc")"
         tag="$(bash "$_images_dir/image-hash.sh" tag "$svc")"
@@ -41,6 +57,8 @@ lenny_missing_image_error() {
         echo "[images]   This tag is the content hash of ${svc}'s inputs. CI publishes it on merge"
         echo "[images]   to main (.github/workflows/docker-publish.yml). If you are on an unmerged"
         echo "[images]   branch, or the image is still building, it does not exist yet."
+        echo "[images]   A 401/denied pull instead means the ghcr packages are private or this host"
+        echo "[images]   is not logged in — make them public, or run: docker login ghcr.io"
         if [ "$svc" = "admin" ]; then
             echo "[images]   NOTE: a custom NEXT_PUBLIC_API_URL is folded into this hash BY DESIGN, so a"
             echo "[images]   non-empty value can NEVER match a published image. Either leave it empty to"
@@ -78,7 +96,17 @@ lenny_pull_images() {
     for svc in $LENNY_IMAGE_SERVICES; do
         var="$(lenny_svc_tag_var "$svc")"
         tag="${!var}"
+        ref="$(bash "$_images_dir/image-hash.sh" image "$svc"):$tag"
         echo "[images] $svc -> $tag"
+        # Honor a correct image already on this host before reaching for the
+        # network. Otherwise a reboot or `make start` during a transient ghcr
+        # outage would fail the pull, declare the image missing, and refuse to
+        # start a stack whose images are all present — turning a registry blip
+        # into a full outage.
+        if docker image inspect "$ref" >/dev/null 2>&1; then
+            echo "[images] $svc: present locally, skipping pull."
+            continue
+        fi
         if $compose -p "$project" pull "$svc" 2>/dev/null; then
             continue
         fi
