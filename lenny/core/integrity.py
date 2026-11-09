@@ -87,10 +87,10 @@ def verify_email_hash_key(session=db) -> None:
         session.commit()
         return
     if row.fingerprint != live:
-        # KNOWN GAP (ArchiveLabs/lenny#269): this is the silent case. The live
-        # seed does not match the data, but we only note it and carry on, so the
-        # app serves traffic that matches no patron. Converting this into a hard
-        # refusal is the fix.
-        logger.warning(
-            "LENNY_SEED fingerprint mismatch: the configured seed does not "
-            "match the data on disk.")
+        raise SeedMismatchError(
+            "This database was written with a different LENNY_SEED than the one "
+            "now configured. Every patron's loans and OAuth grants are keyed to "
+            "the original seed and are unreachable under this one. Do NOT run "
+            "with this seed. Restore the matching LENNY_SEED from your .env "
+            "backup, or restore the database backup taken before the seed "
+            "changed (backups/). The seed value is not shown.")
