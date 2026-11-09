@@ -152,27 +152,49 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
-# Added after CORSMiddleware, so it is the outermost layer and sees the response
-# last — which is what lets it override the CORS headers that middleware sets.
+# The consent screen (GET renders it, POST submits the decision). The guard
+# below matches on the route the router resolved, not on the observed URL path,
+# so a mount prefix or root_path cannot silently switch it off. This is a manual
+# allowlist: any new endpoint that emits a consent handle or authorization code
+# must be added here by hand. GHSA-rf64-p839-cgwq.
+_CONSENT_SCREEN_ENDPOINTS = frozenset((
+    oauth2_routes.authorize,
+    oauth2_routes.authorize_decision,
+))
+
+
+def _serves_consent_screen(scope) -> bool:
+    """True when this request resolved to an OAuth2 consent-screen endpoint.
+
+    Keyed on the matched route's endpoint, never on the observed URL path, so a
+    mount prefix or root_path cannot make the guard silently stop applying.
+    Match is by endpoint-object identity, so wrapping or re-decorating these
+    endpoints would change the identity and disable the guard — update the set.
+    """
+    return getattr(scope.get("route"), "endpoint", None) in _CONSENT_SCREEN_ENDPOINTS
+
+
+# Added after CORSMiddleware, so it is the outermost layer and strips the CORS
+# headers that middleware set.
 @app.middleware("http")
 async def no_cross_origin_reads_of_oauth2_authorize(request, call_next):
     """Keep the consent screen out of reach of other origins' JavaScript.
 
-    The app-wide policy is `allow_origin_regex=".*"` with
-    `allow_credentials=True`, which reflects whatever Origin asks. That is a
-    deliberate choice for OPDS clients, but this endpoint is cookie
-    authenticated and renders a consent handle, so reflecting an attacker's
-    origin would let their page read the handle and submit it — an
-    authorization code with no click. `SameSite=Lax` happens to prevent that
-    today, but it is a cookie set in another module and nothing here owns it.
-
-    Nothing should ever read this page with JavaScript; it is a navigation
-    target. Saying so explicitly costs nothing.
+    The app-wide policy reflects any Origin with credentials (for OPDS clients),
+    but this cookie-authenticated page renders a consent handle, so a reflected
+    attacker origin could read it. The denial is the *absence* of the CORS
+    headers — not `Access-Control-Allow-Origin: null`, which is a real origin
+    sandboxed iframes and `data:` documents send and so would grant, not deny —
+    so we remove the headers CORSMiddleware reflected rather than overwrite them.
     """
     response = await call_next(request)
-    if request.url.path == "/v1/api/oauth2/authorize":
-        response.headers["Access-Control-Allow-Origin"] = "null"
-        response.headers["Access-Control-Allow-Credentials"] = "false"
+    # A preflight (OPTIONS) is answered before the router runs, so scope["route"]
+    # is unset and it is not stripped; harmless, as a preflight carries no body.
+    if _serves_consent_screen(request.scope):
+        for header in ("Access-Control-Allow-Origin",
+                       "Access-Control-Allow-Credentials"):
+            if header in response.headers:
+                del response.headers[header]
     return response
 
 
