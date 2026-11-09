@@ -36,6 +36,26 @@ app = FastAPI(
 )
 
 @app.on_event("startup")
+def _verify_email_hash_key() -> None:
+    """Refuse to serve data written under a different LENNY_SEED.
+
+    A changed seed otherwise starts cleanly and matches no patron
+    (ArchiveLabs/lenny#269). A SeedMismatchError here fails the lifespan startup,
+    so uvicorn exits instead of serving orphaned data — the loud failure the
+    absent-seed case already gets. Skipped under TESTING (the in-memory DB has no
+    stored fingerprint); the guard itself is covered directly in
+    tests/test_seed_integrity.py.
+    """
+    if os.environ.get("TESTING"):
+        return
+    from lenny.core.integrity import verify_email_hash_key
+    try:
+        verify_email_hash_key()
+    finally:
+        db_session.remove()
+
+
+@app.on_event("startup")
 def _warm_preload_catalog() -> None:
     """Build the free-books catalog in the background so the first admin visit is instant.
     Never delays or breaks start-up."""
