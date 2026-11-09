@@ -209,18 +209,8 @@ class TestGuardKeysOnResolvedRoute:
         assert 'name="request"' not in r.text
 
 
-# NO COMPLETENESS TEST HERE — ON PURPOSE.
-#
-# An automated completeness guard was written here (a static transitive
-# template-usage analysis asserting every consent-rendering oauth2 route was in
-# `_CONSENT_SCREEN_ENDPOINTS`) and REMOVED after adversarial review. It failed
-# closed in the wrong direction: a future route returning the authorization code
-# via a non-template response (HTMLResponse/RedirectResponse) renders no `.html`
-# literal, so the analysis saw nothing and the test passed GREEN while the route
-# would ship unguarded — a control reporting green over the exact blind spot it
-# existed to catch, which is worse than none because it stops the next person
-# looking. The guarded set is therefore a documented MANUAL allowlist (see the
-# comment on `_CONSENT_SCREEN_ENDPOINTS` in lenny/app.py). The durable, enforced
-# fix is to default-deny CORS for the whole router and allowlist the safe
-# exceptions; that is an app-wide change tracked as a separate follow-up to
-# GHSA-rf64-p839-cgwq, not landed in this PR.
+# No completeness test on purpose: a static check of which routes render a
+# consent template under-approximates (a route returning the code via
+# HTMLResponse renders no .html literal), so it would pass green over the
+# blind spot it exists to catch. _CONSENT_SCREEN_ENDPOINTS is a manual
+# allowlist; the enforced fix is router-wide default-deny, tracked separately.
