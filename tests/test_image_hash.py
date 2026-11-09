@@ -106,21 +106,28 @@ def test_admin_build_arg_in_hash():
         assert tag(other, env=env) == base[other]
 
 
-def test_update_path_folds_env_next_public_api_url():
+@pytest.mark.parametrize("raw_value,logical_value", [
+    ("https://api.example.org", "https://api.example.org"),           # unquoted (configure.sh style)
+    ('"https://library.example.com/v1/api"', "https://library.example.com/v1/api"),  # double-quoted (hand-edited)
+    ("'https://single.example/api'", "https://single.example/api"),   # single-quoted
+])
+def test_update_path_folds_env_next_public_api_url(raw_value, logical_value):
     """Regression for the CI/consume drift: `make start` sources .env but
     `make update` does not, so without lenny_load_baked_env the two paths would
     compute different admin tags for the same install — one failing loudly, the
-    other silently pulling the shared empty-URL image. The shared helper must
-    load NEXT_PUBLIC_API_URL from .env when it is unset, so the update path
-    resolves the SAME tag `make start` does.
+    other silently pulling the shared empty-URL image.
+
+    The shared helper must load NEXT_PUBLIC_API_URL from .env when unset AND
+    parse it the same way lenny.sh:6's `export $(grep ... | xargs)` does — xargs
+    strips matching surrounding quotes, so a quoted .env value must resolve to
+    the SAME tag the unquoted logical value does, not a quotes-included one.
     """
     env_file = ROOT / ".env"
     if env_file.exists():
         pytest.skip("real .env present; not clobbering it")
 
-    custom = "https://api.example.org"
     try:
-        env_file.write_text(f"NEXT_PUBLIC_API_URL={custom}\n")
+        env_file.write_text(f"NEXT_PUBLIC_API_URL={raw_value}\n")
         # Update path: NEXT_PUBLIC_API_URL is NOT in the environment; the value
         # lives only in .env. Source the helper and resolve tags.
         script = (
@@ -137,7 +144,7 @@ def test_update_path_folds_env_next_public_api_url():
     finally:
         env_file.unlink(missing_ok=True)
 
-    expected = tag("admin", env=dict(os.environ, NEXT_PUBLIC_API_URL=custom))
+    expected = tag("admin", env=dict(os.environ, NEXT_PUBLIC_API_URL=logical_value))
     empty = tag("admin", env=dict(os.environ, NEXT_PUBLIC_API_URL=""))
-    assert resolved == expected, "update path must fold the custom .env value into the admin tag"
+    assert resolved == expected, "update path must resolve the same admin tag make start does"
     assert resolved != empty, "custom-value install must not resolve to the shared empty-URL image"

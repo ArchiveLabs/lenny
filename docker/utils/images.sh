@@ -27,6 +27,15 @@ lenny_load_baked_env() {
     if [ -z "${NEXT_PUBLIC_API_URL+x}" ] && [ -n "$root" ] && [ -f "$root/.env" ]; then
         local v
         v="$(grep -E '^NEXT_PUBLIC_API_URL=' "$root/.env" | tail -1 | cut -d= -f2-)"
+        # This MUST agree with how lenny.sh:6 reads the same file —
+        # `export $(grep -v '^#' .env | xargs)` — whose xargs strips matching
+        # surrounding quotes. configure.sh writes the value unquoted, but a
+        # hand-edited .env may quote it; without this strip the two parsers
+        # disagree on a quoted value and resolve different admin tags.
+        case "$v" in
+            \"*\") v="${v#\"}"; v="${v%\"}" ;;
+            \'*\') v="${v#\'}"; v="${v%\'}" ;;
+        esac
         export NEXT_PUBLIC_API_URL="$v"
     fi
 }
@@ -49,11 +58,14 @@ lenny_export_image_tags() {
 # a production path. Written for an operator reading it at 2am: it names the
 # image and tag, says where the tag comes from, and gives the exact opt-in.
 lenny_missing_image_error() {
-    local svc="$1" tag="$2"
+    local svc="$1" tag="$2" pull_err="$3"
     local image="ghcr.io/${LENNY_IMAGE_ORG:-archivelabs}/lenny-$svc"
     {
         echo ""
         echo "[images] ERROR: no prebaked image  $image:$tag"
+        if [ -n "$pull_err" ]; then
+            echo "[images]   docker said: $(printf '%s' "$pull_err" | tail -1)"
+        fi
         echo "[images]   This tag is the content hash of ${svc}'s inputs. CI publishes it on merge"
         echo "[images]   to main (.github/workflows/docker-publish.yml). If you are on an unmerged"
         echo "[images]   branch, or the image is still building, it does not exist yet."
@@ -89,7 +101,7 @@ lenny_pull_images() {
     local compose="${COMPOSE_CMD:-docker compose}"
     local project="${LENNY_COMPOSE_PROJECT:-lenny}"
     local allow_build="${LENNY_ALLOW_LOCAL_BUILD:-0}"
-    local svc var tag build_list="" fatal=0
+    local svc var tag ref pull_err build_list="" fatal=0
 
     lenny_export_image_tags
 
@@ -107,7 +119,10 @@ lenny_pull_images() {
             echo "[images] $svc: present locally, skipping pull."
             continue
         fi
-        if $compose -p "$project" pull "$svc" 2>/dev/null; then
+        # Capture docker's real error (401 vs manifest-unknown vs DNS) so the
+        # fatal message can show it instead of guessing. 2>&1 >/dev/null keeps
+        # stderr and drops stdout; the exit code still drives the `if`.
+        if pull_err="$($compose -p "$project" pull "$svc" 2>&1 >/dev/null)"; then
             continue
         fi
         if [ "$svc" = "api" ]; then
@@ -118,7 +133,7 @@ lenny_pull_images() {
             build_list="$build_list $svc"
         else
             fatal=1
-            lenny_missing_image_error "$svc" "$tag"
+            lenny_missing_image_error "$svc" "$tag" "$pull_err"
         fi
     done
 
