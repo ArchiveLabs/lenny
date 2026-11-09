@@ -1,35 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Rebuild custom images and restart containers
-# Alembic migrations run automatically on API container startup via migrate.sh
+# Resolve Lenny's prebaked images and restart the stack.
+# Alembic migrations run automatically on API container startup via migrate.sh.
+#
+# Previously this step BUILT api, reader and admin locally on every update. The
+# reader build (a full thorium-web `pnpm build`) is the single most expensive
+# thing in the stack, and on a small VPS it has been OOM-killed — which, because
+# nginx refuses to start when a proxy_pass upstream is unresolvable, took the
+# whole API down. CI now prebakes these images; we pull them instead.
 
 cd "$LENNY_ROOT"
 
-# Build API (critical — must succeed)
-# No --pull: reuse locally cached base images (python:3.12 etc.) to avoid
-# re-downloading hundreds of MB on every update. Run `make rebuild` for a
-# fully fresh pull when you explicitly want the latest base.
-echo "Building API image..."
-$COMPOSE_CMD -p "$LENNY_COMPOSE_PROJECT" build api
+# lenny_pull_images (docker/utils/images.sh):
+#   - pulls each image by the content-hash tag that matches the current tree
+#   - auto-builds only the cheap api image on a miss
+#   - FAILS LOUDLY on a missing node image (reader/admin/opds) unless
+#     LENNY_ALLOW_LOCAL_BUILD=1, without starting a partial stack
+# COMPOSE_CMD and LENNY_COMPOSE_PROJECT are exported by update.sh.
+source "$LENNY_ROOT/docker/utils/images.sh"
 
-# Build reader (non-critical — warn but don't fail)
-echo "Building reader image..."
-if ! $COMPOSE_CMD -p "$LENNY_COMPOSE_PROJECT" build reader; then
-    echo ""
-    echo "WARNING: Reader build failed. The API will still start."
-    echo "To retry: $COMPOSE_CMD -p $LENNY_COMPOSE_PROJECT build --no-cache reader"
-    echo ""
-fi
+echo "Resolving prebaked images..."
+lenny_pull_images
 
-# Build admin (non-critical — warn but don't fail)
-echo "Building admin image..."
-if ! $COMPOSE_CMD -p "$LENNY_COMPOSE_PROJECT" build admin; then
-    echo ""
-    echo "WARNING: Admin build failed. The API will still start."
-    echo "To retry: $COMPOSE_CMD -p $LENNY_COMPOSE_PROJECT build --no-cache admin"
-    echo ""
-fi
-
-# Restart all services
-$COMPOSE_CMD -p "$LENNY_COMPOSE_PROJECT" up -d
+# Start without building: every image is already present (pulled, or the cheap
+# api built above), so this can never trigger a surprise reader build.
+echo "Starting stack..."
+$COMPOSE_CMD -p "$LENNY_COMPOSE_PROJECT" up -d --no-build

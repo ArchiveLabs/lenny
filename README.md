@@ -204,7 +204,7 @@ Lenny ships its own browsing app (the [opds-client](https://github.com/ArchiveLa
 
 **Reading.** Borrowing a book opens it in Lenny's own reader ([Thorium Web](https://github.com/edrlab/thorium-web), served at `/read`), so a patron never leaves your node. The admin Library page has an **Open in Lenny reader** button, and a book's **Share** button copies a link that opens that book in the reader: `<your address>/?opds=<book feed>`. The raw feed (`/v1/api/opds`) and a single book's feed (`/v1/api/opds/<id>`) are still there for reading apps such as Thorium Reader or KOReader.
 
-The reader only opens manifests from addresses listed in `MANIFEST_ALLOWED_DOMAINS` in `reader.env` (default `127.0.0.1,localhost,*.trycloudflare.com`). A leading `*.` matches any subdomain, so a changing tunnel hostname works. For your own domain, add its hostname and rebuild the reader (`make rebuild`), because the list is baked in at build time. Signing out ends the session on the server as well as in the browser.
+The reader only opens manifests from addresses listed in `MANIFEST_ALLOWED_DOMAINS` in `reader.env` (default `127.0.0.1,localhost,*.trycloudflare.com`). A leading `*.` matches any subdomain, so a changing tunnel hostname works. This list is read at **runtime**, so to add your own domain edit `MANIFEST_ALLOWED_DOMAINS` in `reader.env` and restart the reader (`docker compose -p lenny up -d --force-recreate reader`) — no rebuild needed. (By contrast `MANIFEST_ROUTE_FORCE_ENABLE` *is* baked in at build time, via thorium-web's `next.config.mjs`.) Signing out ends the session on the server as well as in the browser.
 
 ---
 
@@ -389,14 +389,29 @@ make update
 This single command handles everything automatically:
 - Pulls the latest code (`git pull --ff-only`)
 - Syncs new environment variables (never overwrites your existing config)
-- Pulls updated Docker images
+- Pulls updated Docker images — including Lenny's own **prebaked images** (see below)
 - Backs up your database before rebuilding
-- Rebuilds and restarts containers
+- Restarts containers (building only the cheap API image locally)
 - Applies database migrations automatically on startup
 
 Your data (database, books, S3 storage) is preserved across updates. A database backup is saved to `backups/` before every update. If anything goes wrong, re-run `make update` — every step is idempotent.
 
 > **Back up `LENNY_SEED` together with your database, and never change it.** It lives in `.env` and, besides signing sessions, keys the hash that identifies patrons. A database restored with a different seed still loads, but no patron's loans or app sign-ins match any more.
+
+### Prebaked images (ghcr.io)
+
+Lenny's four service images — `lenny-api`, `lenny-reader`, `lenny-admin`, `lenny-opds` — are built in CI and published to `ghcr.io/archivelabs/`. `make update` (and `make start`) **pull** them instead of building on your server. This matters most for the **reader**, whose image runs a full Next.js production build (`pnpm build` over thorium-web) — the single most expensive step in the stack. On a small VPS that build can be killed for running out of memory, and because nginx will not start while any upstream is unreachable, a failed reader build used to take the **whole API down**. Pulling a prebaked image removes that failure mode.
+
+Each image is tagged with a **content hash of its own inputs** (`docker/utils/image-hash.sh`), so `make update` pulls the exact image matching your tree, and CI rebuilds an image only when its inputs actually change.
+
+- **Activation (one-time, maintainers):** the ghcr packages must be **public**, or your host must be logged in to ghcr (`docker login ghcr.io`), for the pull to succeed.
+- **No prebaked image for your inputs?** The API image builds locally automatically (it is cheap). A missing **reader/admin/opds** image instead **stops with an explanation** rather than silently running the expensive build — pass `LENNY_ALLOW_LOCAL_BUILD=1` to build it on your host deliberately (ensure adequate RAM/swap):
+
+  ```sh
+  LENNY_ALLOW_LOCAL_BUILD=1 make update
+  ```
+
+- **Custom `NEXT_PUBLIC_API_URL` (admin):** this value is inlined into the admin client bundle at build time, so it is folded into the admin image's hash. An install that sets a non-empty value will **never** match a published image and must either leave it empty (to use the shared image) or opt into a local build as above. This is deliberate — it prevents a shared image silently serving someone else's API URL.
 
 ### First-time upgrade (existing installations)
 

@@ -1,0 +1,202 @@
+# Build and publish Lenny's prebaked Docker images to ghcr.io.
+#
+# Why: a server should not build these images itself. The reader runs a full
+# thorium-web `pnpm build` — the single most expensive step in the stack — and on
+# a ~1GB VPS it has been OOM-killed, which (because nginx refuses to start when a
+# proxy_pass upstream is unresolvable) took the whole API down. Prebaking moves
+# that build to CI. See ArchiveLabs/lenny#144.
+#
+# Four images: lenny-api, lenny-reader, lenny-admin, lenny-opds.
+#
+# Behaviour:
+#   push main / tag v*  -> publish changed images (skip ones already in ghcr)
+#   pull_request        -> build changed images to validate they compile; no push
+#
+# "Changed" is decided by a content hash, not a paths glob: docker/utils/image-hash.sh
+# digests each image's declared inputs and we tag the image `inputs-<hash>`. If that
+# tag already exists in ghcr the inputs are byte-identical, so the build is skipped
+# (on push we only re-point the human tags). A paths filter can be subtly wrong and
+# ship a stale image; the hash cannot. The same script resolves the tag on the
+# consume side (docker/utils/images.sh), so CI and `make update` can never drift.
+#
+# Built on @slash-under's proof-of-concept workflow (buildx, type=gha layer cache,
+# GITHUB_TOKEN auth, PR-builds-without-push). Thank you.
+
+name: Build and Publish Docker Images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  ORG: archivelabs
+
+jobs:
+  # ── Decide, per image, whether a build is needed ────────────────────────────
+  # Computes each image's content-hash tag and checks whether it already exists in
+  # ghcr. Emits a JSON map consumed by the matrix below. amd64 only (#144).
+  detect:
+    name: detect changed images
+    runs-on: ubuntu-latest
+    outputs:
+      meta: ${{ steps.detect.outputs.meta }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Read-only login so the existence check can see private packages. Skipped
+      # for PRs from forks (no token); any failure is tolerated and treated as
+      # "not found" below, which conservatively builds to validate.
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute hashes and check ghcr
+        id: detect
+        env:
+          # Admin's NEXT_PUBLIC_API_URL is folded into its hash; CI publishes the
+          # empty-value image, matching compose's default.
+          NEXT_PUBLIC_API_URL: ""
+        run: |
+          meta='{}'
+          for svc in api reader admin opds; do
+            tag="$(bash docker/utils/image-hash.sh tag "$svc")"
+            ref="${REGISTRY}/${ORG}/lenny-${svc}:${tag}"
+            if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+              exists=true
+            else
+              exists=false
+            fi
+            echo "  ${svc}: ${tag} (exists=${exists})"
+            meta="$(jq -c --arg s "$svc" --arg t "$tag" --argjson e "$exists" \
+              '.[$s]={tag:$t,exists:$e}' <<<"$meta")"
+          done
+          echo "meta=${meta}" >> "$GITHUB_OUTPUT"
+
+  # ── Build / publish each image ──────────────────────────────────────────────
+  build:
+    name: ${{ matrix.service }}
+    needs: detect
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            dockerfile: docker/api/Dockerfile
+            build_args: ""
+          - service: reader
+            dockerfile: docker/reader/Dockerfile
+            # MANIFEST_ALLOWED_DOMAINS is read at runtime (reader.env), so its build
+            # value is irrelevant to the shared image and absent from the hash.
+            build_args: |
+              NODE_ENV=production
+              MANIFEST_ROUTE_FORCE_ENABLE=true
+              MANIFEST_ALLOWED_DOMAINS=127.0.0.1,localhost
+          - service: admin
+            dockerfile: docker/lenny-app/Dockerfile
+            # Empty NEXT_PUBLIC_API_URL: the shared image serves installs that leave
+            # it unset; a custom value misses the hash and builds locally (#144).
+            build_args: |
+              NEXT_PUBLIC_API_URL=
+          - service: opds
+            dockerfile: docker/opds-client/Dockerfile
+            build_args: ""
+    env:
+      TAG: ${{ fromJSON(needs.detect.outputs.meta)[matrix.service].tag }}
+      EXISTS: ${{ fromJSON(needs.detect.outputs.meta)[matrix.service].exists }}
+      # Registry/org are fixed (ghcr requires lowercase); a job-level env: key may
+      # not reference the workflow-level env context, so spell it out here.
+      IMAGE: ghcr.io/archivelabs/lenny-${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report decision
+        run: |
+          echo "image=${IMAGE} tag=${TAG} exists=${EXISTS} event=${{ github.event_name }}"
+          if [ "${EXISTS}" = "true" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "Inputs already published — skipping redundant PR build."
+          fi
+
+      - name: Read VERSION
+        id: version
+        run: echo "value=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        if: env.EXISTS == 'false'
+
+      - name: Log in to ghcr.io
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        if: env.EXISTS == 'false'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ env.TAG }}
+            type=raw,value=${{ steps.version.outputs.value }}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=main,enable={{is_default_branch}}
+            type=sha,prefix=sha-
+            type=ref,event=tag
+          flavor: latest=false
+
+      # Build when the inputs are not yet published. Pushes on main/tags; on a PR
+      # it builds only, validating the Dockerfile compiles.
+      - name: Build and push
+        if: env.EXISTS == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      # Inputs unchanged and already published: don't rebuild, just move the human
+      # tags (VERSION/latest/main/sha-<commit>) onto the existing image. Cheap,
+      # server-side; no layers are pulled or pushed.
+      - name: Re-point release tags to existing image
+        if: env.EXISTS == 'true' && github.event_name != 'pull_request'
+        run: |
+          SRC="${IMAGE}:${TAG}"
+          VERSION="$(cat VERSION)"
+          TAGS=( "$VERSION" "sha-${GITHUB_SHA::7}" )
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            TAGS+=( latest main )
+          fi
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAGS+=( "${GITHUB_REF_NAME}" )
+          fi
+          args=()
+          for t in "${TAGS[@]}"; do args+=( --tag "${IMAGE}:${t}" ); done
+          echo "Re-pointing ${TAGS[*]} -> ${SRC}"
+          docker buildx imagetools create "${args[@]}" "${SRC}"
