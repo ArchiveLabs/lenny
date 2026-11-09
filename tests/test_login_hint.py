@@ -311,3 +311,34 @@ class TestTheHintIsShapeChecked:
 
     def test_a_real_address_survives(self):
         assert _login_hint(f"  {PATRON}  ") == PATRON
+
+    def test_length_cap_short_circuits_before_the_regex(self, monkeypatch):
+        """ReDoS guard — CodeQL py/polynomial-redos (#266 #11).
+
+        `_login_hint` is safe only because `len(value) > 254` short-circuits the
+        `or` before `_EMAIL_HINT.match` runs, so the super-linear regex only ever
+        sees a bounded input. This spies on the compiled pattern and fails if
+        `match` is called on an over-long value — exactly what happens if someone
+        swaps the operands or deletes the cap. It must not depend on the regex
+        actually hanging (that would be performing the harm), only on the order.
+        """
+        from lenny.routes import oauth
+
+        seen_lengths = []
+
+        class _SpyPattern:
+            def __init__(self, real):
+                self._real = real
+
+            def match(self, s, *args, **kwargs):
+                seen_lengths.append(len(s))
+                return self._real.match(s, *args, **kwargs)
+
+        monkeypatch.setattr(oauth, "_EMAIL_HINT", _SpyPattern(oauth._EMAIL_HINT))
+
+        over_long = "a" * 300 + "@" + "b" * 300 + ".example.org"
+        assert oauth._login_hint(over_long) is None
+        assert all(n <= 254 for n in seen_lengths), (
+            f"_EMAIL_HINT.match saw a {max(seen_lengths)}-char value; the length "
+            "cap must short-circuit before the regex runs (ReDoS guard)"
+        )
