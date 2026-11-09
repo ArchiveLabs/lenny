@@ -43,14 +43,40 @@ RUN corepack enable
 
 WORKDIR /app/thorium-web
 
+# SECURITY: the pinned THORIUM_REF ships Next.js 16.2.12, which is a vulnerable
+# release; 16.4.1 is the patched version (upstream has not bumped its own pin).
+# We override it in OUR build rather than moving THORIUM_REF (that pin is
+# deliberate; see the comment above it). Two moves are needed because a later
+# `pnpm install` would otherwise ignore a bare package.json edit:
+#   1. edit the direct dependency in package.json, and
+#   2. add a pnpm `overrides` entry (below) so any transitive copy is forced too.
+# The build then re-resolves (install is --no-frozen-lockfile for this reason)
+# and a hard assertion after install fails the build if next is still < 16.4.1,
+# so a lockfile that quietly ignored the edit cannot ship a vulnerable image.
+RUN node -e 'const fs=require("fs"),p="package.json",j=JSON.parse(fs.readFileSync(p,"utf8"));if(!(j.dependencies&&j.dependencies.next))throw new Error("next is not a direct dependency of thorium-web package.json; the security override anchor is stale");j.dependencies.next="16.4.1";fs.writeFileSync(p,JSON.stringify(j,null,2)+"\n")'
+
 # pnpm now blocks build scripts for any command — even an explicit `pnpm
 # rebuild <pkg>` below — unless the package is allow-listed via `allowBuilds`
 # in pnpm-workspace.yaml (package.json's old `pnpm.onlyBuiltDependencies`
 # field is no longer read). thorium-web ships no such list, and there's no
 # TTY here for the interactive `pnpm approve-builds`, so write it directly.
-RUN printf 'allowBuilds:\n  esbuild: true\n  sharp: true\n  unrs-resolver: true\n' > pnpm-workspace.yaml
+# `overrides: next` forces the patched version across the whole tree (direct and
+# any transitive). It lives here (pnpm-workspace.yaml) because this build makes
+# thorium-web a workspace root; the package.json edit above keeps the direct
+# dependency honest too.
+RUN printf 'allowBuilds:\n  esbuild: true\n  sharp: true\n  unrs-resolver: true\noverrides:\n  next: 16.4.1\n' > pnpm-workspace.yaml
 
-RUN --mount=type=cache,id=pnpm_store,target=/pnpm/store pnpm install --frozen-lockfile --ignore-scripts
+# --no-frozen-lockfile (was --frozen-lockfile): the next override above changes
+# what the lockfile must satisfy, so pnpm has to re-resolve and update the
+# in-container lockfile. A frozen install would instead fail (or silently keep
+# the vulnerable pin). The assertion below is the real guarantee regardless.
+RUN --mount=type=cache,id=pnpm_store,target=/pnpm/store pnpm install --no-frozen-lockfile --ignore-scripts
+
+# Fail the build NOW (before the expensive TypeScript build) if the override did
+# not take. This is the backstop against a green build still shipping a
+# vulnerable Next.js — the exact failure mode a silent lockfile would produce.
+RUN node -e 'const v=require("next/package.json").version,[a,b,c]=v.split(".").map(Number),ok=a>16||(a===16&&(b>4||(b===4&&c>=1)));if(!ok){console.error("SECURITY: next resolved to "+v+" but >=16.4.1 is required");process.exit(1)}console.log("OK: next resolved to "+v)'
+
 RUN pnpm rebuild esbuild sharp unrs-resolver
 
 RUN pnpm build
