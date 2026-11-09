@@ -158,7 +158,10 @@ class LennyClient:
                     headers=headers,
                     timeout=timeout
                 )
-                logger.info(f"Upload response (OLID: {olid}): {response.content}")
+                # Log the outcome, not the body: echoing an arbitrary response
+                # body into the log is the clear-text-logging anti-pattern (an
+                # error page, an echoed header, a stack trace could ride along).
+                logger.info(f"Upload response (OLID: {olid}): HTTP {response.status_code}")
                 if response.status_code == 409:
                     logger.info(f"Skipping OLID {olid}: already exists")
                     return True
