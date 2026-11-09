@@ -1,6 +1,12 @@
 services:
 
   api:
+    # Prebaked by CI and pulled by `make update` / lenny.sh (see docker/utils/images.sh).
+    # The tag is the content hash of this image's inputs (docker/utils/image-hash.sh),
+    # exported as LENNY_API_TAG. The `:-local` fallback is a sentinel that is never
+    # published to ghcr, so a bare `docker compose up` builds locally for development
+    # instead of silently running a possibly-mismatched published tag.
+    image: ghcr.io/archivelabs/lenny-api:${LENNY_API_TAG:-local}
     build:
       context: .
       dockerfile: docker/api/Dockerfile
@@ -82,7 +88,12 @@ services:
       - lenny_network
 
   reader:
-    container_name: lenny_reader  
+    container_name: lenny_reader
+    # Prebaked by CI (the most expensive build in the stack). Tag = LENNY_READER_TAG,
+    # the content hash of docker/reader/Dockerfile; `:-local` is a never-published
+    # sentinel so dev builds locally. MANIFEST_ALLOWED_DOMAINS is read at RUNTIME
+    # (reader.env), so one shared image serves every deployment.
+    image: ghcr.io/archivelabs/lenny-reader:${LENNY_READER_TAG:-local}
     build:
       context: .
       dockerfile: docker/reader/Dockerfile
@@ -97,6 +108,11 @@ services:
       - lenny_network
 
   admin:
+    # Prebaked by CI. NEXT_PUBLIC_API_URL is inlined into the client bundle at build
+    # time, so it is folded into LENNY_ADMIN_TAG's hash: an install that sets a custom
+    # value gets a distinct tag, misses the ghcr cache, and builds locally — never a
+    # silently-wrong shared image. `:-local` is the never-published dev sentinel.
+    image: ghcr.io/archivelabs/lenny-admin:${LENNY_ADMIN_TAG:-local}
     build:
       context: .
       dockerfile: docker/lenny-app/Dockerfile
@@ -120,6 +136,9 @@ services:
       - lenny_network
 
   opds:
+    # Prebaked by CI. Tag = LENNY_OPDS_TAG, the content hash of the Dockerfile plus
+    # lock-to-lenny.py and nginx.conf; `:-local` is the never-published dev sentinel.
+    image: ghcr.io/archivelabs/lenny-opds:${LENNY_OPDS_TAG:-local}
     build:
       context: .
       dockerfile: docker/opds-client/Dockerfile

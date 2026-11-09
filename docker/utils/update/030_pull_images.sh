@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Pull latest versions of external Docker images (postgres, garage, readium).
-# Custom-built images (api, reader, admin) are skipped — they're rebuilt in the next step.
+# Lenny's own images (api, reader, admin, opds) are skipped here via
+# --ignore-buildable; step 040 resolves and pulls them by content-hash tag.
 
 cd "$LENNY_ROOT"
 
