@@ -1,0 +1,304 @@
+"""Members-only (subscription) access with Ghost (#280, #281, #282, #283).
+
+Ghost's entitlement token is faked with a local RSA key served as the site's JWKS,
+in the exact shape Ghost v6.77 issues (token-service.js `encodeEntitlementToken`).
+"""
+import datetime
+import hashlib
+import hmac
+import json
+import os
+import time
+import uuid
+
+import pytest
+import sqlalchemy
+
+os.environ.setdefault("TESTING", "true")
+os.environ.setdefault("LENNY_SEED", "test-seed-for-unit-tests-only-32b!")
+
+from authlib.jose import JsonWebKey, JsonWebToken  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from lenny.app import app  # noqa: E402
+from lenny.core import ghost  # noqa: E402
+from lenny.core.db import Base, engine  # noqa: E402
+from lenny.core.db import session as db  # noqa: E402
+from lenny.core.models import FormatEnum, Item, Subscription, SubscriptionRead  # noqa: E402
+from lenny.core.utils import hash_email  # noqa: E402
+
+SITE = "https://hydra.example"
+ISS = f"{SITE}/members/api"
+ME = "member@example.com"
+EDITION = 920111001
+LAUNCH = "/v1/api/subscriptions/ghost/launch"
+WEBHOOK = "/v1/api/subscriptions/ghost/webhook"
+SECRET = "whsec-test"
+
+KEY = JsonWebKey.generate_key("RSA", 2048, is_private=True, options={"kid": "k1"})
+OTHER_KEY = JsonWebKey.generate_key("RSA", 2048, is_private=True, options={"kid": "k1"})
+JWKS = {"keys": [KEY.as_dict(is_private=False)]}
+
+
+@pytest.fixture(autouse=True)
+def env(monkeypatch):
+    Base.metadata.create_all(engine)
+    monkeypatch.setenv(ghost.URL_KEY, SITE)
+    monkeypatch.setenv(ghost.SECRET_KEY, SECRET)
+    monkeypatch.delenv(ghost.TIERS_KEY, raising=False)
+    monkeypatch.setattr(ghost, "_jwks", lambda site: JWKS)
+    yield
+    db.remove()
+    for table in ("subscription_reads", "subscriptions", "cache", "loans", "items"):
+        try:
+            db.execute(sqlalchemy.text(f"DELETE FROM {table}"))
+        except Exception:
+            db.rollback()
+    db.commit()
+    db.remove()
+
+
+def make_item(subscription=True, encrypted=False):
+    item = Item(openlibrary_edition=EDITION, encrypted=encrypted, subscription=subscription,
+                formats=FormatEnum.EPUB)
+    db.add(item)
+    db.commit()
+    return item
+
+
+def token(key=KEY, alg="RS512", **over):
+    now = int(time.time())
+    claims = {"sub": ME, "member_uuid": "m-1", "paid": True, "active_tier_ids": ["t-paid"],
+              "scope": "members:entitlements:read", "jti": str(uuid.uuid4()),
+              "iss": ISS, "aud": ISS, "iat": now, "exp": now + 300}
+    claims.update(over)
+    claims = {k: v for k, v in claims.items() if v is not None}
+    return JsonWebToken([alg]).encode({"alg": alg, "kid": "k1"}, claims, key).decode()
+
+
+def client():
+    return TestClient(app, base_url="https://testserver")
+
+
+# ── token checks ─────────────────────────────────────────────────────────────
+
+def test_valid_token_returns_claims():
+    assert ghost.verify_entitlement(token())["sub"] == ME
+
+
+@pytest.mark.parametrize("bad, code", [
+    (lambda: token(key=OTHER_KEY), "invalid_token"),
+    (lambda: token(iss="https://evil.example/members/api"), "invalid_token"),
+    (lambda: token(aud="https://evil.example/members/api"), "invalid_token"),
+    (lambda: token(exp=int(time.time()) - 120), "invalid_token"),
+    (lambda: token(scope="members:identity"), "invalid_token"),   # Ghost's identity token, same key
+    (lambda: token(jti=None), "invalid_token"),
+    (lambda: token(paid=False), "not_paid"),
+    (lambda: "not.a.jwt", "invalid_token"),
+    (lambda: "", "invalid_token"),
+])
+def test_bad_tokens_are_refused(bad, code):
+    with pytest.raises(ghost.GhostError) as e:
+        ghost.verify_entitlement(bad())
+    assert e.value.code == code
+
+
+def test_hs256_signed_with_the_public_key_is_refused():
+    # Classic alg confusion: an HMAC token keyed with the published RSA key.
+    pub = json.dumps(JWKS["keys"][0]).encode()
+    forged = JsonWebToken(["HS256"]).encode({"alg": "HS256", "kid": "k1"},
+                                            {"sub": ME, "iss": ISS, "aud": ISS, "paid": True,
+                                             "scope": "members:entitlements:read", "jti": "x",
+                                             "exp": int(time.time()) + 300}, pub).decode()
+    with pytest.raises(ghost.GhostError):
+        ghost.verify_entitlement(forged)
+
+
+def test_token_is_single_use():
+    t = token()
+    ghost.verify_entitlement(t)
+    with pytest.raises(ghost.GhostError) as e:
+        ghost.verify_entitlement(t)
+    assert e.value.code == "token_reused"
+
+
+def test_tier_allowlist(monkeypatch):
+    monkeypatch.setenv(ghost.TIERS_KEY, "t-gold")
+    with pytest.raises(ghost.GhostError) as e:
+        ghost.verify_entitlement(token())
+    assert e.value.code == "tier_not_allowed"
+    assert ghost.verify_entitlement(token(active_tier_ids=["t-gold"]))
+
+
+def test_not_configured(monkeypatch):
+    monkeypatch.setenv(ghost.URL_KEY, "")
+    with pytest.raises(ghost.GhostError) as e:
+        ghost.verify_entitlement(token())
+    assert e.value.code == "not_configured"
+
+
+# ── launch and the read gate ─────────────────────────────────────────────────
+
+def test_launch_leases_sets_session_and_opens_reader():
+    make_item()
+    c = client()
+    r = c.post(LAUNCH, data={"token": token(), "book": f"OL{EDITION}M"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/v1/api/items/{EDITION}/read"
+    row = db.query(Subscription).one()
+    assert row.patron_email_hash == hash_email(ME) and row.member_uuid == "m-1"
+    assert ME not in json.dumps([row.provider, row.member_uuid, row.tier_ids])
+
+    read = c.get(r.headers["location"], follow_redirects=False)
+    assert read.status_code == 307 and "/read/manifest/" in read.headers["location"]
+    assert read.headers["cache-control"] == "private, no-store"
+
+
+def test_launch_refuses_a_bad_token_without_a_session():
+    make_item()
+    r = client().post(LAUNCH, data={"token": token(paid=False), "book": str(EDITION)}, follow_redirects=False)
+    assert r.status_code == 403 and "set-cookie" not in r.headers
+    assert db.query(Subscription).count() == 0
+
+
+def test_launch_unknown_book():
+    r = client().post(LAUNCH, data={"token": token(), "book": "OL1M"}, follow_redirects=False)
+    assert r.status_code == 404
+
+
+def test_members_only_without_a_lease():
+    make_item()
+    r = client().get(f"/v1/api/items/{EDITION}/read", headers={"accept": "application/json"},
+                     follow_redirects=False)
+    assert r.status_code == 403 and r.json()["code"] == "subscription_required"
+    page = client().get(f"/v1/api/items/{EDITION}/read", headers={"accept": "text/html"},
+                        follow_redirects=False)
+    assert page.status_code == 403 and SITE in page.text
+
+
+def test_expired_lease_is_refused():
+    make_item()
+    c = client()
+    c.post(LAUNCH, data={"token": token(), "book": str(EDITION)}, follow_redirects=False)
+    db.query(Subscription).update({"expires_at": datetime.datetime.now(datetime.timezone.utc)
+                                   - datetime.timedelta(seconds=1)})
+    db.commit()
+    r = c.get(f"/v1/api/items/{EDITION}/read", headers={"accept": "application/json"}, follow_redirects=False)
+    assert r.status_code == 403
+
+
+def test_open_and_borrowable_items_are_unchanged():
+    make_item(subscription=False)
+    r = client().get(f"/v1/api/items/{EDITION}/read", follow_redirects=False)
+    assert r.status_code == 307 and "cache-control" not in r.headers
+
+
+def test_manifest_fetch_counts_an_open(monkeypatch):
+    from lenny.core.readium import ReadiumAPI
+    monkeypatch.setattr(ReadiumAPI, "get_manifest", classmethod(lambda cls, *a: {"metadata": {}}))
+    make_item()
+    c = client()
+    c.post(LAUNCH, data={"token": token(), "book": str(EDITION)}, follow_redirects=False)
+    for _ in range(2):
+        assert c.get(f"/v1/api/items/{EDITION}/readium/manifest.json",
+                     headers={"user-agent": "Mozilla/5.0 (iPhone)"}).status_code == 200
+    row = db.query(SubscriptionRead).one()
+    assert (row.opens, row.device_class, row.patron_email_hash) == (2, "mobile", hash_email(ME))
+
+
+# ── webhooks ─────────────────────────────────────────────────────────────────
+
+def signed(payload, secret=SECRET, ts=None):
+    body = json.dumps(payload).encode()
+    ts = str(ts if ts is not None else int(time.time() * 1000))
+    sig = hmac.new(secret.encode(), body + ts.encode(), hashlib.sha256).hexdigest()
+    return body, {"x-ghost-signature": f"sha256={sig}, t={ts}", "content-type": "application/json"}
+
+
+def lease():
+    Subscription.grant("ghost", hash_email(ME), "m-1", ["t-paid"])
+
+
+def test_webhook_member_deleted_revokes():
+    lease()
+    body, headers = signed({"member": {"current": {}, "previous": {"uuid": "m-1", "email": ME}}})
+    r = client().post(WEBHOOK, content=body, headers=headers)
+    assert r.status_code == 200 and r.json()["revoked"] == 1
+    assert db.query(Subscription).count() == 0
+
+
+def test_webhook_downgrade_to_free_revokes():
+    lease()
+    body, headers = signed({"member": {"current": {"uuid": "m-1", "email": ME, "status": "free"},
+                                       "previous": {"status": "paid"}}})
+    assert client().post(WEBHOOK, content=body, headers=headers).json()["revoked"] == 1
+
+
+def test_webhook_unrelated_edit_keeps_access():
+    lease()
+    body, headers = signed({"member": {"current": {"uuid": "m-1", "email": ME, "status": "paid"},
+                                       "previous": {"name": "Old name"}}})
+    assert client().post(WEBHOOK, content=body, headers=headers).json()["revoked"] == 0
+    assert Subscription.is_active(hash_email(ME))
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda b, h: (b, {**h, "x-ghost-signature": h["x-ghost-signature"].replace("sha256=", "sha256=0")}),
+    lambda b, h: (b + b" ", h),
+    lambda b, h: (b, {"content-type": "application/json"}),
+    lambda b, h: signed(json.loads(b), ts=int(time.time() * 1000) - 10 * 60 * 1000),
+    lambda b, h: signed(json.loads(b), secret="wrong"),
+])
+def test_webhook_rejects_bad_signatures_and_never_410(mutate):
+    lease()
+    body, headers = mutate(*signed({"member": {"current": {}, "previous": {"uuid": "m-1"}}}))
+    r = client().post(WEBHOOK, content=body, headers=headers)
+    assert r.status_code == 401 and r.status_code != 410
+    assert Subscription.is_active(hash_email(ME))
+
+
+# ── admin: access_mode and settings ──────────────────────────────────────────
+
+@pytest.fixture
+def admin(monkeypatch):
+    import lenny.routes.api as api_routes
+    import lenny.routes.subscriptions as sub_routes
+    monkeypatch.setattr(api_routes, "_require_admin", lambda request: None)
+    monkeypatch.setattr(sub_routes, "_require_admin", lambda request: None)
+
+
+def test_patch_access_mode(admin):
+    make_item(subscription=False, encrypted=True)
+    c = client()
+    r = c.patch(f"/v1/api/admin/items/{EDITION}", json={"access_mode": "subscription"})
+    assert r.status_code == 200
+    assert (r.json()["access_mode"], r.json()["encrypted"]) == ("subscription", False)
+    r = c.patch(f"/v1/api/admin/items/{EDITION}", json={"encrypted": True})
+    assert r.json()["access_mode"] == "borrowable"
+    assert c.patch(f"/v1/api/admin/items/{EDITION}",
+                   json={"access_mode": "open", "encrypted": True}).status_code == 400
+    assert c.patch(f"/v1/api/admin/items/{EDITION}", json={"access_mode": "secret"}).status_code == 422
+
+
+def test_ghost_settings_shape(admin):
+    r = client().get("/v1/api/admin/settings/ghost")
+    assert r.headers["cache-control"] == "no-store"
+    body = r.json()
+    assert body["site_url"] == SITE and body["webhook_secret"] == SECRET and body["lease_hours"] == 24
+    assert "/v1/api/subscriptions/ghost/launch" in body["snippet"]
+    assert body["webhook_url"].endswith(WEBHOOK)
+
+
+def test_ghost_settings_reject_non_https(admin):
+    r = client().put("/v1/api/admin/settings/ghost", json={"site_url": "http://hydra.example"})
+    assert r.status_code == 422 and r.json()["code"] == "invalid_site_url"
+
+
+def test_stats(admin):
+    item = make_item()
+    SubscriptionRead.record(item.id, hash_email(ME), "Mozilla/5.0 (Macintosh)")
+    SubscriptionRead.record(item.id, hash_email("b@example.com"), "Mozilla/5.0 (Android)")
+    body = client().get("/v1/api/admin/stats/subscriptions").json()
+    assert body["totals"] == {"books_read": 1, "patrons": 2, "opens": 2, "active_now": 2}
+    assert {d["device_class"] for d in body["devices"]} == {"desktop", "mobile"}
+    assert client().get("/v1/api/admin/stats/subscriptions?from=2026-13-01").status_code == 422

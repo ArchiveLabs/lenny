@@ -84,8 +84,9 @@ from lenny.core.exceptions import (
 from lenny.schemas.ol import OLLoginRequest
 from lenny.core.readium import ReadiumAPI
 from lenny.core.oauth2 import AccessToken
-from lenny.core.models import Item, Loan
-from lenny.core.utils import parse_modified_since, to_iso_utc
+from lenny.core.models import Item, Loan, SubscriptionRead, ACCESS_MODES
+from lenny.core import ghost
+from lenny.core.utils import hash_email, parse_modified_since, to_iso_utc
 from lenny.core.db import session as db
 from urllib.parse import quote
 
@@ -352,6 +353,8 @@ def requires_item_auth(scope: str = "loans:read"):
                 # routes layer; auth_check only authorizes the resolved identity.
                 email, email_hashed = get_authenticated_identity(request, session, scope=scope)
                 result = LennyAPI.auth_check(item, email=email, email_hashed=email_hashed)
+                if result.get('error') == 'subscription_required':
+                    return _members_only(request)
                 if 'error' in result:
                     if _wants_html(request):
                         return _auth_redirect(request, result)
@@ -365,13 +368,33 @@ def requires_item_auth(scope: str = "loans:read"):
                 # re-hash it in unborrow(); readers ignore it. Passed out-of-band
                 # on request.state to avoid exposing it as a bindable query param.
                 request.state.email_hashed = result["email_hashed"]
-                return await func(
+                response = await func(
                     request=request, book_id=book_id, format=format, session=session,
                     email=result.get("email") or "", item=item, *args, **kwargs
                 )
+                if item.subscription:
+                    # Members-only pages must not outlive the lease in a shared cache.
+                    if not isinstance(response, Response):
+                        response = JSONResponse(response)
+                    response.headers["Cache-Control"] = "private, no-store"
+                return response
             return JSONResponse(status_code=404, content={"detail": "Item not found"})
         return wrapper
     return decorator
+
+def _members_only(request: Request):
+    """A subscription book without a live lease: point the reader back to the publisher."""
+    site = ghost.site_url() or None
+    if not _wants_html(request):
+        return JSONResponse(status_code=403, headers={"Cache-Control": "no-store"}, content={
+            "detail": "This book is for members. Open it from the publisher's site.",
+            "code": "subscription_required", "url": site})
+    return request.app.templates.TemplateResponse(request, "members_only.html", {
+        "request": request, "heading": "This book is for members",
+        "explanation": "Open it from the Read button on the publisher's site while you are signed in.",
+        "site": site,
+    }, status_code=403, headers={"Cache-Control": "no-store"})
+
 
 @router.get('/', status_code=status.HTTP_200_OK)
 async def home(request: Request):
@@ -484,6 +507,9 @@ async def redirect_reader(request: Request, book_id: str, format: str = "epub", 
 @router.get("/items/{book_id}/readium/manifest.json")
 @requires_item_auth()
 async def get_manifest(request: Request, book_id: str, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
+    if item.subscription and email:
+        patron = email if request.state.email_hashed else hash_email(email)
+        await run_in_threadpool(SubscriptionRead.record, item.id, patron, request.headers.get("user-agent"))
     return ReadiumAPI.get_manifest(book_id, format)
 
 @router.get("/items/{book_id}/readium/{readium_path:path}")
@@ -729,8 +755,10 @@ async def upload(
     request: Request,
     openlibrary_edition: int = Form(
         ..., gt=0, description="OpenLibrary Edition ID (must be a positive integer)"),
-    encrypted: bool = Form(
-        False, description="Set to true if the file is encrypted"),
+    encrypted: Optional[bool] = Form(
+        None, description="Deprecated: use access_mode. true = borrowable"),
+    access_mode: Optional[str] = Form(
+        None, description="open, borrowable or subscription (default: the node's default)"),
     file: UploadFile = File(
         ..., description="The EPUB file to upload (max 100MB)")
 ):
@@ -740,6 +768,7 @@ async def upload(
     admin Bearer token, the same pair as every /admin/ route.
     """
     _require_admin(request)
+    encrypt, subscription = _access_flags(access_mode, encrypted)
 
     try:
         item = await anyio.to_thread.run_sync(
@@ -748,7 +777,8 @@ async def upload(
                 LennyAPI.add,
                 openlibrary_edition=openlibrary_edition,
                 files=[file],  # TODO expand to allow multiple
-                encrypt=encrypted,
+                encrypt=encrypt,
+                subscription=subscription,
             ),
             limiter=_UPLOAD_LIMITER,
         )
@@ -773,6 +803,21 @@ async def upload(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _access_flags(access_mode: Optional[str], encrypted: Optional[bool]) -> tuple:
+    """(encrypted, subscription) for a new item: access_mode wins, then the legacy flag, then the node default."""
+    if access_mode is None and encrypted is not None:
+        return bool(encrypted), False
+    mode = access_mode if access_mode is not None else configs.get_default_access_mode()
+    if mode not in ACCESS_MODES:
+        raise HTTPException(status_code=422, detail="'access_mode' must be open, borrowable or subscription")
+    return ACCESS_MODES[mode]
+
+
+def _check_access_mode(access_mode: Optional[str]) -> None:
+    if access_mode is not None and access_mode not in ACCESS_MODES:
+        raise HTTPException(status_code=422, detail="'access_mode' must be open, borrowable or subscription")
+
+
 @router.get("/admin/items")
 async def admin_get_items(
     request: Request,
@@ -780,6 +825,7 @@ async def admin_get_items(
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     encrypted: Optional[bool] = None,
+    access_mode: Optional[str] = None,
 ):
     """
     Admin-scoped catalog listing used by the lenny-app admin UI.
@@ -789,6 +835,7 @@ async def admin_get_items(
     logic stays in one place.
     """
     _require_admin(request)
+    _check_access_mode(access_mode)
     fields = fields.split(",") if fields else None
     if limit is not None:
         limit = max(0, min(limit, _MAX_LIMIT))
@@ -803,7 +850,7 @@ async def admin_get_items(
     try:
         enriched = await run_in_threadpool(
             LennyAPI.get_enriched_items,
-            fields=fields, offset=offset, limit=limit, encrypted=encrypted,
+            fields=fields, offset=offset, limit=limit, encrypted=encrypted, access_mode=access_mode,
         )
     except _OL_DOWN:
         raise _ol_unavailable()
@@ -820,13 +867,16 @@ async def admin_search_items(
     q: str,
     encrypted: Optional[bool] = None,
     limit: Optional[int] = None,
+    access_mode: Optional[str] = None,
 ):
     _require_admin(request)
+    _check_access_mode(access_mode)
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="'q' is required")
     eff_limit = max(1, min(int(limit or 50), 200))
     items, ol_unavailable = await run_in_threadpool(
         LennyAPI.admin_search_items, q=q.strip(), encrypted=encrypted, limit=eff_limit,
+        access_mode=access_mode,
     )
     return JSONResponse({
         "items": items, "total": len(items), "limit": eff_limit,
@@ -923,6 +973,12 @@ async def update_item(request: Request, book_id: str, body: dict = Body(...)):
             raise HTTPException(status_code=400, detail="'openlibrary_edition' must be a positive integer")
 
     kwargs = {}
+    if "access_mode" in body:
+        if body["access_mode"] not in ACCESS_MODES:
+            raise HTTPException(status_code=422, detail="'access_mode' must be open, borrowable or subscription")
+        if "encrypted" in body:
+            raise HTTPException(status_code=400, detail="Send 'access_mode' or 'encrypted', not both")
+        kwargs["encrypted"], kwargs["subscription"] = ACCESS_MODES[body["access_mode"]]
     if "encrypted" in body:
         encrypted = body["encrypted"]
         if not isinstance(encrypted, bool):
@@ -950,7 +1006,7 @@ async def update_item(request: Request, book_id: str, body: dict = Body(...)):
     if not kwargs and new_olid is None:
         raise HTTPException(
             status_code=400,
-            detail="At least one of 'encrypted', 'loan_duration_days', 'openlibrary_edition' is required",
+            detail="At least one of 'access_mode', 'encrypted', 'loan_duration_days', 'openlibrary_edition' is required",
         )
 
     # Everything validated — now perform the actual mutations.
@@ -982,6 +1038,7 @@ async def update_item(request: Request, book_id: str, body: dict = Body(...)):
     return {
         "openlibrary_edition": item.openlibrary_edition,
         "encrypted": item.encrypted,
+        "access_mode": item.access_mode,
         "loan_duration_days": item.loan_duration_days,
     }
 

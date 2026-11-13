@@ -16,7 +16,7 @@ from pyopds2.provider import DataProvider
 from lenny import configs as _configs
 from lenny.core import db, s3, auth
 from lenny.core.utils import hash_email, parse_modified_since, to_iso_utc, is_valid_epub
-from lenny.core.models import Item, FormatEnum, Loan, lock_editions
+from lenny.core.models import Item, FormatEnum, Loan, Subscription, ACCESS_MODES, lock_editions
 from lenny.core.openlibrary import OpenLibrary
 from lenny.core.upstream import open_library as _ol_guard, install_timeout as _install_ol_timeout
 import pyopds2_openlibrary as _pyopds2_openlibrary
@@ -311,6 +311,14 @@ class LennyAPI:
         sign-in/borrow flow vs the OPDS authentication document) is the
         decorator's job, not this method's.
         """
+        if item.subscription:
+            # Members-only: a live lease from the provider, checked locally. No loan.
+            if not email or not Subscription.is_active(email if email_hashed else hash_email(email)):
+                return {
+                    "error": "subscription_required",
+                    "message": "This book is for members. Open it from the publisher's site.",
+                }
+            return {"success": "authenticated", "email": email, "email_hashed": email_hashed}
         if item.is_login_required:
             if not email:
                 return {
@@ -414,7 +422,8 @@ class LennyAPI:
 
     @classmethod
     def admin_search_items(
-        cls, q: str, encrypted: Optional[bool] = None, limit: Optional[int] = None
+        cls, q: str, encrypted: Optional[bool] = None, limit: Optional[int] = None,
+        access_mode: Optional[str] = None,
     ) -> tuple[list[dict], bool]:
         """Returns `(items, ol_unavailable)`. `ol_unavailable=True` means a
         batch failed to reach Open Library — the caller can't tell that
@@ -425,6 +434,8 @@ class LennyAPI:
         all_items = Item.get_all()
         if encrypted is not None:
             all_items = {k: v for k, v in all_items.items() if v.encrypted == encrypted}
+        if access_mode is not None:
+            all_items = {k: v for k, v in all_items.items() if v.access_mode == access_mode}
         if not all_items:
             return [], False
 
@@ -458,6 +469,7 @@ class LennyAPI:
                         "title": getattr(book, "title", None),
                         "author": ", ".join(authors) if authors else None,
                         "encrypted": item.encrypted,
+                        "access_mode": item.access_mode,
                         "formats": item.formats.name if item.formats else None,
                         "created_at": item.created_at.isoformat() if item.created_at else None,
                     })
@@ -478,7 +490,7 @@ class LennyAPI:
 
     @classmethod
     def get_enriched_items(cls, olid=None, fields=None, offset=None, limit=None, encrypted=None,
-                           modified_since=None):
+                           modified_since=None, access_mode=None):
         """Returns a dict whose keys are int `olid` Open Library
         edition IDs and whose values are OpenLibraryRecords with an
         additional `lenny` field containing Lenny's record for this
@@ -486,7 +498,8 @@ class LennyAPI:
         """
         limit = limit or cls.DEFAULT_LIMIT
         items = [Item.exists(olid)] if olid else Item.get_many(
-            offset=offset, limit=limit, encrypted=encrypted, modified_since=modified_since
+            offset=offset, limit=limit, encrypted=encrypted, modified_since=modified_since,
+            access_mode=access_mode,
         )
         return cls._enrich_items(items, fields=fields)
 
@@ -499,6 +512,7 @@ class LennyAPI:
         for book in records.values():
             lenny = book.get("lenny")
             book["num_lendable_total"] = 1
+            book["access_mode"] = getattr(lenny, "access_mode", None)
             book["available_copies"] = available.get(getattr(lenny, "id", None), 1)
         return enriched
 
@@ -819,7 +833,7 @@ class LennyAPI:
         return formats
 
     @classmethod
-    def add(cls, openlibrary_edition: int, files: list[UploadFile], encrypt: bool=False):
+    def add(cls, openlibrary_edition: int, files: list[UploadFile], encrypt: bool=False, subscription: bool=False):
         """Adds a book into s3 and the database.
 
         Authorization is the caller's job and is NOT done here: every route
@@ -841,6 +855,7 @@ class LennyAPI:
                 item = Item(
                     openlibrary_edition=openlibrary_edition,
                     encrypted=encrypt,
+                    subscription=subscription,
                     formats=FormatEnum(formats),
                 )
                 db.add(item)
@@ -853,7 +868,7 @@ class LennyAPI:
             db.rollback()
 
     @classmethod
-    def add_staged(cls, openlibrary_edition: int, source_key: str, encrypt: bool = False):
+    def add_staged(cls, openlibrary_edition: int, source_key: str, encrypt: bool = False, subscription: bool = False):
         """Adds a book whose (already checked) EPUB is in the bucket under `source_key`:
         a server-side copy to `{olid}.epub` plus the database row, no upload.
 
@@ -873,7 +888,8 @@ class LennyAPI:
                     raise ItemNotFoundError("The uploaded copy of this book is gone.")
                 raise S3UploadError(f"Failed to copy the staged file: {e}")
             try:
-                item = Item(openlibrary_edition=openlibrary_edition, encrypted=encrypt, formats=FormatEnum.EPUB)
+                item = Item(openlibrary_edition=openlibrary_edition, encrypted=encrypt,
+                            subscription=subscription, formats=FormatEnum.EPUB)
                 db.add(item)
                 db.commit()
                 return item
@@ -890,7 +906,8 @@ class LennyAPI:
     UNSET = object()  # sentinel: "field not provided", distinct from JSON null
 
     @classmethod
-    def update_item(cls, openlibrary_edition: int, encrypted=UNSET, loan_duration_days=UNSET) -> Item:
+    def update_item(cls, openlibrary_edition: int, encrypted=UNSET, loan_duration_days=UNSET,
+                    subscription=UNSET) -> Item:
         """Update an item's encrypted/DRM flag and/or per-item loan duration.
 
         Callers must pass `cls.UNSET` (the default) for a field that wasn't
@@ -912,6 +929,10 @@ class LennyAPI:
         try:
             if encrypted is not cls.UNSET:
                 item.encrypted = encrypted
+                if encrypted:  # borrowable and members-only never overlap
+                    item.subscription = False
+            if subscription is not cls.UNSET:
+                item.subscription = subscription
             if loan_duration_days is not cls.UNSET:
                 item.loan_duration_days = loan_duration_days
             db.commit()
@@ -1029,6 +1050,8 @@ class LennyAPI:
             formats = cls.upload_files(files, openlibrary_edition, encrypt=encrypt)
             try:
                 item.encrypted = encrypt
+                if encrypt:  # borrowable and members-only never overlap
+                    item.subscription = False
                 item.formats = FormatEnum(formats)
                 db.commit()
             except Exception as e:

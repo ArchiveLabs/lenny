@@ -221,3 +221,12 @@ __all__ = ['SCHEME', 'HOST', 'PORT', 'DEBUG', 'OPTIONS', 'DB_URI', 'DB_CONFIG', 
            'OAUTH_REDIRECT_URI', 'OAUTH_SCOPES', 'OAUTH_FLOW',
            'get_loan_limit', 'get_loan_duration_days',
            'read_lending_mode', 'OL_ENV_PATH']
+
+
+DEFAULT_ACCESS_MODE = os.environ.get('LENNY_DEFAULT_ACCESS_MODE', 'open')
+
+
+def get_default_access_mode() -> str:
+    """Access mode for a new item when the caller names none (loan.env → global fallback)."""
+    raw = (_read_loan_env_value('LENNY_DEFAULT_ACCESS_MODE') or '').strip()
+    return raw if raw in ('open', 'borrowable', 'subscription') else DEFAULT_ACCESS_MODE
