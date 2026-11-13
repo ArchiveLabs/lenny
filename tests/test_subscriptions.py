@@ -408,3 +408,38 @@ def test_readium_resources_are_gated_too():
     r = client().get(f"/v1/api/items/{EDITION}/readium/OEBPS/chapter1.xhtml",
                      headers={"accept": "application/json"}, follow_redirects=False)
     assert r.status_code == 403 and r.json()["code"] == "subscription_required"
+
+
+# ── member passes and the dashboard ──────────────────────────────────────────
+
+def test_member_passes_list_and_end(admin):
+    lease()
+    Subscription.grant("ghost", hash_email("b@example.com"), "m-2", [])
+    db.query(Subscription).filter_by(member_uuid="m-2").update(
+        {"expires_at": datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=1)})
+    db.commit()
+    body = client().get("/v1/api/admin/subscriptions").json()
+    assert body["total"] == 1
+    row = body["items"][0]
+    assert row["member"] == hash_email(ME)[:8] and row["tier_ids"] == ["t-paid"]
+    assert ME not in json.dumps(body) and hash_email(ME) not in json.dumps(body)
+    assert client().delete(f"/v1/api/admin/subscriptions/{row['id']}").status_code == 204
+    assert not Subscription.is_active(hash_email(ME))
+    r = client().delete(f"/v1/api/admin/subscriptions/{row['id']}")
+    assert r.status_code == 404 and r.json()["code"] == "not_found"
+
+
+def test_dashboard(admin, monkeypatch):
+    import lenny.routes.admin_dashboard as dash
+    monkeypatch.setattr(dash, "_require_admin", lambda request: None)
+    make_item()
+    db.add(Item(openlibrary_edition=EDITION + 1, encrypted=True, formats=FormatEnum.EPUB))
+    db.commit()
+    body = client().get("/v1/api/admin/dashboard").json()
+    assert body["books"] == {"total": 2, "open": 0, "borrowable": 1, "subscription": 1}
+    assert body["loans"] == {"active": 0, "overdue": 0, "started_30d": 0}
+    assert body["health"]["database"] == "ok" and body["health"]["reader"] == "down"  # no reader in tests
+    # One broken part is null; the rest still answer.
+    monkeypatch.setattr(dash, "_loans", lambda: 1 / 0)
+    body = client().get("/v1/api/admin/dashboard").json()
+    assert body["loans"] is None and body["books"]["total"] == 2

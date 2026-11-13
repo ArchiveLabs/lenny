@@ -14,6 +14,7 @@ from lenny.routes import bulk_import as bulk_import_routes
 from lenny.routes import preload as preload_routes
 from lenny.routes import library_links as library_links_routes
 from lenny.routes import subscriptions as subscription_routes
+from lenny.routes import admin_dashboard as admin_dashboard_routes
 from lenny.configs import FORWARDED_ALLOW_IPS, OPTIONS
 from lenny.core.db import session as db_session
 from lenny import __version__ as VERSION
@@ -208,6 +209,7 @@ app.include_router(bulk_import_routes.router, prefix="/v1/api")
 app.include_router(preload_routes.router, prefix="/v1/api")
 app.include_router(library_links_routes.router, prefix="/v1/api")
 app.include_router(subscription_routes.router, prefix="/v1/api")
+app.include_router(admin_dashboard_routes.router, prefix="/v1/api")
 
 
 # RFC 8414 requires this at the origin root, not under a path prefix — a client

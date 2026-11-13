@@ -7,13 +7,15 @@
     POST /admin/settings/ghost/webhook-secret rotate
     GET  /admin/stats/subscriptions           ?from=YYYY-MM-DD&to=YYYY-MM-DD
     GET  /admin/stats/subscriptions/books     ?from&to&page&page_size&sort=opens|patrons|last_read
+    GET  /admin/subscriptions                 active member passes, ?page&page_size
+    DELETE /admin/subscriptions/{id}          end one pass now
 """
 import datetime
 import logging
 from typing import Optional
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy import func
 
 from lenny import configs
@@ -288,3 +290,46 @@ async def subscription_book_stats(request: Request, page: int = 1, page_size: in
         return _problem("'sort' must be opens, patrons or last_read", "invalid_sort")
     page, page_size = max(1, page), max(1, min(page_size, 100))
     return await run_blocking(_book_stats, *rng, page, page_size, sort)
+
+
+# ── member passes ───────────────────────────────────────────────────────────
+
+def _passes(page, page_size) -> dict:
+    S = Subscription
+    q = db.query(S).filter(S.expires_at > S._now())
+    total = q.count()
+    rows = q.order_by(S.updated_at.desc(), S.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    return {"items": [{
+        "id": r.id,
+        "member": r.patron_email_hash[:8],  # a display handle only; never the email or the full hash
+        "provider": r.provider,
+        "tier_ids": [t for t in (r.tier_ids or "").split(",") if t],
+        "expires_at": r.expires_at.isoformat(),
+        "renewed_at": r.updated_at.isoformat() if r.updated_at else None,
+    } for r in rows], "total": total}
+
+
+@router.get("/admin/subscriptions")
+async def list_passes(request: Request, page: int = 1, page_size: int = 20):
+    _require_admin(request)
+    page, page_size = max(1, page), max(1, min(page_size, 100))
+    return await run_blocking(_passes, page, page_size)
+
+
+def _end_pass(pass_id) -> bool:
+    try:
+        n = db.query(Subscription).filter(Subscription.id == pass_id).delete(synchronize_session=False)
+        db.commit()
+        return n > 0
+    except Exception:
+        db.rollback()
+        raise
+
+
+@router.delete("/admin/subscriptions/{pass_id}", status_code=204)
+async def end_pass(request: Request, pass_id: int):
+    """End a pass now. A member who is still paid can open the book again from Ghost."""
+    _require_admin(request)
+    if not await run_blocking(_end_pass, pass_id):
+        return _problem("No such pass", "not_found", 404)
+    return Response(status_code=204)
