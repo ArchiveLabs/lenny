@@ -35,7 +35,8 @@ if docker exec "$CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" --clean --if-exi
     # Verify the dump is not empty
     if [ -s "$BACKUP_FILE" ]; then
         SIZE=$(wc -c < "$BACKUP_FILE" | tr -d ' ')
-        if tail -1 "$BACKUP_FILE" | grep -q "PostgreSQL database dump complete"; then
+        # pg_dump 16.10+ writes a `\unrestrict` line after the footer, so look at the last few lines.
+        if tail -5 "$BACKUP_FILE" | grep -q "PostgreSQL database dump complete"; then
             echo "Backup verified (${SIZE} bytes): ${BACKUP_FILE}"
         else
             echo "Warning: backup may be incomplete (no footer found)."
