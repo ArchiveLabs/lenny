@@ -46,7 +46,8 @@ env:
 jobs:
   # ── Decide, per image, whether a build is needed ────────────────────────────
   # Computes each image's content-hash tag and checks whether it already exists in
-  # ghcr. Emits a JSON map consumed by the matrix below. amd64 only (#144).
+  # ghcr. Emits a JSON map consumed by the matrix below. Images are published for
+  # amd64 and arm64 (Apple silicon, 64-bit Raspberry Pi OS).
   detect:
     name: detect changed images
     runs-on: ubuntu-latest
@@ -79,7 +80,8 @@ jobs:
           for svc in api reader admin opds; do
             tag="$(bash docker/utils/image-hash.sh tag "$svc")"
             ref="${REGISTRY}/${ORG}/lenny-${svc}:${tag}"
-            if docker buildx imagetools inspect "$ref" >/dev/null 2>&1; then
+            # A tag published before arm64 was added has amd64 only: rebuild it once.
+            if docker buildx imagetools inspect "$ref" 2>/dev/null | grep -q "linux/arm64"; then
               exists=true
             else
               exists=false
@@ -139,6 +141,9 @@ jobs:
         id: version
         run: echo "value=$(cat VERSION)" >> "$GITHUB_OUTPUT"
 
+      - uses: docker/setup-qemu-action@v3
+        if: env.EXISTS == 'false'
+
       - uses: docker/setup-buildx-action@v3
         if: env.EXISTS == 'false'
 
@@ -173,7 +178,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
