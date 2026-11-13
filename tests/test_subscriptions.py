@@ -302,3 +302,28 @@ def test_stats(admin):
     assert body["totals"] == {"books_read": 1, "patrons": 2, "opens": 2, "active_now": 2}
     assert {d["device_class"] for d in body["devices"]} == {"desktop", "mobile"}
     assert client().get("/v1/api/admin/stats/subscriptions?from=2026-13-01").status_code == 422
+
+
+@pytest.mark.parametrize("data, mode", [
+    ({"access_mode": "subscription"}, "subscription"),
+    ({"access_mode": "open"}, "open"),
+    ({"encrypted": "true"}, "borrowable"),
+    ({}, "borrowable"),   # no field: the book keeps its mode
+])
+def test_reupload_access_mode(admin, monkeypatch, data, mode):
+    from lenny.core.api import LennyAPI
+    monkeypatch.setattr(LennyAPI, "upload_files", classmethod(lambda cls, *a, **k: FormatEnum.EPUB.value))
+    monkeypatch.setattr(LennyAPI, "_item_s3_keys", classmethod(lambda cls, *a, **k: []), raising=False)
+    make_item(subscription=False, encrypted=True)
+    r = client().post(f"/v1/api/admin/items/{EDITION}/reupload", data=data,
+                      files={"file": ("b.epub", b"x", "application/epub+zip")})
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    assert Item.exists(EDITION).access_mode == mode
+
+
+def test_reupload_rejects_both_fields(admin):
+    make_item()
+    r = client().post(f"/v1/api/admin/items/{EDITION}/reupload", data={"access_mode": "open", "encrypted": "true"},
+                      files={"file": ("b.epub", b"x", "application/epub+zip")})
+    assert r.status_code == 400

@@ -1028,7 +1028,8 @@ class LennyAPI:
             db.rollback()
 
     @classmethod
-    def reupload(cls, openlibrary_edition: int, files: list, encrypt: bool = False) -> Item:
+    def reupload(cls, openlibrary_edition: int, files: list, encrypt: Optional[bool] = None,
+                 subscription: Optional[bool] = None) -> Item:
         """Replace an existing item's file(s) in place.
 
         Opposite guard from `add`: requires the item to already exist rather
@@ -1047,10 +1048,14 @@ class LennyAPI:
                 raise ItemNotFoundError(f"Item '{openlibrary_edition}' not found.")
             # Upload first: the new file overwrites the old at the same key, so a
             # failed upload (validation, size or S3) leaves the stored copy alone.
-            formats = cls.upload_files(files, openlibrary_edition, encrypt=encrypt)
+            formats = cls.upload_files(files, openlibrary_edition, encrypt=bool(encrypt))
             try:
-                item.encrypted = encrypt
-                if encrypt:  # borrowable and members-only never overlap
+                # None keeps the current flag. Borrowable and members-only never overlap.
+                if encrypt is not None:
+                    item.encrypted = encrypt
+                if subscription is not None:
+                    item.subscription = subscription
+                elif encrypt:
                     item.subscription = False
                 item.formats = FormatEnum(formats)
                 db.commit()

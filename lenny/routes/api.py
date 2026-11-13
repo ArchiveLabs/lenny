@@ -1047,7 +1047,8 @@ async def update_item(request: Request, book_id: str, body: dict = Body(...)):
 async def reupload_item(
     request: Request,
     book_id: str,
-    encrypted: bool = Form(False, description="Set to true if the file is encrypted"),
+    encrypted: Optional[bool] = Form(None, description="Deprecated: use access_mode. true = borrowable"),
+    access_mode: Optional[str] = Form(None, description="open, borrowable or subscription (default: unchanged)"),
     file: UploadFile = File(..., description="The EPUB file to upload (max 100MB)"),
 ):
     """
@@ -1063,9 +1064,15 @@ async def reupload_item(
     book_id = parse_olid(book_id)
     if book_id is None:
         raise HTTPException(status_code=400, detail="Invalid OLID or edition key")
+    if access_mode is not None and encrypted is not None:
+        raise HTTPException(status_code=400, detail="Send 'access_mode' or 'encrypted', not both")
+    _check_access_mode(access_mode)
+    # Neither field: the book keeps its access mode.
+    encrypt, subscription = ACCESS_MODES[access_mode] if access_mode else (encrypted, None)
     try:
         await anyio.to_thread.run_sync(
-            partial(_run_upload, LennyAPI.reupload, book_id, files=[file], encrypt=encrypted),
+            partial(_run_upload, LennyAPI.reupload, book_id, files=[file],
+                    encrypt=encrypt, subscription=subscription),
             limiter=_UPLOAD_LIMITER,
         )
         return HTMLResponse(status_code=status.HTTP_200_OK, content="File replaced successfully.")
