@@ -159,8 +159,8 @@ class Item(Base):
 
     @hybrid_property
     def is_readable(self):
-        """Publicly readable if not encrypted."""
-        return not self.encrypted
+        """Publicly readable: neither lent nor members-only."""
+        return not self.encrypted and not self.subscription
 
     @hybrid_property
     def is_lendable(self):
@@ -466,20 +466,30 @@ class Subscription(Base):
 
     @classmethod
     def grant(cls, provider, patron_email_hash, member_uuid=None, tier_ids=(), lease_seconds=86400):
-        """Create or renew the lease. One row per provider and patron."""
+        """Create or renew the lease. One row per provider and patron.
+
+        Two launches at once (a double-click on Read) race on the unique key;
+        the loser retries once and renews the winner's row.
+        """
+        from sqlalchemy.exc import IntegrityError
         expires = cls._now() + datetime.timedelta(seconds=lease_seconds)
         tiers = ",".join(str(t) for t in tier_ids or ())
-        try:
-            row = db.query(cls).filter_by(provider=provider, patron_email_hash=patron_email_hash).first()
-            if row is None:
-                row = cls(provider=provider, patron_email_hash=patron_email_hash)
-                db.add(row)
-            row.member_uuid, row.tier_ids, row.expires_at = member_uuid, tiers, expires
-            db.commit()
-            return row
-        except Exception as e:
-            db.rollback()
-            raise DatabaseInsertError(f"Failed to record subscription: {e}")
+        for attempt in (1, 2):
+            try:
+                row = db.query(cls).filter_by(provider=provider, patron_email_hash=patron_email_hash).first()
+                if row is None:
+                    row = cls(provider=provider, patron_email_hash=patron_email_hash)
+                    db.add(row)
+                row.member_uuid, row.tier_ids, row.expires_at = member_uuid, tiers, expires
+                db.commit()
+                return row
+            except IntegrityError as e:
+                db.rollback()
+                if attempt == 2:
+                    raise DatabaseInsertError(f"Failed to record subscription: {e}")
+            except Exception as e:
+                db.rollback()
+                raise DatabaseInsertError(f"Failed to record subscription: {e}")
 
     @classmethod
     def is_active(cls, patron_email_hash) -> bool:
@@ -499,6 +509,16 @@ class Subscription(Base):
             return 0
         try:
             n = db.query(cls).filter(cls.provider == provider, or_(*conds)).delete(synchronize_session=False)
+            db.commit()
+            return n
+        except Exception:
+            db.rollback()
+            raise
+
+    @classmethod
+    def revoke_all(cls, provider) -> int:
+        try:
+            n = db.query(cls).filter(cls.provider == provider).delete(synchronize_session=False)
             db.commit()
             return n
         except Exception:

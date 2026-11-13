@@ -327,3 +327,54 @@ def test_reupload_rejects_both_fields(admin):
     r = client().post(f"/v1/api/admin/items/{EDITION}/reupload", data={"access_mode": "open", "encrypted": "true"},
                       files={"file": ("b.epub", b"x", "application/epub+zip")})
     assert r.status_code == 400
+
+
+def test_core_update_keeps_modes_exclusive():
+    from lenny.core.api import LennyAPI
+    make_item(subscription=False, encrypted=True)
+    assert LennyAPI.update_item(EDITION, subscription=True).access_mode == "subscription"
+    assert LennyAPI.update_item(EDITION, encrypted=True).access_mode == "borrowable"
+
+
+def test_members_only_is_not_publicly_readable():
+    assert make_item().is_readable is False
+
+
+def test_snippet_follows_a_ghost_under_a_path():
+    s = ghost.snippet("https://lenny.example/v1/api/subscriptions/ghost/launch", "https://example.com/blog")
+    assert '"https://example.com/blog/members/api/entitlements/"' in s
+
+
+def test_changing_the_ghost_site_drops_old_leases(admin, monkeypatch):
+    monkeypatch.setattr(ghost, "fetch_jwks", lambda site: JWKS)
+    written = {}
+    monkeypatch.setattr("lenny.core.ol_bootstrap.update_env_file", lambda path, u: written.update(u))
+    lease()
+    r = client().put("/v1/api/admin/settings/ghost", json={"site_url": "https://other.example"})
+    assert r.status_code == 200 and written[ghost.URL_KEY] == "https://other.example"
+    assert db.query(Subscription).count() == 0
+
+
+def test_resaving_the_same_site_keeps_leases(admin, monkeypatch):
+    monkeypatch.setattr(ghost, "fetch_jwks", lambda site: JWKS)
+    monkeypatch.setattr("lenny.core.ol_bootstrap.update_env_file", lambda path, u: None)
+    lease()
+    assert client().put("/v1/api/admin/settings/ghost", json={"site_url": SITE}).status_code == 200
+    assert db.query(Subscription).count() == 1
+
+
+def test_grant_retries_after_losing_the_insert_race(monkeypatch):
+    from sqlalchemy.exc import IntegrityError
+    calls = {"n": 0}
+    real_commit = db.commit
+
+    def flaky_commit():  # the first commit loses the race to a concurrent launch
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise IntegrityError("insert", {}, Exception("duplicate key"))
+        return real_commit()
+
+    with monkeypatch.context() as m:
+        m.setattr(db, "commit", flaky_commit)
+        assert Subscription.grant("ghost", hash_email(ME), "m-1").member_uuid == "m-1"
+    assert calls["n"] == 2 and Subscription.is_active(hash_email(ME))

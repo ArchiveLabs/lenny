@@ -15,13 +15,12 @@ from typing import Optional
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func
-from starlette.concurrency import run_in_threadpool
 
 from lenny import configs
 from lenny.core import auth, ghost, ol_bootstrap
 from lenny.core.api import LennyAPI
 from lenny.core.briet import parse_olid
-from lenny.core.db import session as db
+from lenny.core.db import run_blocking, session as db
 from lenny.core.models import ACCESS_MODES, Item, Subscription, SubscriptionRead
 from lenny.core.utils import hash_email
 from lenny.routes.api import _require_admin
@@ -59,16 +58,16 @@ async def ghost_launch(request: Request, token: str = Form(""), book: str = Form
     The token comes in a form POST so it never lands in a URL or an access log.
     """
     olid = parse_olid(book)
-    if olid is None or not await run_in_threadpool(Item.exists, olid):
+    if olid is None or not await run_blocking(Item.exists, olid):
         return _launch_failed(request, "not_found", 404)
     try:
-        claims = await run_in_threadpool(ghost.verify_entitlement, token)
+        claims = await run_blocking(ghost.verify_entitlement, token)
     except ghost.GhostError as e:
         logger.info("Ghost launch refused: %s", e.code)
         return _launch_failed(request, e.code)
 
     patron = hash_email(claims["sub"])
-    await run_in_threadpool(
+    await run_blocking(
         Subscription.grant, ghost.PROVIDER, patron, claims.get("member_uuid"),
         claims.get("active_tier_ids") or [], ghost.LEASE_SECONDS)
 
@@ -101,9 +100,9 @@ async def ghost_webhook(request: Request):
     revoked = 0
     if change:
         member_uuid, emails = change
-        revoked = await run_in_threadpool(
+        revoked = await run_blocking(
             Subscription.revoke, ghost.PROVIDER, member_uuid, [hash_email(e) for e in emails])
-    await run_in_threadpool(ghost.mark_webhook)
+    await run_blocking(ghost.mark_webhook)
     return {"ok": True, "revoked": revoked}
 
 
@@ -117,7 +116,7 @@ def _settings() -> dict:
         "seen_tiers": Subscription.seen_tiers(ghost.PROVIDER),
         "default_access_mode": configs.get_default_access_mode(),
         "lease_hours": ghost.LEASE_SECONDS // 3600,
-        "snippet": ghost.snippet(LennyAPI.make_url("/v1/api/subscriptions/ghost/launch")) if site else None,
+        "snippet": ghost.snippet(LennyAPI.make_url("/v1/api/subscriptions/ghost/launch"), site) if site else None,
         "webhook_url": LennyAPI.make_url("/v1/api/subscriptions/ghost/webhook"),
         "webhook_secret": ghost.webhook_secret() or None,
         "last_webhook_at": ghost.last_webhook_at(),
@@ -131,7 +130,7 @@ def _settings_response() -> JSONResponse:
 @router.get("/admin/settings/ghost")
 async def get_ghost_settings(request: Request):
     _require_admin(request)
-    return await run_in_threadpool(_settings_response)
+    return await run_blocking(_settings_response)
 
 
 @router.put("/admin/settings/ghost")
@@ -156,7 +155,7 @@ async def put_ghost_settings(request: Request):
         if raw.strip():
             try:
                 site = ghost.normalize_site_url(raw)
-                await run_in_threadpool(ghost.fetch_jwks, site)
+                await run_blocking(ghost.fetch_jwks, site)
             except ghost.GhostError as e:
                 messages = {
                     "invalid_site_url": "Use the site's https:// address, like https://example.com",
@@ -181,6 +180,7 @@ async def put_ghost_settings(request: Request):
     if not auth_updates and not loan_updates:
         return _problem("Nothing to change", "bad_request")
 
+    site_changed = ghost.URL_KEY in auth_updates and auth_updates[ghost.URL_KEY] != ghost.site_url()
     try:
         if auth_updates:
             ol_bootstrap.update_env_file(configs.AUTH_ENV_PATH, auth_updates)
@@ -189,7 +189,9 @@ async def put_ghost_settings(request: Request):
     except OSError:
         logger.exception("Failed to save Ghost settings")
         return _problem("Could not save the settings", "env_write_failed", 500)
-    return await run_in_threadpool(_settings_response)
+    if site_changed:  # the old site's members proved nothing to the new one
+        await run_blocking(Subscription.revoke_all, ghost.PROVIDER)
+    return await run_blocking(_settings_response)
 
 
 @router.post("/admin/settings/ghost/webhook-secret")
@@ -244,7 +246,7 @@ async def subscription_stats(request: Request):
     rng = _range(request.query_params.get("from"), request.query_params.get("to"))
     if rng is None:
         return _problem("Use from/to as YYYY-MM-DD, at most a year apart", "invalid_range")
-    return await run_in_threadpool(_stats, *rng)
+    return await run_blocking(_stats, *rng)
 
 
 _SORTS = {"opens": "opens", "patrons": "patrons", "last_read": "last_read"}
@@ -280,4 +282,4 @@ async def subscription_book_stats(request: Request, page: int = 1, page_size: in
     if sort not in _SORTS:
         return _problem("'sort' must be opens, patrons or last_read", "invalid_sort")
     page, page_size = max(1, page), max(1, min(page_size, 100))
-    return await run_in_threadpool(_book_stats, *rng, page, page_size, sort)
+    return await run_blocking(_book_stats, *rng, page, page_size, sort)

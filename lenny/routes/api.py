@@ -509,7 +509,7 @@ async def redirect_reader(request: Request, book_id: str, format: str = "epub", 
 async def get_manifest(request: Request, book_id: str, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
     if item.subscription and email:
         patron = email if request.state.email_hashed else hash_email(email)
-        await run_in_threadpool(SubscriptionRead.record, item.id, patron, request.headers.get("user-agent"))
+        await run_blocking(SubscriptionRead.record, item.id, patron, request.headers.get("user-agent"))
     return ReadiumAPI.get_manifest(book_id, format)
 
 @router.get("/items/{book_id}/readium/{readium_path:path}")

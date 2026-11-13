@@ -933,6 +933,8 @@ class LennyAPI:
                     item.subscription = False
             if subscription is not cls.UNSET:
                 item.subscription = subscription
+                if subscription:
+                    item.encrypted = False
             if loan_duration_days is not cls.UNSET:
                 item.loan_duration_days = loan_duration_days
             db.commit()
@@ -1055,6 +1057,8 @@ class LennyAPI:
                     item.encrypted = encrypt
                 if subscription is not None:
                     item.subscription = subscription
+                    if subscription:
+                        item.encrypted = False
                 elif encrypt:
                     item.subscription = False
                 item.formats = FormatEnum(formats)

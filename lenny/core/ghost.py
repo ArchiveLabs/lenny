@@ -214,7 +214,7 @@ document.addEventListener("click", function (e) {
   var b = e.target.closest && e.target.closest("[data-lenny-book]");
   if (!b) return;
   e.preventDefault();
-  fetch("/members/api/entitlements/", {credentials: "same-origin"}).then(function (r) {
+  fetch(%(entitlements)s, {credentials: "same-origin"}).then(function (r) {
     if (r.status !== 200) { window.location.hash = "#/portal/signin"; return; }
     return r.text().then(function (token) {
       var f = document.createElement("form");
@@ -233,6 +233,7 @@ document.addEventListener("click", function (e) {
 </script>"""
 
 
-def snippet(launch_url: str) -> str:
+def snippet(launch_url: str, site: str) -> str:
     import json
-    return SNIPPET % {"launch": json.dumps(launch_url)}
+    return SNIPPET % {"launch": json.dumps(launch_url),
+                      "entitlements": json.dumps(f"{site}/members/api/entitlements/")}
