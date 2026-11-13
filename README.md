@@ -340,9 +340,11 @@ If you get a "File not found" or permission error, make sure:
 
 ```sh
 BOOK=$(echo -n "s3://bookshelf/32941311.epub" |  base64 | tr '/+' '_-' | tr -d '=')
-echo "http://localhost:15080/$BOOK/manifest.json"
-curl "http://localhost:15080/$BOOK/manifest.json"
+docker exec lenny_api curl -s "http://lenny_readium:15080/$BOOK/manifest.json"
 ```
+
+Readium is not published on a host port: it serves any book by its path with no
+auth, so only the API container may reach it.
 
 ---
 

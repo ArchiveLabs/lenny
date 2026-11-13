@@ -65,8 +65,10 @@ services:
   s3:
     image: dxflrs/garage:v2.3.0
     container_name: lenny_object_store
+    # Loopback only: api and readium reach Garage over lenny_network, and its S3
+    # API should never face the internet.
     ports:
-      - "9000:3900"
+      - "127.0.0.1:9000:3900"
     volumes:
       - ./docker/garage/garage.toml:/etc/garage.toml:ro
       - garage_meta:/var/lib/garage/meta
@@ -102,7 +104,8 @@ services:
         MANIFEST_ROUTE_FORCE_ENABLE: ${MANIFEST_ROUTE_FORCE_ENABLE:-true}
         MANIFEST_ALLOWED_DOMAINS: ${MANIFEST_ALLOWED_DOMAINS:-127.0.0.1,localhost,*.trycloudflare.com}
     env_file: reader.env
-    ports:
+    # Not published: nginx (lenny_api) is the only way in.
+    expose:
       - "${READER_PORT:-3000}"
     networks:
       - lenny_network
@@ -150,7 +153,9 @@ services:
   readium:
     image: ghcr.io/readium/readium:0.10.1
     container_name: lenny_readium
-    ports:
+    # Never publish: Readium serves any book by its base64 path with no auth.
+    # Only the api reaches it, after its loan and session checks.
+    expose:
       - "${READIUM_PORT:-15080}"
     depends_on:
       - s3
