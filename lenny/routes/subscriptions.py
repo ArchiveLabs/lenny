@@ -32,6 +32,7 @@ _LAUNCH_PROBLEMS = {
     "not_paid": "Your membership doesn't include books yet. Check your plan on the publisher's site.",
     "tier_not_allowed": "Your membership plan doesn't include books. Check your plan on the publisher's site.",
     "token_reused": "That link was already used. Go back and press Read again.",
+    "membership_changed": "Your membership just changed. Go back and press Read again.",
     "not_found": "We couldn't find that book.",
     "not_configured": "This library isn't connected to a publisher yet.",
 }
@@ -67,6 +68,9 @@ async def ghost_launch(request: Request, token: str = Form(""), book: str = Form
         return _launch_failed(request, e.code)
 
     patron = hash_email(claims["sub"])
+    if await run_blocking(ghost.revoked_after_issue, [patron, claims.get("member_uuid")], claims.get("iat")):
+        # A webhook ended this membership after Ghost minted the token.
+        return _launch_failed(request, "membership_changed")
     await run_blocking(
         Subscription.grant, ghost.PROVIDER, patron, claims.get("member_uuid"),
         claims.get("active_tier_ids") or [], ghost.LEASE_SECONDS)
@@ -100,8 +104,9 @@ async def ghost_webhook(request: Request):
     revoked = 0
     if change:
         member_uuid, emails = change
-        revoked = await run_blocking(
-            Subscription.revoke, ghost.PROVIDER, member_uuid, [hash_email(e) for e in emails])
+        hashes = [hash_email(e) for e in emails]
+        revoked = await run_blocking(Subscription.revoke, ghost.PROVIDER, member_uuid, hashes)
+        await run_blocking(ghost.mark_revoked, [member_uuid, *hashes])
     await run_blocking(ghost.mark_webhook)
     return {"ok": True, "revoked": revoked}
 

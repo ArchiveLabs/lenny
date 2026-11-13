@@ -190,6 +190,34 @@ def member_change(payload: dict):
     return None
 
 
+REVOKED_SCOPE = "ghost:revoked"
+REVOKED_TTL_S = 15 * 60  # outlives any token Ghost issued before the revocation (5 min + leeway)
+
+
+def mark_revoked(keys) -> None:
+    """Remember when access ended for these member ids / email hashes."""
+    now = str(int(time.time()))
+    for key in filter(None, keys):
+        Cache._record(REVOKED_SCOPE, key, REVOKED_TTL_S, value=now)
+
+
+def revoked_after_issue(keys, issued_at) -> bool:
+    """True if any key was revoked at or after the token's `iat` (or the token has no `iat`)."""
+    from lenny.core.cache import CacheEntry
+    from lenny.core.db import session as db
+    import datetime
+    keys = [k for k in keys if k]
+    if not keys:
+        return False
+    rows = db.query(CacheEntry.value).filter(
+        CacheEntry.scope == REVOKED_SCOPE, CacheEntry.key.in_(keys),
+        CacheEntry.expires_at > datetime.datetime.now(datetime.timezone.utc)).all()
+    stamps = [int(v) for (v,) in rows if (v or "").isdigit()]
+    if not stamps:
+        return False
+    return not isinstance(issued_at, int) or max(stamps) >= issued_at
+
+
 def mark_webhook() -> None:
     Cache._record("ghost:webhook", "last", 90 * 86400, value=str(int(time.time())))
 

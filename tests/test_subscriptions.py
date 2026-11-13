@@ -378,3 +378,33 @@ def test_grant_retries_after_losing_the_insert_race(monkeypatch):
         m.setattr(db, "commit", flaky_commit)
         assert Subscription.grant("ghost", hash_email(ME), "m-1").member_uuid == "m-1"
     assert calls["n"] == 2 and Subscription.is_active(hash_email(ME))
+
+
+def test_token_minted_before_a_cancel_cannot_relaunch():
+    make_item()
+    before = token(iat=int(time.time()) - 10)
+    lease()
+    body, headers = signed({"member": {"current": {}, "previous": {"uuid": "m-1", "email": ME}}})
+    assert client().post(WEBHOOK, content=body, headers=headers).json()["revoked"] == 1
+    r = client().post(LAUNCH, data={"token": before, "book": str(EDITION)}, follow_redirects=False)
+    assert r.status_code == 403 and "membership_changed" in r.text
+    assert db.query(Subscription).count() == 0
+    # Re-subscribing later mints a newer token, which works.
+    after = token(iat=int(time.time()) + 1)
+    assert client().post(LAUNCH, data={"token": after, "book": str(EDITION)},
+                         follow_redirects=False).status_code == 303
+
+
+def test_members_only_needs_login_but_is_never_lent():
+    from lenny.core.exceptions import LoanNotRequiredError
+    item = make_item()
+    assert item.is_login_required is True and item.is_lendable is False
+    with pytest.raises(LoanNotRequiredError):
+        item.borrow(ME)
+
+
+def test_readium_resources_are_gated_too():
+    make_item()
+    r = client().get(f"/v1/api/items/{EDITION}/readium/OEBPS/chapter1.xhtml",
+                     headers={"accept": "application/json"}, follow_redirects=False)
+    assert r.status_code == 403 and r.json()["code"] == "subscription_required"

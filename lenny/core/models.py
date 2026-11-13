@@ -104,10 +104,10 @@ class Item(Base):
     def access_mode(self) -> str:
         return "subscription" if self.subscription else "borrowable" if self.encrypted else "open"
 
-    @hybrid_property
+    @property
     def is_login_required(self):
-        """True if the item is encrypted and requires login."""
-        return self.encrypted
+        """True if reading needs a signed-in patron: a loan (encrypted) or a lease (subscription)."""
+        return bool(self.encrypted or self.subscription)
 
     @hybrid_property
     def num_lendable_total(self):
@@ -234,7 +234,7 @@ class Item(Base):
         the address, exactly as `borrow` does. Forwarding the flag is what keeps
         the value from being hashed a second time and missing the loan.
         """
-        if not self.is_login_required:
+        if not self.is_lendable:  # open and members-only books have no loans
             raise LoanNotRequiredError
 
         if not email:
@@ -262,12 +262,12 @@ class Item(Base):
         the INSERT are atomic from the database's perspective.
 
         Raises:
-            LoanNotRequiredError: Item is open-access.
+            LoanNotRequiredError: Item is open access or members-only.
             EmailNotFoundError: No email provided.
             PatronLoanLimitError: Patron has reached their concurrent loan limit.
             BookUnavailableError: No copies available for this item.
         """
-        if not self.is_login_required:
+        if not self.is_lendable:  # open and members-only books are never lent
             raise LoanNotRequiredError
 
         if not email:
