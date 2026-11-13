@@ -1,677 +1,114 @@
-<!-- PROJECT LOGO -->
 <p align="center">
   <a href="https://lennyforlibraries.org/">
-    <img width="175" src="https://github.com/user-attachments/assets/b7d70bf8-d795-419c-97b1-5cf4f9bad3f9" alt="Lenny Logo"/>
+    <img width="160" src="https://github.com/user-attachments/assets/b7d70bf8-d795-419c-97b1-5cf4f9bad3f9" alt="Lenny logo"/>
   </a>
 </p>
 
-<h3 align="center">Lenny</h3>
-<p align="center">
-  The open source Library-in-a-Box to preserve and lend digital books.<br/>
-  <a href="https://lennyforlibraries.org/"><strong>Learn more »</strong></a>
-  <br/><br/>
-  <a href="https://github.com/ArchiveLabs/lenny/issues">Issues</a>
-  ·
-  <a href="https://github.com/ArchiveLabs/lenny/pulls">Pull Requests</a>
-  ·
-  <a href="https://github.com/ArchiveLabs/lenny/blob/main/LICENSE">License</a>
-</p>
+# Lenny
 
-<p align="center">
-  <a href="https://github.com/ArchiveLabs/lenny/stargazers"><img src="https://img.shields.io/github/stars/ArchiveLabs/lenny?style=social" alt="Stars"></a>
-  <a href="https://github.com/ArchiveLabs/lenny/network/members"><img src="https://img.shields.io/github/forks/ArchiveLabs/lenny?style=social" alt="Forks"></a>
-  <a href="https://github.com/ArchiveLabs/lenny/issues"><img src="https://img.shields.io/github/issues/ArchiveLabs/lenny?color=blue" alt="Open Issues"></a>
-  <a href="https://github.com/ArchiveLabs/lenny/pulls"><img src="https://img.shields.io/github/issues-pr/ArchiveLabs/lenny?color=purple" alt="Pull Requests"></a>
-  <a href="https://github.com/ArchiveLabs/lenny/commits/main"><img src="https://img.shields.io/github/last-commit/ArchiveLabs/lenny/main" alt="Last Commit"></a>
-  <a href="https://github.com/ArchiveLabs/lenny/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPLv3-purple" alt="License"></a>
-  <a href="https://deepwiki.com/ArchiveLabs/lenny"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
-</p>
+**A self-hosted, open source digital library for ebook lending.** Lenny lets a library keep its EPUB collection on its own server, lend each copy to one patron at a time (controlled digital lending), and publish the catalog as an OPDS feed. Patrons read in the browser through Readium and Thorium Web.
 
+[![CI](https://github.com/ArchiveLabs/lenny/actions/workflows/ci.yml/badge.svg)](https://github.com/ArchiveLabs/lenny/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
-## 📖 Table of Contents
+[Website](https://lennyforlibraries.org/) · [Install](docs/install.md) · [Admin guide](docs/admin.md) · [Configuration](docs/configuration.md) · [API](docs/api.md) · [Issues](https://github.com/ArchiveLabs/lenny/issues)
 
-- [About the Project](#about-the-project)
-- [Features](#features)
-- [OPDS 2.0 Feed](#opds-20-feed)
-- [Built-in OPDS client](#built-in-opds-client)
-- [Technologies](#technologies)
-- [Endpoints](#endpoints)
-- [Getting Started](#getting-started)
-- [Development Setup](#development-setup)
-- [Open Library / Internet Archive Auth](#open-library--internet-archive-auth) — enable lending via Admin UI or CLI
-- [Updating](#updating)
-- [Database Migrations](#database-migrations)
-- [Health Check](#health-check)
-- [Testing Readium Server](#testing-readium-server)
-- [Rebuilding](#rebuilding)
-- [Docker Maintenance](#docker-maintenance)
-- [FAQs](#faqs)
-- [Tests](#tests)
-- [Project Structure](#project-structure)
-- [Admin Dashboard](#admin-dashboard)
-- [lenny-app Local Development](#lenny-app-local-development)
-- [Contributing](#contributing)
-- [Pilot](#pilot)
-- [Open Topics](#open-topics)
-- [Community & Support](#community--support)
-- [License](#-license)
+## Why
 
----
+Most libraries lend ebooks through a vendor's platform, on the vendor's terms. Lenny is the other option: the library runs the server, keeps the files and sets the loan rules. Lenny is made by [Archive Labs](https://github.com/ArchiveLabs) and is free software under the AGPL.
 
-## About the Project
+## What it does
 
-Lenny is a free, open source, Library-in-a-Box for libraries to preserve and lend digital books.
+- **Lending.** Each copy goes to one patron at a time. Loans return themselves after a set number of days. You set the per-patron loan limit and loan length in the admin UI.
+- **Reading in the browser.** Patrons read in [Thorium Web](https://github.com/edrlab/thorium-web), served by your own node. Lenny never offers a download link.
+- **Open access and lendable books side by side.** A book marked *encrypted* needs a loan; any other book can be read by anyone.
+- **OPDS 2.0 catalog** at `/v1/api/opds`, with search and incremental harvesting, for reading apps and aggregators such as Open Library.
+- **A catalog site** at `/` where patrons browse, sign in and borrow.
+- **Admin UI** at `/admin`: books, bulk import, loans, staff accounts, lending and sign-in settings.
+- **Patron sign-in** through Open Library one-time passwords, your own OIDC provider (Keycloak, Auth0, Okta and others), or Internet Archive keys.
+- **OAuth 2.0 server**, so other apps (Open Library, reader.archive.org) can borrow on a patron's behalf.
+- **Metadata from Open Library.** Every book is keyed to an Open Library edition.
+- **One-command updates** with prebaked images for amd64 and arm64, and a database backup before each update.
 
-- 📚 Designed for libraries that want control over their digital collections.
-- 🔐 Built with modern authentication, DRM, and flexible storage options.
-- 🌍 Easy to self-host, customize, and scale for any library size.
-- 🚀 Active development and open to contributions!
+## Quick start
 
----
-
-## 🔐 Authentication Modes
-
-Lenny supports multiple authentication modes for patron login and lending:
-
-1.  **OTP / Open Library (Default)**: Standard OPDS authentication flow. Patrons authenticate via a one-time-password email. Clients like Thorium Reader use this via a popup/webview.
-2.  **Direct Token**: A simpler, link-based flow for environments where full OAuth support is tricky. Append `?auth_mode=direct` (or legacy `?beta=true`) to any OPDS feed URL to activate per-session.
-3.  **External OAuth / OIDC** *(optional)*: Delegate patron authentication to any OIDC-compliant provider (Clerk, Auth0, Okta, Keycloak, Google, etc.) using a PKCE authorization-code flow. Configure the provider in the Admin UI under **Settings → Auth**. When enabled, the lending mode switches to `external` and all patron logins are redirected to the provider — no OTP email needed.
-4.  **IA S3 Patron Auth** *(optional)*: Patrons with an Internet Archive account can authenticate directly using their IA S3 access/secret key pair (`Authorization: LOW <access>:<secret>`). Enabled independently of the lending mode via `IA_AUTH_ENABLED` (toggle in Admin UI or set in `auth.env`). Useful for IA-native clients and automation.
-
-To switch back to OTP mode from external auth, set lending mode to `ol` or `none` via the Admin UI.
-
-### Letting reading apps use your library's sign-in
-
-Separate from the list above: **which apps may sign your patrons in and borrow for them**. The Book Server app (reader.archive.org) is registered automatically on every node. Add any other reader or catalogue in the Admin UI under **Settings → App Access**, or from the command line:
-
-```sh
-make oauth2-register NAME="Some Reader" URI=https://reader.example.org/ CLIENT_ID=some-reader PUBLIC=1
-make bookserver-connect     # check or restore the built-in Book Server
-make oauth2-clients         # list apps
-```
-
-Apps use Authorization Code with PKCE. The node's endpoints are at `/.well-known/oauth-authorization-server` and on the *For developers* tab of App Access. This is not the same as the external sign-in provider above: that one is how Lenny signs patrons in, this one is which apps may use Lenny. See [docs/OAUTH2.md](docs/OAUTH2.md) for the whole picture, including what an app can call, signing in as a different account, and the security notes.
-
-> [!NOTE]
-> **Upgrading a node that works today?** There is no database migration and no new required setting. Two behaviors are worth a look: Book Server is now registered automatically (disable it with `make oauth2-disable CLIENT=reader-archive-org` if you do not want it), and a node in *external provider* mode now advertises PKCE only in its sign-in document. If your readers only speak the older implicit flow, set `LENNY_AUTH_DOC_MODE=both` in `.env` and restart. The full list is in [Upgrading to the app-access release](docs/OAUTH2.md#upgrading-to-the-app-access-release).
-
----
-
-## Features
-
-- **Full Lending Workflow**: Borrow, return, and manage digital books.
-- **API-first**: RESTful endpoints for integration and automation.
-- **Containerized**: Simple Docker deployment and robust Makefile for scripts.
-- **Book Importer**: Quickly load hundreds of test books for demos or pilots.
-- **Readium Integration**: Secure, browser-based reading experience.
-- **Flexible Storage**: S3, Internet Archive, or local file support.
-- **Database-backed**: Uses PostgreSQL and SQLAlchemy.
-- **Admin UI**: Secure admin dashboard served at `/admin`, isolated from public API access.
-- **Encrypted/Unencrypted Item Filtering**: Filter catalog items by encryption status via API.
-- **External OIDC Patron Auth**: Plug in any OIDC provider for patron login — no password management required.
-- **IA S3 Patron Auth**: Patrons authenticate with Internet Archive S3 credentials; toggled independently of the lending mode.
-
----
-## OPDS 2.0 Feed
-- Lenny is powered by [OPDS 2.0 Specs](https://opds.io).Lenny has its own OPDS 2.0 Package `pyopds2_lenny` more on [pyopds2_lenny](https://github.com/ArchiveLabs/pyopds2_lenny) repo.
-
-### Incremental harvesting
-
-`GET /v1/api/opds` supports polling for only what has changed, so an aggregator
-does not have to refetch the whole catalogue on every pass:
-
-```bash
-# everything modified on or after 1 Aug 2026, 100 per page
-curl "https://your-lenny.example.org/v1/api/opds?modified_since=2026-08-01&limit=100"
-```
-
-- `modified_since` accepts an ISO 8601 date (`2026-08-01`) or timestamp
-  (`2026-08-01T12:30:00Z`). No timezone means UTC. Anything else returns `400`.
-- Results are ordered oldest-change-first, so paging is stable and a harvest can
-  resume where it left off.
-- Follow `rel=next` for further pages; it preserves your `modified_since`.
-- Each publication carries `metadata.modified`, so a consumer can advance its own
-  cursor from the feed rather than trusting its clock.
-
-This is the contract Open Library's BookWorm harvester consumes
-([internetarchive/openlibrary#13241](https://github.com/internetarchive/openlibrary/pull/13241)).
-
----
-## Technologies
-
-- **Docker** for deployment and containerization  
-- **nginx** as a reverse proxy  
-- **FastAPI** (Python) as the web & API framework  
-- **Garage** API for storing digital assets  
-- **YAML** for configuring library-level rules  
-- **PostgreSQL** for the database  
-- **SQLAlchemy** as the Python ORM
-- **Alembic** for database migrations
-- **Readium LCP** for DRM  
-- **Readium Web SDK** for a secure web reading experience  
-- **OPDS** for syndicating holdings  
-
----
-
-## Endpoints
-
-- `/v{1}/api`
-- `/v{1}/manage`
-- `/v{1}/read`
-- `/v{1}/opds`
-- `/v{1}/stats`
-- `/admin` — Admin UI (internal only, proxied to `lenny_admin:4000`)
-
----
-
-## Getting Started
-
-To install and run Lenny as a production application:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/ArchiveLabs/lenny/refs/heads/main/install.sh | sudo bash
-```
-
----
-
-## Development Setup
+You need Linux or macOS, Docker with Compose v2, `git`, `make` and `bc`. See [Install](docs/install.md) for details.
 
 ```sh
 git clone https://github.com/ArchiveLabs/lenny.git
 cd lenny
-make all
+make start
 ```
 
-- This will generate a `.env` file with reasonable defaults (if not present).
-- Navigate to `localhost:8080` (or your `$LENNY_PORT`).
-- Enter the API container with:
-  `docker exec -it lenny_api bash`
+`make start` writes the config files with fresh secrets, pulls the images and starts the stack. Then:
 
-### Dev vs Production Mode
+| Open | For |
+|---|---|
+| http://localhost:8080/ | the catalog patrons use |
+| http://localhost:8080/admin | the admin UI. Sign in as `admin` with `ADMIN_PASSWORD` from `auth.env` |
+| http://localhost:8080/v1/api/opds | the OPDS feed |
+| http://localhost:8080/v1/api/docs | the API reference |
 
-Lenny defaults to **production mode** — uvicorn serves requests without watching for file changes. For development with hot-reload:
-
-1. Set `LENNY_PRODUCTION=false` in your `.env`
-2. Restart: `make redeploy`
-
-Now any code change is picked up immediately by uvicorn. To switch back to production mode, set `LENNY_PRODUCTION=true` and run `make redeploy`.
-
----
-
-## Built-in OPDS client
-
-Lenny ships its own browsing app (the [opds-client](https://github.com/ArchiveLabs/opds-client), pinned in `docker/opds-client/Dockerfile`) at the root of your instance, e.g. `http://localhost:8080/`. It only browses this node's own OPDS feed (`/v1/api/opds`) and signs in through Lenny's own OAuth; feeds from other origins are refused. Sign in works from the node's configured public URL (`LENNY_PROXY` or host/port); opening the node through any other address is refused by the OAuth redirect check.
-
-**Reading.** Borrowing a book opens it in Lenny's own reader ([Thorium Web](https://github.com/edrlab/thorium-web), served at `/read`), so a patron never leaves your node. The admin Library page has an **Open in Lenny reader** button, and a book's **Share** button copies a link that opens that book in the reader: `<your address>/?opds=<book feed>`. The raw feed (`/v1/api/opds`) and a single book's feed (`/v1/api/opds/<id>`) are still there for reading apps such as Thorium Reader or KOReader.
-
-The reader only opens manifests from addresses listed in `MANIFEST_ALLOWED_DOMAINS` in `reader.env` (default `127.0.0.1,localhost,*.trycloudflare.com`). A leading `*.` matches any subdomain, so a changing tunnel hostname works. This list is read at **runtime**, so to add your own domain edit `MANIFEST_ALLOWED_DOMAINS` in `reader.env` and restart the reader (`docker compose -p lenny up -d --force-recreate reader`) — no rebuild needed. (By contrast `MANIFEST_ROUTE_FORCE_ENABLE` *is* baked in at build time, via thorium-web's `next.config.mjs`.) Signing out ends the session on the server as well as in the browser.
-
----
-
-## Admin Dashboard
-
-Lenny includes a secure admin interface at `/admin` for managing the library.
-
-### Setup
-
-1. Sign in at `/admin` as `admin` with the `ADMIN_PASSWORD` in `auth.env`. On first start Lenny stores that account in its database, hashed, as the **super user**. After that the database is the only source: `auth.env` is not read at sign-in, so changing the password there does nothing.
-2. Under **My account**, set your name and email, and change the password. You can then sign in with your email or your username.
-3. Under **Team**, add people (name, email, password; **Generate** makes one). Each has a username derived from the email.
-
-There is exactly one super user. It manages the team and instance settings. **Make super user** hands the role to someone else (you confirm with your password) and you become a normal member. The super user cannot be demoted, disabled or deleted, only replaced. It can delete other accounts (with its password); disable is the reversible option.
-
-From the shell (`lenny` or `make`):
-
-```bash
-lenny admin-create NAME="Ada Lovelace" EMAIL=ada@example.org   # first super user if none exists, else a member
-lenny admin-passwd USERNAME=admin                              # set a new password
-```
-
-If `auth.env` has no `ADMIN_PASSWORD`, nothing is created at start; run `admin-create` once.
-
----
-
-## lenny-app Local Development
-
-The admin UI lives in a separate repo ([lenny-app](https://github.com/ArchiveLabs/lenny-app)). By default Lenny runs the built admin container (`lenny_admin`) at `/admin`. To develop lenny-app locally against a running Lenny backend, two changes are needed.
-
-### 1 — Expose the FastAPI port in `compose.yaml`
-
-The admin UI communicates with FastAPI directly (bypassing nginx, which blocks `/v1/api/admin` externally). Add a host-binding to the `api` service so the local Next.js dev server can reach it:
-
-```yaml
-# compose.yaml — api service ports section
-ports:
-  - "${LENNY_PORT:-8080}:80"
-  - "127.0.0.1:1337:1337"  # local lenny-app dev only — remove for production
-```
-
-Then recreate the container to pick up the new binding:
+Add some public domain books from Standard Ebooks to try it out:
 
 ```sh
-docker compose up -d --no-deps api
+make preload items=10
 ```
 
-> The `127.0.0.1:` prefix ensures port 1337 is only accessible from your machine, not the network.
-
-### 2 — Configure lenny-app `.env.local`
-
-In the lenny-app repo, create `apps/web/.env.local` with the following values (copy credentials from your Lenny `auth.env`):
-
-```env
-# Points the Next.js server-side proxy directly to FastAPI (bypasses nginx admin block)
-LENNY_INTERNAL_API_URL=http://localhost:1337/v1/api
-
-# Points client-side catalog/public fetches to nginx
-NEXT_PUBLIC_API_URL=http://localhost:8080
-
-# Must match ADMIN_INTERNAL_SECRET in lenny/auth.env exactly
-ADMIN_INTERNAL_SECRET=<value from auth.env>
-
-# Admin sign-in uses a librarian account (see "Setup" above); no username or password is set here
-```
-
-Then start the lenny-app dev server:
+Add your own EPUB, keyed to its Open Library edition:
 
 ```sh
-cd lenny-app
-pnpm dev
-# admin UI available at http://localhost:3002/admin
+make addbook olid=OL60638966M filepath=~/books/mybook.epub encrypted=true
 ```
 
-> Access lenny-app directly at `localhost:3002/admin` — do not go through nginx at port 8080 during local dev (nginx routes `/admin` to the built Docker container, not the dev server).
+To put the node on the internet, see [Public access and HTTPS](docs/install.md#public-access-and-https). To turn on lending, see [Lending modes](docs/admin.md#lending-modes).
 
-### Reverting to the built container
-
-To restore the standard Docker setup, remove the `127.0.0.1:1337:1337` line from `compose.yaml` and run:
-
-```sh
-docker compose up -d --no-deps api
-```
-
-## Adding Books encrypted or unencrypted
-
-To add a book to Lenny, you must provide an OpenLibrary Edition ID (OLID). Books without an OLID cannot be uploaded.
-
-### Adding Books Metadata
-
-Sign in to your Openlibrary.org account.
-
-```link
-https://openlibrary.org/books/add
-```
-
-navigate to the above link and add all the details.
-
-### Usage using CLI 
-
-```sh
-make addbook olid=OL123456M filepath=/path/to/book.epub [encrypted=true]
-```
-
-### Examples
-
-```sh
-# Add an unencrypted book
-make addbook olid=OL60638966M filepath=./books/mybook.epub
-
-# Add an encrypted book
-make addbook olid=OL60638966M filepath=./books/mybook.epub encrypted=true
-
-# Using numeric OLID format (without OL prefix and M suffix)
-make addbook olid=60638966 filepath=./books/mybook.epub
-```
-
-### Important Notes
-
-- **File Location**: The EPUB file must be within the project directory (e.g., in `./books/` or project root)
-- **OLID Formats**: Accepts both `OL123456M` and `123456` formats
-- **Duplicates**: If a book with the same OLID already exists, the upload will fail with a conflict.
-
-### Troubleshooting
-
-If you get a "File not found" or permission error, make sure:
-1. The file is copied into your lenny project directory.
-2. You're using a relative path from the project root (e.g., `./books/mybook.epub`)
-
----
-
-## Testing Readium Server
-
-```sh
-BOOK=$(echo -n "s3://bookshelf/32941311.epub" |  base64 | tr '/+' '_-' | tr -d '=')
-docker exec lenny_api curl -s "http://lenny_readium:15080/$BOOK/manifest.json"
-```
-
-Readium is not published on a host port: it serves any book by its path with no
-auth, so only the API container may reach it.
-
----
-
-## Open Library / Internet Archive Auth
-
-Lenny must be connected to an [Internet Archive](https://archive.org) account to enable lending. You can do this two ways: through the **Admin UI** or the **CLI**.
-
-### Option 1 — Admin UI (recommended)
-
-Open the admin dashboard at `/admin`, sign in, and navigate to **Settings → Open Library**. Enter your Internet Archive email and password and click **Log in**. Lending is enabled immediately — no restart required.
-
-To disconnect, click **Log out** on the same page. Lending is disabled immediately.
-
-### Option 2 — CLI
-
-```sh
-# Log in (interactive — prompts for email and password)
-make ol-login
-
-# Log out — clears IA S3 keys from .env and disables lending
-make ol-logout
-```
-
-**Scripted / non-interactive login** (e.g. CI):
-```sh
-OL_EMAIL=you@example.com LENNY_NONINTERACTIVE=1 make ol-login
-```
-> `LENNY_NONINTERACTIVE=1` suppresses all "are you sure?" confirmation prompts so the command can run unattended in scripts or CI pipelines.
-
-> **Security:** avoid passing `OL_PASSWORD` as an environment variable in scripts — it will appear in shell history and `ps` output. Instead, let the interactive prompt handle the password, or pipe it via stdin using a secrets manager.
-
-After logging in, lending is enabled automatically and the API container is restarted so the credentials take effect. After logging out, lending is disabled and the container restarts immediately.
-
----
-
-## Updating
-
-To update an existing Lenny installation to the latest version:
+Update later with:
 
 ```sh
 make update
 ```
 
-This single command handles everything automatically:
-- Pulls the latest code (`git pull --ff-only`)
-- Syncs new environment variables (never overwrites your existing config)
-- Pulls updated Docker images — including Lenny's own **prebaked images** (see below)
-- Backs up your database before rebuilding
-- Restarts containers (building only the cheap API image locally)
-- Applies database migrations automatically on startup
-
-Your data (database, books, S3 storage) is preserved across updates. A database backup is saved to `backups/` before every update. If anything goes wrong, re-run `make update` — every step is idempotent.
-
-> **Back up `LENNY_SEED` together with your database, and never change it.** It lives in `.env` and, besides signing sessions, keys the hash that identifies patrons. A database restored with a different seed still loads, but no patron's loans or app sign-ins match any more.
-
-### Prebaked images (ghcr.io)
-
-Lenny's four service images — `lenny-api`, `lenny-reader`, `lenny-admin`, `lenny-opds` — are built in CI and published to `ghcr.io/archivelabs/`. `make update` (and `make start`) **pull** them instead of building on your server. This matters most for the **reader**, whose image runs a full Next.js production build (`pnpm build` over thorium-web) — the single most expensive step in the stack. On a small VPS that build can be killed for running out of memory, and because nginx will not start while any upstream is unreachable, a failed reader build used to take the **whole API down**. Pulling a prebaked image removes that failure mode.
-
-Each image is tagged with a **content hash of its own inputs** (`docker/utils/image-hash.sh`), so `make update` pulls the exact image matching your tree, and CI rebuilds an image only when its inputs actually change.
-
-- **Activation (one-time, maintainers):** the ghcr packages must be **public**, or your host must be logged in to ghcr (`docker login ghcr.io`), for the pull to succeed.
-- **No prebaked image for your inputs?** The API image builds locally automatically (it is cheap). A missing **reader/admin/opds** image instead **stops with an explanation** rather than silently running the expensive build — pass `LENNY_ALLOW_LOCAL_BUILD=1` to build it on your host deliberately (ensure adequate RAM/swap):
-
-  ```sh
-  LENNY_ALLOW_LOCAL_BUILD=1 make update
-  ```
-
-- **Custom `NEXT_PUBLIC_API_URL` (admin):** this value is inlined into the admin client bundle at build time, so it is folded into the admin image's hash. An install that sets a non-empty value will **never** match a published image and must either leave it empty (to use the shared image) or opt into a local build as above. This is deliberate — it prevents a shared image silently serving someone else's API URL.
-
-### First-time upgrade (existing installations)
-
-If your Lenny installation predates the update engine (no `make update` command yet), you need a one-time manual bootstrap:
-
-```sh
-git pull              # get the update engine code (one-time only)
-make update           # from here, the engine takes over
-```
-
-After this, all future updates are just `make update` — it handles `git pull` and everything else for you.
-
-> **Note:** Do not run `make configure` during an upgrade — it would overwrite your `.env` with new credentials. The update engine syncs new variables safely without touching your existing configuration.
-
-For details on the update engine architecture, see [docs/plans/update-engine.md](docs/plans/update-engine.md).
-
-### Cleaning up after the S3 → Garage migration
-
-If your install predates Garage, `make update` mirrors your old MinIO bucket into Garage but leaves the old container, volume, and images in place. Once you've verified the migrated Garage bucket has everything, remove them:
-
-```sh
-make cleanup-old-s3
-```
-
-Removes the old `lenny_s3` container, its `lenny_s3_data` volume, and the `minio/minio` / `minio/mc` images used only during migration. This is opt-in — it never runs automatically.
-
----
-
-## Database Migrations
-
-Lenny uses [Alembic](https://alembic.sqlalchemy.org/) for database migrations. Migrations run automatically on container startup — no manual steps needed during normal use.
-
-```sh
-make migrate            # Run pending migrations
-make migrate-status     # Show current migration state
-make migration msg="add new table"  # Generate a new migration (developers only)
-make migrate-rollback   # Rollback last migration (use with caution)
-```
-
-For full details, see [docs/MIGRATIONS.md](docs/MIGRATIONS.md).
-
----
-
-## Health Check
-
-Run diagnostics on your Lenny environment:
-
-```sh
-make doctor
-```
-
-Checks Docker, `.env` configuration, database connectivity, disk space, and version status.
-
----
-
-## Rebuilding
-
-```sh
-# Rebuild API image and restart (preserves data)
-make redeploy
-
-# Full rebuild from scratch (WARNING: wipes database)
-make rebuild
-```
-
----
-
-## Docker Maintenance
-
-Useful commands for keeping the Docker environment healthy on the host machine.
-
-### Free Disk Space
-
-Over time, old build layers and untagged images accumulate. Run this periodically (or after a heavy `make update`) to reclaim disk space:
-
-```sh
-make prune
-```
-
-Removes dangling images (old untagged builds) and caps the BuildKit cache at 2 GB. Safe — never touches running containers, named volumes, or database data.
-
-### Check Resource Usage
-
-```sh
-docker stats              # live CPU/memory per container
-docker system df          # disk usage breakdown (images, containers, volumes, cache)
-docker builder du         # build cache size specifically
-```
-
-### Useful One-Liners
-
-```sh
-# See all running Lenny containers
-docker ps --filter name=lenny
-
-# Follow logs for a specific service
-docker logs -f lenny_api
-docker logs -f lenny_admin
-
-# Restart a single service without full redeploy
-docker compose restart api
-
-# Shell into the API container
-docker exec -it lenny_api bash
-```
-
-### Memory Tuning
-
-On machines with limited RAM, tune these in your `.env` before running `make update`:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `LENNY_WORKERS` | `2` | uvicorn worker processes — reduce to `1` on very small machines |
-| `LENNY_ADMIN_NODE_HEAP_MB` | `384` | Node.js heap cap for the admin UI — raise on machines with 8+ GB RAM |
-| `LENNY_OL_TIMEOUT` | `8` | seconds to wait for Open Library before giving up on one call. After 3 failures in a row Lenny stops calling for 30s and serves the last good page it has |
-
----
-
-## FAQs
-
-<details>
-<summary><b>Everything is broken and I need to start from scratch</b></summary>
-
-```sh
-make tunnel rebuild start preload items=10 log
-```
-</details>
-
-<details>
-<summary><b>If I disconnect from the internet and tunnel stops working, what do I do?</b></summary>
-
-```sh
-make untunnel tunnel start
-```
-</details>
-
-<details>
-<summary><b>I am getting database connection problems</b></summary>
-
-```sh
-make resetdb restart preload items=5
-```
-</details>
-
-<details>
-<summary><b>I need to stop services (also kills the tunnel)</b></summary>
-
-```sh
-make stop 
-```
-</details>
-
-<details>
-<summary><b>The /v1/api/items/{id}/read endpoint redirects to Nginx default page</b></summary>
-
-This happens when using `docker compose up -d` directly instead of `make start` or `make build`.
-
-**Why it happens**: The Thorium Web reader requires `NEXT_PUBLIC_*` environment variables at build time. When running `docker compose up -d` directly, these variables may not be passed correctly.
-
-**Solution**: Use the Makefile commands which properly source the environment:
-
-```sh
-# Fast build (uses cache)
-make build
-
-# Full rebuild (no cache)
-make rebuild
-```
-
-Both commands source `reader.env` before building, ensuring the reader is configured correctly.
-</details>
-
----
-
-## Tests
-
-All automated tests are in the `tests/` directory.
-
-To run tests:
-
-```sh
-pytest
-```
-
-- Install dependencies:  
-  `pip install -r requirements.txt`
-- Test configs via `.env.test` if needed.
-
----
-
-## Project Structure
-
-```text
-/
-├── lenny/                # Core application code
-│   ├── configs/          # App configuration (reads from .env)
-│   ├── core/             # Database models, ORM, business logic
-│   └── routes/           # API route definitions and docs
-├── alembic/              # Database migration scripts
-│   └── versions/         # Individual migration files
-├── docker/               # Docker configuration
-│   └── utils/            # Utility scripts (lenny.sh, update.sh, doctor.sh)
-├── scripts/              # Utility scripts (e.g. preload.py)
-├── tests/                # Automated tests
-├── Makefile              # Make commands for setup/maintenance
-├── install.sh            # Production install script
-├── VERSION               # Current release version
-├── .env                  # Environment variables (generated)
-└── README.md             # Project documentation
-```
-
----
+## Documentation
+
+| Guide | Covers |
+|---|---|
+| [Install and operate](docs/install.md) | requirements, install, updates, backups, ARM, tunnels and HTTPS |
+| [Configuration](docs/configuration.md) | every config file, environment variable and `make` target |
+| [Admin guide](docs/admin.md) | staff accounts, adding books, lending modes, patron sign-in, the reader |
+| [API](docs/api.md) | REST and OPDS endpoints, harvesting, health check |
+| [Development](docs/development.md) | local builds, tests, migrations, the admin app, contributing |
+| [Troubleshooting](docs/troubleshooting.md) | common failures and how to recover |
+| [OAuth 2.0 app access](docs/OAUTH2.md) | letting other apps sign patrons in and borrow |
+| [External OIDC sign-in](docs/OAUTH.md) | using your own identity provider for patrons |
+| [Database migrations](docs/MIGRATIONS.md) | Alembic workflow |
+
+## Getting help
+
+- Bugs and questions: [GitHub issues](https://github.com/ArchiveLabs/lenny/issues).
+- Chat: [request an invite to the Lenny Slack channel](https://forms.gle/b4HDcWVRhT3fvqcQ6).
+- Email: mek@archive.org. Libraries interested in a pilot are welcome to write.
+- Open Library holds a weekly [community call](https://github.com/internetarchive/openlibrary/wiki/Community-Call) that covers Lenny too.
 
 ## Contributing
 
-There are many ways volunteers can contribute to the Lenny project, from development and design to data management and community engagement. 
-Here’s how you can get involved:
+Issues and pull requests are welcome. Start with [Development](docs/development.md). It covers the local setup, tests, and the `VERSION` bump CI asks for when a change ships to servers.
 
-### Developers
-- Getting Started: Check out our [Development Setup](#development-setup) for instructions on how to set up your development environment, find issues to work on, and submit your contributions.
-- Good First Issues: Browse our Good First Issues to find beginner-friendly tasks.
+## Security
 
-### Community Engagement
-- Join our Community Calls: Open Library hosts weekly community [Zoom call for Open Library & Lenny](https://zoom.us/j/369477551#success) and design calls. Check the community call schedule for times and details.
-- Ask Questions: If you have any questions, request an invitation to our Slack channel on our volunteers page.
+Please report vulnerabilities privately through [GitHub's vulnerability reporting](https://github.com/ArchiveLabs/lenny/security/advisories/new), not in a public issue.
 
-### Lenny Slack Channel 
-- If you are a Developer or an library instrested in contributing or trying lenny feel free to join our lenny slack channel from [Here](https://forms.gle/b4HDcWVRhT3fvqcQ6)
+## Credits
 
-For more detailed information on community call. refer to Open Libraries page [Here](https://github.com/internetarchive/openlibrary/wiki/Community-Call)
+Lenny is built on:
 
----
+- [Readium](https://readium.org/) for serving publications, and [Thorium Web](https://github.com/edrlab/thorium-web) by EDRLab as the reader
+- [Garage](https://garagehq.deuxfleurs.fr/) by Deuxfleurs for object storage
+- [Open Library](https://openlibrary.org/) and the [Internet Archive](https://archive.org/) for metadata, patron sign-in and lending accounts
+- [Standard Ebooks](https://standardebooks.org/) for the sample collection
+- [FastAPI](https://fastapi.tiangolo.com/), [PostgreSQL](https://www.postgresql.org/), [SQLAlchemy](https://www.sqlalchemy.org/), [Alembic](https://alembic.sqlalchemy.org/) and [nginx](https://nginx.org/)
+- Archive Labs' own [opds-client](https://github.com/ArchiveLabs/opds-client), [lenny-app](https://github.com/ArchiveLabs/lenny-app) and [pyopds2](https://github.com/ArchiveLabs/pyopds2) libraries
 
-## Pilot
+## License
 
-We're seeking partnerships with libraries who would like to try lending digital resources to their patrons.
-
----
-
-## Open Topics
-
-- Authentication - How does your library perform authentication currently?
-
----
-
-## Community & Support
-
-- [GitHub Issues](https://github.com/ArchiveLabs/lenny/issues) — File bugs, request features, ask questions
-- Email: mek@archive.org
-
----
-
-## 📄 License
-
-This project is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE).
-
----
-
-<p align="center">
-  <b>Empowering libraries to share digital knowledge.</b>
-</p>
+[GNU Affero General Public License v3.0](LICENSE). If you run a modified Lenny for others, the AGPL requires you to offer them your source.

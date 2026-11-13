@@ -13,7 +13,7 @@ The two paths are mutually exclusive at runtime. When external auth is enabled, 
 
 | Requirement | Notes |
 |---|---|
-| A configured Lenny instance | `make configure && make build` must have run at least once |
+| A running Lenny instance | `make start` must have run at least once |
 | An OIDC-compliant provider | Anything that exposes a `.well-known/openid-configuration` endpoint |
 | A registered application at the provider | You'll get a **Client ID**, **Client Secret**, and **Discovery URL** |
 | A redirect URI registered with the provider | Must point at Lenny's callback (see below) |
