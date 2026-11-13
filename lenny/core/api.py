@@ -845,6 +845,7 @@ class LennyAPI:
         uploads of the same book cannot both pass the check. The transaction is
         always ended on the way out, which is what releases the lock.
         """
+        encrypt = encrypt and not subscription  # borrowable and members-only never overlap
         try:
             lock_editions(openlibrary_edition)
             if Item.exists(openlibrary_edition):
@@ -875,6 +876,7 @@ class LennyAPI:
         Same locking as `add`. A missing source raises ItemNotFoundError; a database
         failure removes the copy it just made.
         """
+        encrypt = encrypt and not subscription
         try:
             lock_editions(openlibrary_edition)
             if Item.exists(openlibrary_edition):
