@@ -1,4 +1,5 @@
 """GET /admin/dashboard: one request for the admin home page.
+GET /admin/stats/loans: loans started and returned per day, for the dashboard chart.
 
 Each part is computed on its own; a part that fails is null and the response
 is still 200, so one service being down doesn't blank the page.
@@ -86,3 +87,25 @@ def _dashboard():
 async def dashboard(request: Request):
     _require_admin(request)
     return await run_blocking(_dashboard)
+
+
+def _loan_days(frm, to) -> dict:
+    lo = datetime.datetime.combine(frm, datetime.time.min, datetime.timezone.utc)
+    hi = datetime.datetime.combine(to + datetime.timedelta(days=1), datetime.time.min, datetime.timezone.utc)
+    days = {}
+    for column, key in ((Loan.created_at, "started"), (Loan.returned_at, "returned")):
+        day = func.date(column)
+        for d, n in db.query(day, func.count(Loan.id)).filter(column >= lo, column < hi).group_by(day):
+            days.setdefault(str(d), {"started": 0, "returned": 0})[key] = n
+    return {"from": frm.isoformat(), "to": to.isoformat(),
+            "by_day": [{"date": d, **v} for d, v in sorted(days.items())]}
+
+
+@router.get("/admin/stats/loans")
+async def loan_stats(request: Request):
+    from lenny.routes.subscriptions import _problem, _range
+    _require_admin(request)
+    rng = _range(request.query_params.get("from"), request.query_params.get("to"))
+    if rng is None:
+        return _problem("Use from/to as YYYY-MM-DD, at most a year apart", "invalid_range")
+    return await run_blocking(_loan_days, *rng)

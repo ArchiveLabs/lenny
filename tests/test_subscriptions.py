@@ -443,3 +443,21 @@ def test_dashboard(admin, monkeypatch):
     monkeypatch.setattr(dash, "_loans", lambda: 1 / 0)
     body = client().get("/v1/api/admin/dashboard").json()
     assert body["loans"] is None and body["books"]["total"] == 2
+
+
+def test_loan_stats_by_day(admin, monkeypatch):
+    import lenny.routes.admin_dashboard as dash
+    from lenny.core.models import Loan
+    monkeypatch.setattr(dash, "_require_admin", lambda request: None)
+    item = make_item(subscription=False, encrypted=True)
+    day = datetime.datetime(2026, 11, 10, 12, tzinfo=datetime.timezone.utc)
+    db.add_all([
+        Loan(item_id=item.id, patron_email_hash="a", created_at=day),
+        Loan(item_id=item.id, patron_email_hash="b", created_at=day, returned_at=day + datetime.timedelta(days=1)),
+        Loan(item_id=item.id, patron_email_hash="c", created_at=day - datetime.timedelta(days=60)),  # out of range
+    ])
+    db.commit()
+    body = client().get("/v1/api/admin/stats/loans?from=2026-11-01&to=2026-11-14").json()
+    assert body["by_day"] == [{"date": "2026-11-10", "started": 2, "returned": 0},
+                              {"date": "2026-11-11", "started": 0, "returned": 1}]
+    assert client().get("/v1/api/admin/stats/loans?from=2026-11-14&to=2026-11-01").json()["code"] == "invalid_range"
