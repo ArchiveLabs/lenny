@@ -101,11 +101,13 @@ def test_search_feed_builds_chunked_query():
     item1 = MagicMock()
     item1.openlibrary_edition = 10
     item1.encrypted = False
+    item1.subscription = False
     item1.is_borrowable = True
 
     item2 = MagicMock()
     item2.openlibrary_edition = 20
     item2.encrypted = True
+    item2.subscription = False
     item2.is_borrowable = False
 
     all_items = {10: item1, 20: item2}
@@ -145,11 +147,13 @@ def test_search_feed_passes_local_flags_to_provider():
     item1 = MagicMock()
     item1.openlibrary_edition = 10
     item1.encrypted = False
+    item1.subscription = False
     item1.is_borrowable = True
 
     item2 = MagicMock()
     item2.openlibrary_edition = 20
     item2.encrypted = True
+    item2.subscription = False
     item2.is_borrowable = False
 
     mock_lenny_record = MagicMock(spec=["auth_mode_direct", "lenny_id"])
@@ -264,6 +268,7 @@ def test_search_flow_end_to_end(test_client):
     mock_item.openlibrary_edition = 999
     mock_item.id = 1
     mock_item.encrypted = False
+    mock_item.subscription = False
     mock_item.is_borrowable = True
 
     # 2. Mock OL search result matching that item

@@ -1,0 +1,91 @@
+# Members-only books with Ghost
+
+A book can have one of three access modes:
+
+| Mode | Who can read it |
+|---|---|
+| `open` | Anyone. |
+| `borrowable` | A patron with an active loan. One copy, one reader at a time. |
+| `subscription` | A paying member of your Ghost site, while their lease is active. No loans and no limit on copies. |
+
+Every mode is read in the browser with Thorium Web. Lenny never offers a download link.
+
+Members-only books are left out of the OPDS feed and search, so the only way in is the Read button on your Ghost site.
+
+## How a member gets in
+
+1. On your Ghost site, a signed-in member presses a **Read** button in a post.
+2. A small script on your site asks Ghost for the member's entitlement token: a signed, 5-minute proof of who they are and whether they pay.
+3. The script posts that token to Lenny. Lenny checks Ghost's signature, stores only a keyed hash of the email (the same `LENNY_SEED` hash used for loans), and opens the reader.
+
+The member never signs in to Lenny. A member who isn't signed in to Ghost sees Ghost's sign-in window first. The pass opens members-only books and nothing else: it isn't a Lenny login, can't borrow, and leaves any Lenny sign-in in the same browser alone.
+
+Any member Ghost marks as paid gets in, and that includes comped and gift memberships. You can limit access to certain tiers. Lenny shows each tier by its name, read from your site's public Content API (the same read-only key Ghost's sign-in window already puts in every page); if it can't read them, it shows Ghost's tier ID.
+
+## The 24-hour lease
+
+Each Read press gives the member access for **24 hours**. Pressing Read again renews it while they still pay.
+
+If a member cancels, they can keep reading for up to 24 hours unless webhooks are set up (below).
+
+## Set it up
+
+You need a Ghost site with members turned on. Lenny never asks for a Ghost Admin API key.
+
+1. **Connect your site.** In Lenny admin, open **Settings → Ghost** and enter your site's address, for example `https://example.com`. Lenny checks that it can read the site's public signing keys.
+2. **Add the script.** Copy the snippet Lenny shows. In Ghost Admin, open **Settings → Code injection** and paste it into **Site header**. (The footer works too, but the header lets the snippet start before the page draws, so a reader coming from an email never sees your homepage flash.)
+3. **Add Read buttons.** Every Read button is a link to your site's address plus `#lenny-book=` and the book ID, for example `https://example.com/#lenny-book=OL12345M`. In a post, either:
+   - add a **Button** card with that URL, or
+   - add an **HTML** card with:
+     ```html
+     <a href="https://example.com/#lenny-book=OL12345M">Read</a>
+     ```
+   Use the book's Open Library edition ID, as shown in Lenny's library. Both work on your site and in newsletters: emails can't run scripts, so the link opens your site and the snippet then opens the book. A member who isn't signed in on that browser signs in first, and the book opens when Ghost brings them back (within 30 minutes). Older `<button data-lenny-book>` HTML cards still work on the website, but not in emails.
+
+   If you change the snippet later, paste the new one into Ghost again.
+
+**Check your setup.** Settings → Ghost shows whether the current snippet is on your site (Lenny looks at your home page; an older paste counts as missing, so paste again after you update Lenny or its address changes), when a Read button last worked, and when the last webhook arrived.
+
+4. **Mark books as members-only.** Set the book's access mode to **subscription**. If the book was borrowable, its active loans are returned when you save.
+
+**Pause it.** Turning members-only reading off in **Settings → Ghost** stops new Read presses and refuses reads on existing passes. The site, tiers, secret and passes are kept, and webhooks still arrive, so turning it back on picks up where it left off.
+
+## Webhooks: end access when a member cancels
+
+Without webhooks, a cancelled member keeps access until their lease ends (at most 24 hours). With webhooks, access ends within seconds.
+
+1. In Ghost Admin, open **Settings → Integrations → Add custom integration** and name it "Lenny".
+2. Add two webhooks, both pointing at the **Webhook URL** shown in Lenny's Ghost settings, with the **Secret** shown there:
+   - event **Member updated**
+   - event **Member deleted**
+3. **Last webhook** in Lenny's settings shows the time of the most recent delivery.
+
+Lenny checks every delivery's `X-Ghost-Signature` and ignores unsigned or stale ones.
+
+To change the secret, use **Rotate secret** in Lenny. The old secret stops working at once, so paste the new one into both webhooks in Ghost.
+
+> **Ghost(Pro) Starter** doesn't send custom-integration webhooks. On that plan the 24-hour lease is the only limit.
+
+## Stats
+
+**Stats → Subscriptions** in Lenny admin shows:
+
+- books read
+- distinct readers
+- readers active in the last 15 minutes
+- opens per day and per device type
+
+Lenny records only the keyed hash, the book, the day and a device type (desktop, mobile or tablet). It never records the email.
+
+## API
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/v1/api/subscriptions/ghost/launch` | Form fields `token`, `book`. Called by the snippet. |
+| POST | `/v1/api/subscriptions/ghost/webhook` | Ghost member webhooks. |
+| GET / PUT | `/v1/api/admin/settings/ghost` | `site_url`, `allowed_tier_ids`, `enabled`; GET also reports `snippet_installed` (true/false/null) and `last_launch_at`. |
+| POST | `/v1/api/admin/settings/ghost/webhook-secret` | Rotate the secret. |
+| GET | `/v1/api/admin/stats/subscriptions` | `?from=YYYY-MM-DD&to=YYYY-MM-DD` (default: last 30 days). |
+| GET | `/v1/api/admin/stats/subscriptions/books` | Adds `page`, `page_size` and `sort=opens\|patrons\|last_read`. |
+
+Items accept and return `access_mode`. `encrypted` still works for older clients, and `encrypted: true` means `borrowable`.

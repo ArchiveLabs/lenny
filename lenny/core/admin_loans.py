@@ -148,6 +148,7 @@ def query_loans_for_admin(
     *,
     status: str = "all",
     user: Optional[str] = None,
+    edition: Optional[int] = None,
     limit: Optional[int] = None,
     offset: int = 0,
     sort: str = "borrowed_at",
@@ -182,6 +183,8 @@ def query_loans_for_admin(
     filters = _status_filters(status, now)
     if user:
         filters.append(Loan.patron_email_hash.like(f"{user}%"))
+    if edition is not None:
+        filters.append(Item.openlibrary_edition == edition)
 
     base = db.query(Loan, Item).join(Item, Loan.item_id == Item.id).filter(*filters)
     total = base.count()

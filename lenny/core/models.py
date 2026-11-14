@@ -10,7 +10,7 @@
 
 import hashlib
 
-from sqlalchemy import Column, String, Boolean, BigInteger, Integer, DateTime, Enum as SQLAlchemyEnum, Index, or_, text
+from sqlalchemy import Column, String, Boolean, BigInteger, Integer, Date, DateTime, Enum as SQLAlchemyEnum, Index, UniqueConstraint, or_, text
 from sqlalchemy.sql import func
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
@@ -70,6 +70,10 @@ def _lock_patron(hashed_email: str) -> None:
     _xact_lock(hashed_email)
 
 
+# access_mode -> (Item.encrypted, Item.subscription). One field for clients, two columns underneath.
+ACCESS_MODES = {"open": (False, False), "borrowable": (True, False), "subscription": (False, True)}
+
+
 class Item(Base):
     __tablename__ = 'items'
     __table_args__ = (
@@ -87,16 +91,23 @@ class Item(Base):
     id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
     openlibrary_edition = Column(BigInteger, nullable=False)
     encrypted = Column(Boolean, default= False, nullable=False)
+    # Members-only: readable by anyone with an active `Subscription`, never lent.
+    # Never true together with `encrypted` (see ACCESS_MODES).
+    subscription = Column(Boolean, default=False, nullable=False, server_default=text("false"))
     formats = Column(SQLAlchemyEnum(FormatEnum), nullable=False)
     # NULL = use the global LENNY_LOAN_DURATION_DAYS setting (configs.get_loan_duration_days()).
     loan_duration_days = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
-    @hybrid_property
+    @property
+    def access_mode(self) -> str:
+        return "subscription" if self.subscription else "borrowable" if self.encrypted else "open"
+
+    @property
     def is_login_required(self):
-        """True if the item is encrypted and requires login."""
-        return self.encrypted
+        """True if reading needs a signed-in patron: a loan (encrypted) or a lease (subscription)."""
+        return bool(self.encrypted or self.subscription)
 
     @hybrid_property
     def num_lendable_total(self):
@@ -148,13 +159,21 @@ class Item(Base):
 
     @hybrid_property
     def is_readable(self):
-        """Publicly readable if not encrypted."""
-        return not self.encrypted
+        """Publicly readable: neither lent nor members-only."""
+        return not self.encrypted and not self.subscription
 
     @hybrid_property
     def is_lendable(self):
         """Borrow if encrypted else not."""
         return bool(self.encrypted)
+
+    def end_loans(self) -> int:
+        """Return every active loan on this book; the caller commits. Used when it stops being borrowable."""
+        if self.is_lendable:
+            return 0
+        now = datetime.datetime.now(datetime.timezone.utc)
+        return (db.query(Loan).filter(Loan.item_id == self.id, *Loan._active_filters())
+                .update({Loan.returned_at: now}, synchronize_session=False))
 
     @hybrid_property
     def is_waitlistable(self):
@@ -167,18 +186,24 @@ class Item(Base):
         return True
 
     @classmethod
-    def _select(cls, encrypted=None, modified_since=None):
+    def _select(cls, encrypted=None, modified_since=None, access_mode=None, subscription=None):
         """Shared filter for the catalogue queries, so `get_many` and `count`
         can never drift apart and disagree about how many items match."""
         q = db.query(cls)
         if encrypted is not None:
             q = q.filter(cls.encrypted == encrypted)
+        if access_mode is not None:
+            enc, sub = ACCESS_MODES[access_mode]
+            q = q.filter(cls.encrypted == enc, cls.subscription == sub)
+        if subscription is not None:
+            q = q.filter(cls.subscription == subscription)
         if modified_since is not None:
             q = q.filter(cls.updated_at >= modified_since)
         return q
 
     @classmethod
-    def get_many(cls, offset=None, limit=None, encrypted=None, modified_since=None):
+    def get_many(cls, offset=None, limit=None, encrypted=None, modified_since=None, access_mode=None,
+                 subscription=None):
         # Ordered by `updated_at` so that incremental harvesting is coherent: a
         # consumer paging with `modified_since` walks the catalogue oldest-change
         # first and can stop when it has caught up. Without an ORDER BY, Postgres
@@ -186,7 +211,8 @@ class Item(Base):
         # non-deterministic and can drop or duplicate items across pages.
         # `id` breaks ties, since a bulk import gives many rows one timestamp.
         return (
-            cls._select(encrypted=encrypted, modified_since=modified_since)
+            cls._select(encrypted=encrypted, modified_since=modified_since, access_mode=access_mode,
+                        subscription=subscription)
             .order_by(cls.updated_at.asc(), cls.id.asc())
             .offset(offset)
             .limit(limit)
@@ -194,13 +220,13 @@ class Item(Base):
         )
 
     @classmethod
-    def count(cls, encrypted=None, modified_since=None):
+    def count(cls, encrypted=None, modified_since=None, subscription=None):
         """Total items matching the same filters as `get_many`, ignoring paging.
 
         Lets the feed report a real `numberOfItems` and decide whether to emit a
         `next` link, rather than guessing from the size of the current page.
         """
-        return cls._select(encrypted=encrypted, modified_since=modified_since).count()
+        return cls._select(encrypted=encrypted, modified_since=modified_since, subscription=subscription).count()
 
     @classmethod
     def exists(cls, olid):
@@ -220,7 +246,7 @@ class Item(Base):
         the address, exactly as `borrow` does. Forwarding the flag is what keeps
         the value from being hashed a second time and missing the loan.
         """
-        if not self.is_login_required:
+        if not self.is_lendable:  # open and members-only books have no loans
             raise LoanNotRequiredError
 
         if not email:
@@ -248,12 +274,12 @@ class Item(Base):
         the INSERT are atomic from the database's perspective.
 
         Raises:
-            LoanNotRequiredError: Item is open-access.
+            LoanNotRequiredError: Item is open access or members-only.
             EmailNotFoundError: No email provided.
             PatronLoanLimitError: Patron has reached their concurrent loan limit.
             BookUnavailableError: No copies available for this item.
         """
-        if not self.is_login_required:
+        if not self.is_lendable:  # open and members-only books are never lent
             raise LoanNotRequiredError
 
         if not email:
@@ -423,3 +449,153 @@ class Loan(Base):
             raise DatabaseInsertError(f"Failed to return loan: {str(e)}.")
 
 Item.loans = relationship('Loan', back_populates='item', cascade='all, delete-orphan')
+
+
+class Subscription(Base):
+    """A patron's members-only access, granted by a provider (Ghost) for a lease.
+
+    Identity is only the keyed `hash_email`; `member_uuid` is the provider's own
+    stable id, kept so its webhooks can find the row after an email change.
+    """
+    __tablename__ = 'subscriptions'
+    __table_args__ = (
+        UniqueConstraint('provider', 'patron_email_hash', name='uq_subscriptions_provider_patron'),
+        Index('idx_subscriptions_patron_expires', 'patron_email_hash', 'expires_at'),
+        Index('idx_subscriptions_provider_member', 'provider', 'member_uuid'),
+    )
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    provider = Column(String(32), nullable=False)
+    member_uuid = Column(String(64), nullable=True)
+    patron_email_hash = Column(String, nullable=False)
+    tier_ids = Column(String, nullable=False, default="")  # comma-separated provider tier ids
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
+
+    @staticmethod
+    def _now():
+        return datetime.datetime.now(datetime.timezone.utc)
+
+    @classmethod
+    def grant(cls, provider, patron_email_hash, member_uuid=None, tier_ids=(), lease_seconds=86400):
+        """Create or renew the lease. One row per provider and patron.
+
+        Two launches at once (a double-click on Read) race on the unique key;
+        the loser retries once and renews the winner's row.
+        """
+        from sqlalchemy.exc import IntegrityError
+        expires = cls._now() + datetime.timedelta(seconds=lease_seconds)
+        tiers = ",".join(str(t) for t in tier_ids or ())
+        for attempt in (1, 2):
+            try:
+                row = db.query(cls).filter_by(provider=provider, patron_email_hash=patron_email_hash).first()
+                if row is None:
+                    row = cls(provider=provider, patron_email_hash=patron_email_hash)
+                    db.add(row)
+                row.member_uuid, row.tier_ids, row.expires_at = member_uuid, tiers, expires
+                db.commit()
+                return row
+            except IntegrityError as e:
+                db.rollback()
+                if attempt == 2:
+                    raise DatabaseInsertError(f"Failed to record subscription: {e}")
+            except Exception as e:
+                db.rollback()
+                raise DatabaseInsertError(f"Failed to record subscription: {e}")
+
+    @classmethod
+    def is_active(cls, patron_email_hash) -> bool:
+        return db.query(cls.id).filter(
+            cls.patron_email_hash == patron_email_hash, cls.expires_at > cls._now()).first() is not None
+
+    @classmethod
+    def had_pass(cls, patron_email_hash) -> bool:
+        """True if this patron ever had a pass that is still on record (it may have ended)."""
+        return db.query(cls.id).filter(cls.patron_email_hash == patron_email_hash).first() is not None
+
+    @classmethod
+    def revoke(cls, provider, member_uuid=None, patron_email_hashes=()) -> int:
+        """Delete the provider's rows for this member (by uuid and/or email hash)."""
+        conds = []
+        if member_uuid:
+            conds.append(cls.member_uuid == member_uuid)
+        hashes = [h for h in patron_email_hashes if h]
+        if hashes:
+            conds.append(cls.patron_email_hash.in_(hashes))
+        if not conds:
+            return 0
+        try:
+            n = db.query(cls).filter(cls.provider == provider, or_(*conds)).delete(synchronize_session=False)
+            db.commit()
+            return n
+        except Exception:
+            db.rollback()
+            raise
+
+    @classmethod
+    def revoke_all(cls, provider) -> int:
+        try:
+            n = db.query(cls).filter(cls.provider == provider).delete(synchronize_session=False)
+            db.commit()
+            return n
+        except Exception:
+            db.rollback()
+            raise
+
+    @classmethod
+    def seen_tiers(cls, provider) -> list:
+        """[{id, members}] over active leases, so an admin can pick tiers without a Ghost Admin key."""
+        counts = {}
+        for (tiers,) in db.query(cls.tier_ids).filter(cls.provider == provider, cls.expires_at > cls._now()):
+            for t in filter(None, (tiers or "").split(",")):
+                counts[t] = counts.get(t, 0) + 1
+        return [{"id": t, "members": n} for t, n in sorted(counts.items(), key=lambda kv: -kv[1])]
+
+
+class SubscriptionRead(Base):
+    """One row per book, patron, device class and day, counting opens (manifest fetches)."""
+    __tablename__ = 'subscription_reads'
+    __table_args__ = (
+        UniqueConstraint('item_id', 'patron_email_hash', 'device_class', 'day', name='uq_subscription_reads'),
+        Index('idx_subscription_reads_day', 'day'),
+    )
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    item_id = Column(BigInteger, ForeignKey('items.id', ondelete='CASCADE'), nullable=False)
+    patron_email_hash = Column(String, nullable=False)
+    device_class = Column(String(16), nullable=False)
+    day = Column(Date, nullable=False)
+    opens = Column(Integer, nullable=False, default=1)
+    first_seen = Column(DateTime(timezone=True), nullable=False)
+    last_seen = Column(DateTime(timezone=True), nullable=False)
+
+    @staticmethod
+    def device_class_of(user_agent) -> str:
+        ua = (user_agent or "").lower()
+        if "ipad" in ua or "tablet" in ua:
+            return "tablet"
+        if "mobi" in ua or "android" in ua or "iphone" in ua:
+            return "mobile"
+        return "desktop"
+
+    @classmethod
+    def record(cls, item_id, patron_email_hash, user_agent=None) -> None:
+        """Count one open. Stats must never break reading, so failures are logged and dropped."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        values = dict(item_id=item_id, patron_email_hash=patron_email_hash,
+                      device_class=cls.device_class_of(user_agent), day=now.date(),
+                      opens=1, first_seen=now, last_seen=now)
+        try:
+            if db.bind.dialect.name == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert
+            else:
+                from sqlalchemy.dialects.sqlite import insert
+            stmt = insert(cls).values(**values)
+            db.execute(stmt.on_conflict_do_update(
+                index_elements=['item_id', 'patron_email_hash', 'device_class', 'day'],
+                set_={"opens": cls.opens + 1, "last_seen": now}))
+            db.commit()
+        except Exception:
+            db.rollback()
+            import logging
+            logging.getLogger(__name__).exception("Could not record a subscription read")

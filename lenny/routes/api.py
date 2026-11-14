@@ -16,7 +16,7 @@ import httpx
 import requests
 from functools import wraps
 from typing import Optional, Generator, List
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +84,9 @@ from lenny.core.exceptions import (
 from lenny.schemas.ol import OLLoginRequest
 from lenny.core.readium import ReadiumAPI
 from lenny.core.oauth2 import AccessToken
-from lenny.core.models import Item, Loan
-from lenny.core.utils import parse_modified_since, to_iso_utc
+from lenny.core.models import Item, Loan, SubscriptionRead, ACCESS_MODES
+from lenny.core import ghost
+from lenny.core.utils import hash_email, parse_modified_since, to_iso_utc
 from lenny.core.db import session as db
 from urllib.parse import quote
 
@@ -168,6 +169,15 @@ def get_authenticated_email(
     if not email_data:
         return None
     return email_data.get("email") if isinstance(email_data, dict) else email_data
+
+
+def item_identity(request: Request, session: Optional[str], item, scope: str = "loans:read"):
+    """`get_authenticated_identity`, plus the Ghost member cookie for members-only books only."""
+    if item.subscription:
+        ip = request.client.host if request.client else None
+        if patron := auth.verify_member_cookie(request.cookies.get(auth.MEMBER_COOKIE), client_ip=ip):
+            return patron, True
+    return get_authenticated_identity(request, session, scope=scope)
 
 
 def get_authenticated_identity(
@@ -348,10 +358,15 @@ def requires_item_auth(scope: str = "loans:read"):
             if format not in ("epub", ".epub"):
                 return JSONResponse(status_code=400, content={"detail": "Unsupported format"})
             if item := Item.exists(book_id):
+                if scope == "borrow" and not item.is_lendable:
+                    return _nothing_to_return(request, item)
                 # Identity resolution (cookie OR bearer token) lives here in the
                 # routes layer; auth_check only authorizes the resolved identity.
-                email, email_hashed = get_authenticated_identity(request, session, scope=scope)
+                email, email_hashed = item_identity(request, session, item, scope=scope)
                 result = LennyAPI.auth_check(item, email=email, email_hashed=email_hashed)
+                if result.get('error') == 'subscription_required':
+                    patron = (email if email_hashed else hash_email(email)) if email else None
+                    return _members_only(request, patron)
                 if 'error' in result:
                     if _wants_html(request):
                         return _auth_redirect(request, result)
@@ -365,13 +380,65 @@ def requires_item_auth(scope: str = "loans:read"):
                 # re-hash it in unborrow(); readers ignore it. Passed out-of-band
                 # on request.state to avoid exposing it as a bindable query param.
                 request.state.email_hashed = result["email_hashed"]
-                return await func(
+                response = await func(
                     request=request, book_id=book_id, format=format, session=session,
                     email=result.get("email") or "", item=item, *args, **kwargs
                 )
+                if item.subscription:
+                    # Members-only pages must not outlive the lease in a shared cache.
+                    if not isinstance(response, Response):
+                        response = JSONResponse(response)
+                    response.headers["Cache-Control"] = "private, no-store"
+                return response
             return JSONResponse(status_code=404, content={"detail": "Item not found"})
         return wrapper
     return decorator
+
+def notice(request: Request, status_code: int, heading: str, explanation: str, *,
+           badge: str = None, primary_href: str = None, primary_text: str = None, code: str = None):
+    """The plain "you can't read this here, and here's where to go" page."""
+    return request.app.templates.TemplateResponse(request, "notice.html", {
+        "request": request, "heading": heading, "explanation": explanation, "badge": badge,
+        "primary_href": primary_href, "primary_text": primary_text, "code": code,
+    }, status_code=status_code, headers={"Cache-Control": "no-store"})
+
+
+def _members_only(request: Request, patron: Optional[str] = None):
+    """A subscription book without a live pass: say why, and point back to the publisher."""
+    from lenny.core.models import Subscription
+    site = ghost.site_url() or None
+    host = urlsplit(site).hostname if site else None
+    if not site:
+        reason, heading = "not_configured", "This book is for members"
+        explanation = "This library hasn't connected its publisher's site yet, so members-only books can't be opened."
+    elif not ghost.enabled():
+        reason, heading = "disabled", "Members-only reading is paused"
+        explanation = f"This library has paused reading for {host} members. Please try again later."
+    elif patron and Subscription.had_pass(patron):
+        reason, heading = "pass_ended", "Your reading pass has ended"
+        explanation = (f"Passes last {ghost.LEASE_SECONDS // 3600} hours. Press Read on {host} again to keep "
+                       "reading. If you're still signed in there, it opens straight away.")
+    else:
+        reason, heading = "no_pass", "This book is for members"
+        explanation = f"Open it with the Read button on {host}. If you're a member, sign in there first."
+    if not _wants_html(request):
+        return JSONResponse(status_code=403, headers={"Cache-Control": "no-store"}, content={
+            "detail": explanation, "code": "subscription_required", "reason": reason, "url": site})
+    return notice(request, 403, heading, explanation, badge="Members only",
+                  primary_href=site, primary_text=f"Go to {host}" if host else None)
+
+
+def _nothing_to_return(request: Request, item):
+    """Open and members-only books are never lent, so a return has nothing to do."""
+    if item.subscription:
+        code, message = "members_only", "Members-only books aren't lent, so there's nothing to return."
+    else:
+        code, message = "open_access", "This book is open access and doesn't require return"
+    if not _wants_html(request):
+        return JSONResponse(content={"error": code, "message": message})
+    return notice(request, 200, "Nothing to return", message,
+                  primary_href=f"/v1/api/items/{item.openlibrary_edition}/read", primary_text="Read this book")
+
 
 @router.get('/', status_code=status.HTTP_200_OK)
 async def home(request: Request):
@@ -459,7 +526,7 @@ async def get_opds_item(request: Request, book_id: int, session: Optional[str] =
     email, email_hashed = get_authenticated_identity(request, session)
 
     item = Item.exists(book_id)
-    if not item:
+    if not item or item.subscription:
         raise HTTPException(status_code=404, detail="Item not found")
 
     return Response(
@@ -473,6 +540,22 @@ async def get_opds_item(request: Request, book_id: int, session: Optional[str] =
     )
 
 
+@router.get("/items/{book_id}/access")
+async def item_access(request: Request, book_id: str, session: Optional[str] = Cookie(None)):
+    """nginx asks this before serving the reader page: 204 may read, 403 may not.
+
+    Without it a patron with no loan or pass gets Thorium's "unable to load this
+    publication"; with it, nginx sends them to /items/{id}/read, which explains.
+    An unknown book is let through so the reader shows its own not-found.
+    """
+    item = await run_blocking(Item.exists, book_id)
+    if item is None or not item.is_login_required:
+        return Response(status_code=204)
+    email, email_hashed = item_identity(request, extract_session(request, session), item)
+    result = await run_blocking(LennyAPI.auth_check, item, email=email, email_hashed=email_hashed)
+    return Response(status_code=403 if "error" in result else 204, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/items/{book_id}/read")
 @requires_item_auth()
 async def redirect_reader(request: Request, book_id: str, format: str = "epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
@@ -484,6 +567,9 @@ async def redirect_reader(request: Request, book_id: str, format: str = "epub", 
 @router.get("/items/{book_id}/readium/manifest.json")
 @requires_item_auth()
 async def get_manifest(request: Request, book_id: str, format: str=".epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
+    if item.subscription and email:
+        patron = email if request.state.email_hashed else hash_email(email)
+        await run_blocking(SubscriptionRead.record, item.id, patron, request.headers.get("user-agent"))
     return ReadiumAPI.get_manifest(book_id, format)
 
 @router.get("/items/{book_id}/readium/{readium_path:path}")
@@ -705,6 +791,9 @@ async def return_item(request: Request, book_id: int, format: str=".epub", sessi
             media_type="application/json"
         )
     except LoanNotFoundError:
+        if _wants_html(request):
+            return notice(request, 404, "You don't have this book on loan",
+                          "There's nothing to return. It may have been returned already, or the loan ran out.")
         raise HTTPException(status_code=404, detail="No active loan found for this item")
     except Exception:
         logger.exception("Unexpected error in return_item book_id=%s", book_id)
@@ -729,8 +818,10 @@ async def upload(
     request: Request,
     openlibrary_edition: int = Form(
         ..., gt=0, description="OpenLibrary Edition ID (must be a positive integer)"),
-    encrypted: bool = Form(
-        False, description="Set to true if the file is encrypted"),
+    encrypted: Optional[bool] = Form(
+        None, description="Deprecated: use access_mode. true = borrowable"),
+    access_mode: Optional[str] = Form(
+        None, description="open, borrowable or subscription (default: the node's default)"),
     file: UploadFile = File(
         ..., description="The EPUB file to upload (max 100MB)")
 ):
@@ -740,6 +831,7 @@ async def upload(
     admin Bearer token, the same pair as every /admin/ route.
     """
     _require_admin(request)
+    encrypt, subscription = _access_flags(access_mode, encrypted)
 
     try:
         item = await anyio.to_thread.run_sync(
@@ -748,7 +840,8 @@ async def upload(
                 LennyAPI.add,
                 openlibrary_edition=openlibrary_edition,
                 files=[file],  # TODO expand to allow multiple
-                encrypt=encrypted,
+                encrypt=encrypt,
+                subscription=subscription,
             ),
             limiter=_UPLOAD_LIMITER,
         )
@@ -773,6 +866,21 @@ async def upload(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _access_flags(access_mode: Optional[str], encrypted: Optional[bool]) -> tuple:
+    """(encrypted, subscription) for a new item: access_mode wins, then the legacy flag, then open."""
+    if access_mode is None and encrypted is not None:
+        return bool(encrypted), False
+    mode = access_mode if access_mode is not None else "open"
+    if mode not in ACCESS_MODES:
+        raise HTTPException(status_code=422, detail="'access_mode' must be open, borrowable or subscription")
+    return ACCESS_MODES[mode]
+
+
+def _check_access_mode(access_mode: Optional[str]) -> None:
+    if access_mode is not None and access_mode not in ACCESS_MODES:
+        raise HTTPException(status_code=422, detail="'access_mode' must be open, borrowable or subscription")
+
+
 @router.get("/admin/items")
 async def admin_get_items(
     request: Request,
@@ -780,6 +888,7 @@ async def admin_get_items(
     offset: Optional[int] = None,
     limit: Optional[int] = None,
     encrypted: Optional[bool] = None,
+    access_mode: Optional[str] = None,
 ):
     """
     Admin-scoped catalog listing used by the lenny-app admin UI.
@@ -789,6 +898,7 @@ async def admin_get_items(
     logic stays in one place.
     """
     _require_admin(request)
+    _check_access_mode(access_mode)
     fields = fields.split(",") if fields else None
     if limit is not None:
         limit = max(0, min(limit, _MAX_LIMIT))
@@ -803,7 +913,7 @@ async def admin_get_items(
     try:
         enriched = await run_in_threadpool(
             LennyAPI.get_enriched_items,
-            fields=fields, offset=offset, limit=limit, encrypted=encrypted,
+            fields=fields, offset=offset, limit=limit, encrypted=encrypted, access_mode=access_mode,
         )
     except _OL_DOWN:
         raise _ol_unavailable()
@@ -820,13 +930,16 @@ async def admin_search_items(
     q: str,
     encrypted: Optional[bool] = None,
     limit: Optional[int] = None,
+    access_mode: Optional[str] = None,
 ):
     _require_admin(request)
+    _check_access_mode(access_mode)
     if not q or not q.strip():
         raise HTTPException(status_code=400, detail="'q' is required")
     eff_limit = max(1, min(int(limit or 50), 200))
     items, ol_unavailable = await run_in_threadpool(
         LennyAPI.admin_search_items, q=q.strip(), encrypted=encrypted, limit=eff_limit,
+        access_mode=access_mode,
     )
     return JSONResponse({
         "items": items, "total": len(items), "limit": eff_limit,
@@ -923,6 +1036,12 @@ async def update_item(request: Request, book_id: str, body: dict = Body(...)):
             raise HTTPException(status_code=400, detail="'openlibrary_edition' must be a positive integer")
 
     kwargs = {}
+    if "access_mode" in body:
+        if body["access_mode"] not in ACCESS_MODES:
+            raise HTTPException(status_code=422, detail="'access_mode' must be open, borrowable or subscription")
+        if "encrypted" in body:
+            raise HTTPException(status_code=400, detail="Send 'access_mode' or 'encrypted', not both")
+        kwargs["encrypted"], kwargs["subscription"] = ACCESS_MODES[body["access_mode"]]
     if "encrypted" in body:
         encrypted = body["encrypted"]
         if not isinstance(encrypted, bool):
@@ -950,7 +1069,7 @@ async def update_item(request: Request, book_id: str, body: dict = Body(...)):
     if not kwargs and new_olid is None:
         raise HTTPException(
             status_code=400,
-            detail="At least one of 'encrypted', 'loan_duration_days', 'openlibrary_edition' is required",
+            detail="At least one of 'access_mode', 'encrypted', 'loan_duration_days', 'openlibrary_edition' is required",
         )
 
     # Everything validated — now perform the actual mutations.
@@ -982,7 +1101,9 @@ async def update_item(request: Request, book_id: str, body: dict = Body(...)):
     return {
         "openlibrary_edition": item.openlibrary_edition,
         "encrypted": item.encrypted,
+        "access_mode": item.access_mode,
         "loan_duration_days": item.loan_duration_days,
+        "loans_returned": getattr(item, "loans_returned", 0),
     }
 
 
@@ -990,13 +1111,14 @@ async def update_item(request: Request, book_id: str, body: dict = Body(...)):
 async def reupload_item(
     request: Request,
     book_id: str,
-    encrypted: bool = Form(False, description="Set to true if the file is encrypted"),
+    encrypted: Optional[bool] = Form(None, description="Deprecated: use access_mode. true = borrowable"),
+    access_mode: Optional[str] = Form(None, description="open, borrowable or subscription (default: unchanged)"),
     file: UploadFile = File(..., description="The EPUB file to upload (max 100MB)"),
 ):
     """
     Replace an existing item's file (fixes a wrong-file import). Item id and
-    every loan on it are untouched — only the S3 object(s) and the
-    encrypted/formats flags change. Same admin gate as /upload (which is for
+    loan history are kept — only the S3 object(s) and the encrypted/formats
+    flags change, and active loans are returned if the book stops being borrowable. Same admin gate as /upload (which is for
     creating new items rather than replacing one).
 
     `book_id` accepts either a bare OLID or an OpenLibrary edition key, same
@@ -1006,9 +1128,15 @@ async def reupload_item(
     book_id = parse_olid(book_id)
     if book_id is None:
         raise HTTPException(status_code=400, detail="Invalid OLID or edition key")
+    if access_mode is not None and encrypted is not None:
+        raise HTTPException(status_code=400, detail="Send 'access_mode' or 'encrypted', not both")
+    _check_access_mode(access_mode)
+    # Neither field: the book keeps its access mode.
+    encrypt, subscription = ACCESS_MODES[access_mode] if access_mode else (encrypted, None)
     try:
         await anyio.to_thread.run_sync(
-            partial(_run_upload, LennyAPI.reupload, book_id, files=[file], encrypt=encrypted),
+            partial(_run_upload, LennyAPI.reupload, book_id, files=[file],
+                    encrypt=encrypt, subscription=subscription),
             limiter=_UPLOAD_LIMITER,
         )
         return HTMLResponse(status_code=status.HTTP_200_OK, content="File replaced successfully.")
@@ -1907,6 +2035,7 @@ async def admin_list_loans(
     offset: Optional[int] = None,
     loan_status: Optional[str] = Query(None, alias="status"),
     user: Optional[str] = None,
+    item: Optional[str] = None,
     sort: Optional[str] = None,
     order: Optional[str] = None,
 ):
@@ -1920,7 +2049,7 @@ async def admin_list_loans(
     ``total`` is the count matching the filters (before limit/offset).
 
     Filters: ``status`` ∈ {all,active,returned,overdue}; ``user`` = hex prefix
-    of the patron hash; ``sort`` ∈ {borrowed_at,due_at,returned_at};
+    of the patron hash; ``item`` = OLID or OL…M edition key; ``sort`` ∈ {borrowed_at,due_at,returned_at};
     ``order`` ∈ {asc,desc}. All optional; sensible defaults applied.
     """
     _require_admin(request)
@@ -1959,6 +2088,9 @@ async def admin_list_loans(
     off = offset or 0
     if off < 0:
         raise HTTPException(status_code=400, detail="'offset' must be >= 0.")
+    edition = None
+    if item is not None and (edition := parse_olid(item)) is None:
+        raise HTTPException(status_code=400, detail="'item' must be an OLID or edition key.")
 
     # query_loans_for_admin resolves any never-before-cached edition's title
     # via a synchronous OL call (admin_loans.py's _TITLE_CACHE only helps once
@@ -1968,7 +2100,7 @@ async def admin_list_loans(
     # not just this one. Same root cause and same fix as admin_get_items.
     items, total = await run_in_threadpool(
         query_loans_for_admin,
-        status=st, user=usr, limit=limit, offset=off, sort=srt, order=ordr,
+        status=st, user=usr, edition=edition, limit=limit, offset=off, sort=srt, order=ordr,
     )
     eff_limit = max(1, min(int(limit or 500), 5000))
     return JSONResponse({"items": items, "total": total, "limit": eff_limit, "offset": off})
