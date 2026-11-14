@@ -338,6 +338,8 @@ SNIPPET = """<script>
    a Button card, or an HTML card: <a href="https://YOUR-SITE/#lenny-book=BOOK_ID">Read</a>
    Links work on the site and in newsletters (the link opens the site, which opens the book). */
 (function () {
+  if (window.lennySnippet) return;  // pasted twice: run once
+  window.lennySnippet = true;
   var root = document.documentElement;
   function show() { root.style.visibility = ""; }
   function open(book, askToSignIn) {
@@ -372,6 +374,7 @@ SNIPPET = """<script>
     var b = e.target.closest && e.target.closest('[data-lenny-book], a[href*="#lenny-book="]');
     if (!b) return;
     e.preventDefault();
+    e.stopImmediatePropagation();  // an older copy left in the footer must not open the old address
     open(b.getAttribute("data-lenny-book") ||
          decodeURIComponent(b.getAttribute("href").split("#lenny-book=")[1] || ""), true);
   });

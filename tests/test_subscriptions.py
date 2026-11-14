@@ -351,6 +351,7 @@ def test_snippet_follows_a_ghost_under_a_path():
     assert "location.hash.match(/^#lenny-book=(.+)$/)" in s  # newsletter links open the site, then the book
     assert 'root.style.visibility = "hidden"' in s and "Site header" in s  # no homepage flash
     assert 'addEventListener("pageshow"' in s and ".catch(show)" in s  # never left hidden
+    assert "e.stopImmediatePropagation()" in s and "window.lennySnippet" in s  # a stale copy can't win the click
 
 
 def test_changing_the_ghost_site_drops_old_leases(admin, monkeypatch):
