@@ -575,11 +575,12 @@ class LennyAPI:
             "offset": offset,
             "limit": limit,
             "modified_since": to_iso_utc(modified_since),
-            "total": Item.count(modified_since=modified_since),
+            "total": Item.count(modified_since=modified_since, subscription=False),
         }
 
         items = [Item.exists(olid)] if olid else Item.get_many(
-            offset=offset, limit=limit, modified_since=modified_since
+            # Members-only books are opened from the publisher's site, never listed in OPDS.
+            offset=offset, limit=limit, modified_since=modified_since, subscription=False
         )
         edition_ids, encryption_map, borrowable_map = cls._local_item_maps(items)
         if not edition_ids:
@@ -692,7 +693,7 @@ class LennyAPI:
             )
 
         query = query.strip()
-        all_items = Item.get_all()
+        all_items = {k: v for k, v in Item.get_all().items() if not v.subscription}
         if not all_items:
             return LennyDataProvider.empty_catalog(
                 title=f"Search results for: {query}", auth_mode_direct=use_direct

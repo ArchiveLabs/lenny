@@ -10,6 +10,8 @@ A book can have one of three access modes:
 
 Every mode is read in the browser with Thorium Web. Lenny never offers a download link.
 
+Members-only books are left out of the OPDS feed and search, so the only way in is the Read button on your Ghost site.
+
 ## How a member gets in
 
 1. On your Ghost site, a signed-in member presses a **Read** button in a post.

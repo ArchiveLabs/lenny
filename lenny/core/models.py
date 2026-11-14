@@ -178,7 +178,7 @@ class Item(Base):
         return True
 
     @classmethod
-    def _select(cls, encrypted=None, modified_since=None, access_mode=None):
+    def _select(cls, encrypted=None, modified_since=None, access_mode=None, subscription=None):
         """Shared filter for the catalogue queries, so `get_many` and `count`
         can never drift apart and disagree about how many items match."""
         q = db.query(cls)
@@ -187,12 +187,15 @@ class Item(Base):
         if access_mode is not None:
             enc, sub = ACCESS_MODES[access_mode]
             q = q.filter(cls.encrypted == enc, cls.subscription == sub)
+        if subscription is not None:
+            q = q.filter(cls.subscription == subscription)
         if modified_since is not None:
             q = q.filter(cls.updated_at >= modified_since)
         return q
 
     @classmethod
-    def get_many(cls, offset=None, limit=None, encrypted=None, modified_since=None, access_mode=None):
+    def get_many(cls, offset=None, limit=None, encrypted=None, modified_since=None, access_mode=None,
+                 subscription=None):
         # Ordered by `updated_at` so that incremental harvesting is coherent: a
         # consumer paging with `modified_since` walks the catalogue oldest-change
         # first and can stop when it has caught up. Without an ORDER BY, Postgres
@@ -200,7 +203,8 @@ class Item(Base):
         # non-deterministic and can drop or duplicate items across pages.
         # `id` breaks ties, since a bulk import gives many rows one timestamp.
         return (
-            cls._select(encrypted=encrypted, modified_since=modified_since, access_mode=access_mode)
+            cls._select(encrypted=encrypted, modified_since=modified_since, access_mode=access_mode,
+                        subscription=subscription)
             .order_by(cls.updated_at.asc(), cls.id.asc())
             .offset(offset)
             .limit(limit)
@@ -208,13 +212,13 @@ class Item(Base):
         )
 
     @classmethod
-    def count(cls, encrypted=None, modified_since=None):
+    def count(cls, encrypted=None, modified_since=None, subscription=None):
         """Total items matching the same filters as `get_many`, ignoring paging.
 
         Lets the feed report a real `numberOfItems` and decide whether to emit a
         `next` link, rather than guessing from the size of the current page.
         """
-        return cls._select(encrypted=encrypted, modified_since=modified_since).count()
+        return cls._select(encrypted=encrypted, modified_since=modified_since, subscription=subscription).count()
 
     @classmethod
     def exists(cls, olid):

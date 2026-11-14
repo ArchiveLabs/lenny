@@ -514,7 +514,7 @@ async def get_opds_item(request: Request, book_id: int, session: Optional[str] =
     email, email_hashed = get_authenticated_identity(request, session)
 
     item = Item.exists(book_id)
-    if not item:
+    if not item or item.subscription:
         raise HTTPException(status_code=404, detail="Item not found")
 
     return Response(

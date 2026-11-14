@@ -508,3 +508,15 @@ def test_nginx_asks_lenny_before_opening_the_reader():
     reader = conf.split("location ~ ^/read/manifest/", 1)[1].split("}", 1)[0]
     assert "auth_request /_lenny_item_access;" in reader and "error_page 401 403" in reader
     assert "/v1/api/items/$lenny_book/access" in conf
+
+
+def test_members_only_books_stay_out_of_opds(monkeypatch):
+    monkeypatch.setattr("lenny.routes.api.LennyAPI.opds_feed", lambda **kw: {})
+    make_item()
+    open_book = Item(openlibrary_edition=EDITION + 1, formats=FormatEnum.EPUB)
+    db.add(open_book)
+    db.commit()
+    assert [i.openlibrary_edition for i in Item.get_many(subscription=False)] == [EDITION + 1]
+    assert Item.count(subscription=False) == 1
+    assert client().get(f"/v1/api/opds/{EDITION}").status_code == 404
+    assert client().get(f"/v1/api/opds/{EDITION + 1}").status_code == 200
