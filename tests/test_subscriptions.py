@@ -346,6 +346,7 @@ def test_snippet_follows_a_ghost_under_a_path():
     s = ghost.snippet("https://lenny.example/v1/api/subscriptions/ghost/launch", "https://example.com/blog")
     assert '"https://example.com/blog/members/api/entitlements/"' in s
     assert '[data-lenny-book], a[href*="#lenny-book="]' in s  # HTML card and Button card
+    assert "location.hash.match(/^#lenny-book=(.+)$/)" in s  # newsletter links open the site, then the book
 
 
 def test_changing_the_ghost_site_drops_old_leases(admin, monkeypatch):

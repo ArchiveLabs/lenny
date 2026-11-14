@@ -278,30 +278,50 @@ def last_webhook_at():
 
 SNIPPET = """<script>
 /* Lenny: open members-only books. In a post, use either
-   an HTML card: <button data-lenny-book="BOOK_ID">Read</button>
-   or a Button card whose URL ends in #lenny-book=BOOK_ID */
-document.addEventListener("click", function (e) {
-  var b = e.target.closest && e.target.closest('[data-lenny-book], a[href*="#lenny-book="]');
-  if (!b) return;
-  var book = b.getAttribute("data-lenny-book") ||
-    decodeURIComponent(b.getAttribute("href").split("#lenny-book=")[1] || "");
-  e.preventDefault();
-  fetch(%(entitlements)s, {credentials: "same-origin"}).then(function (r) {
-    if (r.status !== 200) { window.location.hash = "#/portal/signin"; return; }
-    return r.text().then(function (token) {
-      var f = document.createElement("form");
-      f.method = "POST";
-      f.action = %(launch)s;
-      [["token", token], ["book", book]].forEach(function (p) {
-        var i = document.createElement("input");
-        i.type = "hidden"; i.name = p[0]; i.value = p[1];
-        f.appendChild(i);
+   a Button card whose URL is this site's address + #lenny-book=BOOK_ID
+   (also works in newsletters: the link opens the site, which opens the book), or
+   an HTML card: <button data-lenny-book="BOOK_ID">Read</button> (website only) */
+(function () {
+  function open(book, askToSignIn) {
+    fetch(%(entitlements)s, {credentials: "same-origin"}).then(function (r) {
+      if (r.status !== 200) {
+        if (!askToSignIn) return;
+        try { localStorage.setItem("lennyBook", JSON.stringify([book, Date.now()])); } catch (e) {}
+        window.location.hash = "#/portal/signin";
+        return;
+      }
+      return r.text().then(function (token) {
+        var f = document.createElement("form");
+        f.method = "POST";
+        f.action = %(launch)s;
+        [["token", token], ["book", book]].forEach(function (p) {
+          var i = document.createElement("input");
+          i.type = "hidden"; i.name = p[0]; i.value = p[1];
+          f.appendChild(i);
+        });
+        document.body.appendChild(f);
+        f.submit();
       });
-      document.body.appendChild(f);
-      f.submit();
     });
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest('[data-lenny-book], a[href*="#lenny-book="]');
+    if (!b) return;
+    e.preventDefault();
+    open(b.getAttribute("data-lenny-book") ||
+         decodeURIComponent(b.getAttribute("href").split("#lenny-book=")[1] || ""), true);
   });
-});
+  var m = location.hash.match(/^#lenny-book=(.+)$/);
+  if (m) {  // arrived from a newsletter link
+    history.replaceState(null, "", location.pathname + location.search);
+    open(decodeURIComponent(m[1]), true);
+    return;
+  }
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem("lennyBook")); localStorage.removeItem("lennyBook"); } catch (e) {}
+  // Back from Ghost's sign-in link within 30 minutes: open the book they asked for.
+  if (saved && /[?&]success=true/.test(location.search) && Date.now() - saved[1] < 1800000) open(saved[0], false);
+})();
 </script>"""
 
 
