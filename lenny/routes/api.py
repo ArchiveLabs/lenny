@@ -16,7 +16,7 @@ import httpx
 import requests
 from functools import wraps
 from typing import Optional, Generator, List
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -349,12 +349,15 @@ def requires_item_auth(scope: str = "loans:read"):
             if format not in ("epub", ".epub"):
                 return JSONResponse(status_code=400, content={"detail": "Unsupported format"})
             if item := Item.exists(book_id):
+                if scope == "borrow" and not item.is_lendable:
+                    return _nothing_to_return(request, item)
                 # Identity resolution (cookie OR bearer token) lives here in the
                 # routes layer; auth_check only authorizes the resolved identity.
                 email, email_hashed = get_authenticated_identity(request, session, scope=scope)
                 result = LennyAPI.auth_check(item, email=email, email_hashed=email_hashed)
                 if result.get('error') == 'subscription_required':
-                    return _members_only(request)
+                    patron = (email if email_hashed else hash_email(email)) if email else None
+                    return _members_only(request, patron)
                 if 'error' in result:
                     if _wants_html(request):
                         return _auth_redirect(request, result)
@@ -382,18 +385,47 @@ def requires_item_auth(scope: str = "loans:read"):
         return wrapper
     return decorator
 
-def _members_only(request: Request):
-    """A subscription book without a live lease: point the reader back to the publisher."""
+def notice(request: Request, status_code: int, heading: str, explanation: str, *,
+           badge: str = None, primary_href: str = None, primary_text: str = None, code: str = None):
+    """The plain "you can't read this here, and here's where to go" page."""
+    return request.app.templates.TemplateResponse(request, "notice.html", {
+        "request": request, "heading": heading, "explanation": explanation, "badge": badge,
+        "primary_href": primary_href, "primary_text": primary_text, "code": code,
+    }, status_code=status_code, headers={"Cache-Control": "no-store"})
+
+
+def _members_only(request: Request, patron: Optional[str] = None):
+    """A subscription book without a live pass: say why, and point back to the publisher."""
+    from lenny.core.models import Subscription
     site = ghost.site_url() or None
+    host = urlsplit(site).hostname if site else None
+    if not site:
+        reason, heading = "not_configured", "This book is for members"
+        explanation = "This library hasn't connected its publisher's site yet, so members-only books can't be opened."
+    elif patron and Subscription.had_pass(patron):
+        reason, heading = "pass_ended", "Your reading pass has ended"
+        explanation = (f"Passes last {ghost.LEASE_SECONDS // 3600} hours. Press Read on {host} again to keep "
+                       "reading. If you're still signed in there, it opens straight away.")
+    else:
+        reason, heading = "no_pass", "This book is for members"
+        explanation = f"Open it with the Read button on {host}. If you're a member, sign in there first."
     if not _wants_html(request):
         return JSONResponse(status_code=403, headers={"Cache-Control": "no-store"}, content={
-            "detail": "This book is for members. Open it from the publisher's site.",
-            "code": "subscription_required", "url": site})
-    return request.app.templates.TemplateResponse(request, "members_only.html", {
-        "request": request, "heading": "This book is for members",
-        "explanation": "Open it from the Read button on the publisher's site while you are signed in.",
-        "site": site,
-    }, status_code=403, headers={"Cache-Control": "no-store"})
+            "detail": explanation, "code": "subscription_required", "reason": reason, "url": site})
+    return notice(request, 403, heading, explanation, badge="Members only",
+                  primary_href=site, primary_text=f"Go to {host}" if host else None)
+
+
+def _nothing_to_return(request: Request, item):
+    """Open and members-only books are never lent, so a return has nothing to do."""
+    if item.subscription:
+        code, message = "members_only", "Members-only books aren't lent, so there's nothing to return."
+    else:
+        code, message = "open_access", "This book is open access and doesn't require return"
+    if not _wants_html(request):
+        return JSONResponse(content={"error": code, "message": message})
+    return notice(request, 200, "Nothing to return", message,
+                  primary_href=f"/v1/api/items/{item.openlibrary_edition}/read", primary_text="Read this book")
 
 
 @router.get('/', status_code=status.HTTP_200_OK)
@@ -494,6 +526,22 @@ async def get_opds_item(request: Request, book_id: int, session: Optional[str] =
         ),
         media_type="application/opds-publication+json"
     )
+
+
+@router.get("/items/{book_id}/access")
+async def item_access(request: Request, book_id: str, session: Optional[str] = Cookie(None)):
+    """nginx asks this before serving the reader page: 204 may read, 403 may not.
+
+    Without it a patron with no loan or pass gets Thorium's "unable to load this
+    publication"; with it, nginx sends them to /items/{id}/read, which explains.
+    An unknown book is let through so the reader shows its own not-found.
+    """
+    item = await run_blocking(Item.exists, book_id)
+    if item is None or not item.is_login_required:
+        return Response(status_code=204)
+    email, email_hashed = get_authenticated_identity(request, extract_session(request, session))
+    result = await run_blocking(LennyAPI.auth_check, item, email=email, email_hashed=email_hashed)
+    return Response(status_code=403 if "error" in result else 204, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/items/{book_id}/read")
@@ -731,6 +779,9 @@ async def return_item(request: Request, book_id: int, format: str=".epub", sessi
             media_type="application/json"
         )
     except LoanNotFoundError:
+        if _wants_html(request):
+            return notice(request, 404, "You don't have this book on loan",
+                          "There's nothing to return. It may have been returned already, or the loan ran out.")
         raise HTTPException(status_code=404, detail="No active loan found for this item")
     except Exception:
         logger.exception("Unexpected error in return_item book_id=%s", book_id)

@@ -46,12 +46,14 @@ def _problem(detail: str, code: str, status: int = 422) -> JSONResponse:
 
 
 def _launch_failed(request: Request, code: str, status: int = 403):
-    page = request.app.templates.TemplateResponse(request, "members_only.html", {
-        "request": request, "heading": "We couldn't open this book",
-        "explanation": _LAUNCH_PROBLEMS.get(code, "Go back to the publisher's site and press Read again."),
-        "site": ghost.site_url() or None, "code": code,
-    }, status_code=status, headers={"Cache-Control": "no-store"})
-    return page
+    from urllib.parse import urlsplit
+    from lenny.routes.api import notice
+    site = ghost.site_url() or None
+    host = urlsplit(site).hostname if site else None
+    return notice(request, status, "We couldn't open this book",
+                  _LAUNCH_PROBLEMS.get(code, "Go back to the publisher's site and press Read again."),
+                  badge="Members only", primary_href=site,
+                  primary_text=f"Back to {host}" if host else None, code=code)
 
 
 @router.post("/subscriptions/ghost/launch")

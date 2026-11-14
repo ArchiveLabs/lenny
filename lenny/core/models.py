@@ -497,6 +497,11 @@ class Subscription(Base):
             cls.patron_email_hash == patron_email_hash, cls.expires_at > cls._now()).first() is not None
 
     @classmethod
+    def had_pass(cls, patron_email_hash) -> bool:
+        """True if this patron ever had a pass that is still on record (it may have ended)."""
+        return db.query(cls.id).filter(cls.patron_email_hash == patron_email_hash).first() is not None
+
+    @classmethod
     def revoke(cls, provider, member_uuid=None, patron_email_hashes=()) -> int:
         """Delete the provider's rows for this member (by uuid and/or email hash)."""
         conds = []

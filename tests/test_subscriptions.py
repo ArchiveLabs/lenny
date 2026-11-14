@@ -461,3 +461,50 @@ def test_loan_stats_by_day(admin, monkeypatch):
     assert body["by_day"] == [{"date": "2026-11-10", "started": 2, "returned": 0},
                               {"date": "2026-11-11", "started": 0, "returned": 1}]
     assert client().get("/v1/api/admin/stats/loans?from=2026-11-14&to=2026-11-01").json()["code"] == "invalid_range"
+
+
+# ── the reader door, the members page and returns ────────────────────────────
+
+def test_reader_access_check_for_nginx():
+    make_item()
+    db.add(Item(openlibrary_edition=EDITION + 1, formats=FormatEnum.EPUB))  # open
+    db.commit()
+    c = client()
+    assert c.get(f"/v1/api/items/{EDITION}/access").status_code == 403
+    assert c.get(f"/v1/api/items/{EDITION + 1}/access").status_code == 204
+    assert c.get("/v1/api/items/1/access").status_code == 204          # unknown: the reader says not found
+    c.post(LAUNCH, data={"token": token(), "book": str(EDITION)}, follow_redirects=False)
+    assert c.get(f"/v1/api/items/{EDITION}/access").status_code == 204
+
+
+def test_members_page_says_why(monkeypatch):
+    make_item()
+    html = {"accept": "text/html"}
+    page = client().get(f"/v1/api/items/{EDITION}/read", headers=html)
+    assert "This book is for members" in page.text and "Go to hydra.example" in page.text
+    c = client()
+    c.post(LAUNCH, data={"token": token(), "book": str(EDITION)}, follow_redirects=False)
+    db.query(Subscription).update({"expires_at": datetime.datetime.now(datetime.timezone.utc)
+                                   - datetime.timedelta(seconds=1)})
+    db.commit()
+    ended = c.get(f"/v1/api/items/{EDITION}/read", headers=html)
+    assert ended.status_code == 403 and "Your reading pass has ended" in ended.text
+    assert c.get(f"/v1/api/items/{EDITION}/read").json()["reason"] == "pass_ended"
+    monkeypatch.setenv(ghost.URL_KEY, "")
+    assert client().get(f"/v1/api/items/{EDITION}/read").json()["reason"] == "not_configured"
+
+
+def test_returning_a_members_only_book_has_nothing_to_do():
+    make_item()
+    r = client().get(f"/v1/api/items/{EDITION}/return")
+    assert r.status_code == 200 and r.json()["error"] == "members_only"
+    page = client().get(f"/v1/api/items/{EDITION}/return", headers={"accept": "text/html"})
+    assert page.status_code == 200 and "Nothing to return" in page.text
+
+
+def test_nginx_asks_lenny_before_opening_the_reader():
+    import pathlib
+    conf = (pathlib.Path(__file__).resolve().parent.parent / "docker/nginx/conf.d/lenny.conf").read_text()
+    reader = conf.split("location ~ ^/read/manifest/", 1)[1].split("}", 1)[0]
+    assert "auth_request /_lenny_item_access;" in reader and "error_page 401 403" in reader
+    assert "/v1/api/items/$lenny_book/access" in conf
