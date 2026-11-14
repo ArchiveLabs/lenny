@@ -108,6 +108,9 @@ async def ghost_webhook(request: Request):
         payload = json.loads(raw)
     except ValueError:
         return _problem("Body is not JSON", "bad_payload", 400)
+    member = payload.get("member") if isinstance(payload, dict) else None
+    if not isinstance(member, dict) or not all(isinstance(member.get(k) or {}, dict) for k in ("current", "previous")):
+        return _problem("Body is not a Ghost member event", "bad_payload", 400)
 
     change = ghost.member_change(payload)
     revoked = 0

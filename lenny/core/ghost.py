@@ -70,11 +70,19 @@ def new_secret() -> str:
     return secrets.token_urlsafe(32)
 
 
+# Plain https host, optional port and path. Nothing else: the URL is written into the
+# snippet publishers paste into their site, so quotes, spaces or `<` must never get through.
+_SITE_URL = re.compile(r"https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~%/-]*)?")
+
+
 def normalize_site_url(url: str) -> str:
     """https origin (plus optional path for a Ghost mounted under one), no trailing slash."""
     url = (url or "").strip().rstrip("/")
-    parts = urllib.parse.urlsplit(url)
-    if parts.scheme != "https" or not parts.hostname or parts.query or parts.fragment or parts.username:
+    try:
+        ok = bool(_SITE_URL.fullmatch(url)) and (urllib.parse.urlsplit(url).port or 443) <= 65535
+    except ValueError:
+        ok = False
+    if not ok:
         raise GhostError("invalid_site_url", "Ghost site URL must be an https:// address")
     return url
 
@@ -223,7 +231,8 @@ def member_change(payload: dict):
     if cur.get("status") == "free":
         return uuid, emails
     allowed = allowed_tiers()
-    if allowed and "tiers" in cur and not set(allowed) & {str(t.get("id")) for t in cur.get("tiers") or []}:
+    tiers = cur.get("tiers")
+    if allowed and isinstance(tiers, list) and not set(allowed) & {str(t.get("id")) for t in tiers if isinstance(t, dict)}:
         return uuid, emails
     if prev.get("email") and cur.get("email") and prev["email"].strip().lower() != cur["email"].strip().lower():
         # The old address no longer proves anyone; the member relaunches under the new one.
@@ -327,5 +336,6 @@ SNIPPET = """<script>
 
 def snippet(launch_url: str, site: str) -> str:
     import json
-    return SNIPPET % {"launch": json.dumps(launch_url),
-                      "entitlements": json.dumps(f"{site}/members/api/entitlements/")}
+    def js(s):  # a JSON string that can't close the <script> it sits in
+        return json.dumps(s).replace("</", "<\\/")
+    return SNIPPET % {"launch": js(launch_url), "entitlements": js(f"{site}/members/api/entitlements/")}
