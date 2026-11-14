@@ -64,7 +64,8 @@ async def ghost_launch(request: Request, token: str = Form(""), book: str = Form
     The token comes in a form POST so it never lands in a URL or an access log.
     """
     olid = parse_olid(book)
-    if olid is None or not await run_blocking(Item.exists, olid):
+    item = await run_blocking(Item.exists, olid) if olid is not None else None
+    if item is None or not item.subscription:  # a pass opens members-only books, nothing else
         return _launch_failed(request, "not_found", 404)
     if not ghost.enabled():
         return _launch_failed(request, "ghost_disabled")
@@ -84,7 +85,8 @@ async def ghost_launch(request: Request, token: str = Form(""), book: str = Form
 
     client_ip = request.client.host if request.client else None
     resp = RedirectResponse(url=f"/v1/api/items/{olid}/read", status_code=303)
-    resp.set_cookie(key="session", value=auth.create_hashed_session_cookie(patron, client_ip),
+    # Not `session`: that is the library's own patron login, which can borrow.
+    resp.set_cookie(key=auth.MEMBER_COOKIE, value=auth.create_member_cookie(patron, client_ip),
                     max_age=auth.COOKIE_TTL, httponly=True, secure=True, samesite="Lax", path="/")
     return resp
 

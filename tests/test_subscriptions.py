@@ -21,7 +21,7 @@ from authlib.jose import JsonWebKey, JsonWebToken  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from lenny.app import app  # noqa: E402
-from lenny.core import ghost  # noqa: E402
+from lenny.core import auth, ghost  # noqa: E402
 from lenny.core.db import Base, engine  # noqa: E402
 from lenny.core.db import session as db  # noqa: E402
 from lenny.core.models import FormatEnum, Item, Loan, Subscription, SubscriptionRead  # noqa: E402
@@ -139,7 +139,7 @@ def test_not_configured(monkeypatch):
 
 # ── launch and the read gate ─────────────────────────────────────────────────
 
-def test_launch_leases_sets_session_and_opens_reader():
+def test_launch_leases_sets_member_cookie_and_opens_reader():
     make_item()
     c = client()
     r = c.post(LAUNCH, data={"token": token(), "book": f"OL{EDITION}M"}, follow_redirects=False)
@@ -563,3 +563,33 @@ def test_leaving_borrowable_returns_active_loans(admin, monkeypatch):
     assert r.status_code == 200 and r.json()["loans_returned"] == 2
     assert c.get(active).json()["total"] == 0
     assert c.patch(f"/v1/api/admin/items/{EDITION}", json={"access_mode": "open"}).json()["loans_returned"] == 0
+
+
+def test_a_pass_is_not_a_library_login():
+    """#290: a Ghost launch must not sign the browser in to Lenny, where it could borrow."""
+    make_item()
+    lendable = Item(openlibrary_edition=EDITION + 1, encrypted=True, formats=FormatEnum.EPUB)
+    db.add(lendable)
+    db.commit()
+    c = client()
+    c.cookies.set("session", "the-patrons-own-login")
+    r = c.post(LAUNCH, data={"token": token(), "book": f"OL{EDITION}M"}, follow_redirects=False)
+    assert r.status_code == 303 and c.cookies["session"] == "the-patrons-own-login"
+    member = c.cookies[auth.MEMBER_COOKIE]
+
+    c.cookies.delete("session")
+    c.post(f"/v1/api/items/{EDITION + 1}/borrow", headers={"accept": "application/json"}, follow_redirects=False)
+    c.cookies.set("session", member)  # pasting the member cookie into `session` proves nothing
+    c.post(f"/v1/api/items/{EDITION + 1}/borrow", headers={"accept": "application/json"}, follow_redirects=False)
+    assert db.query(Loan).count() == 0
+    assert auth.verify_session_cookie(member) is None
+    json_get = dict(headers={"accept": "application/json"}, follow_redirects=False)
+    assert c.get(f"/v1/api/items/{EDITION + 1}/read", **json_get).status_code != 307
+
+
+@pytest.mark.parametrize("encrypted", [True, False])
+def test_launch_only_opens_members_only_books(encrypted):
+    make_item(subscription=False, encrypted=encrypted)
+    r = client().post(LAUNCH, data={"token": token(), "book": f"OL{EDITION}M"}, follow_redirects=False)
+    assert r.status_code == 404 and "set-cookie" not in r.headers
+    assert db.query(Subscription).count() == 0

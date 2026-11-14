@@ -171,6 +171,15 @@ def get_authenticated_email(
     return email_data.get("email") if isinstance(email_data, dict) else email_data
 
 
+def item_identity(request: Request, session: Optional[str], item, scope: str = "loans:read"):
+    """`get_authenticated_identity`, plus the Ghost member cookie for members-only books only."""
+    if item.subscription:
+        ip = request.client.host if request.client else None
+        if patron := auth.verify_member_cookie(request.cookies.get(auth.MEMBER_COOKIE), client_ip=ip):
+            return patron, True
+    return get_authenticated_identity(request, session, scope=scope)
+
+
 def get_authenticated_identity(
     request: Optional[Request] = None,
     session: Optional[str] = None,
@@ -353,7 +362,7 @@ def requires_item_auth(scope: str = "loans:read"):
                     return _nothing_to_return(request, item)
                 # Identity resolution (cookie OR bearer token) lives here in the
                 # routes layer; auth_check only authorizes the resolved identity.
-                email, email_hashed = get_authenticated_identity(request, session, scope=scope)
+                email, email_hashed = item_identity(request, session, item, scope=scope)
                 result = LennyAPI.auth_check(item, email=email, email_hashed=email_hashed)
                 if result.get('error') == 'subscription_required':
                     patron = (email if email_hashed else hash_email(email)) if email else None
@@ -542,7 +551,7 @@ async def item_access(request: Request, book_id: str, session: Optional[str] = C
     item = await run_blocking(Item.exists, book_id)
     if item is None or not item.is_login_required:
         return Response(status_code=204)
-    email, email_hashed = get_authenticated_identity(request, extract_session(request, session))
+    email, email_hashed = item_identity(request, extract_session(request, session), item)
     result = await run_blocking(LennyAPI.auth_check, item, email=email, email_hashed=email_hashed)
     return Response(status_code=403 if "error" in result else 204, headers={"Cache-Control": "no-store"})
 

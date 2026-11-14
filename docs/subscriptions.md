@@ -18,7 +18,7 @@ Members-only books are left out of the OPDS feed and search, so the only way in 
 2. A small script on your site asks Ghost for the member's entitlement token: a signed, 5-minute proof of who they are and whether they pay.
 3. The script posts that token to Lenny. Lenny checks Ghost's signature, stores only a keyed hash of the email (the same `LENNY_SEED` hash used for loans), and opens the reader.
 
-The member never signs in to Lenny. A member who isn't signed in to Ghost sees Ghost's sign-in window first.
+The member never signs in to Lenny. A member who isn't signed in to Ghost sees Ghost's sign-in window first. The pass opens members-only books and nothing else: it isn't a Lenny login, can't borrow, and leaves any Lenny sign-in in the same browser alone.
 
 Any member Ghost marks as paid gets in, and that includes comped and gift memberships. You can limit access to certain tiers.
 

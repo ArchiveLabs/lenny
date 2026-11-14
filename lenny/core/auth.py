@@ -206,6 +206,36 @@ def create_hashed_session_cookie(patron_email_hash: str, ip: str = None) -> str:
         data["ip"] = ip
     return serializer.dumps(data)
 
+MEMBER_COOKIE = "lenny_member"
+
+
+def _member_serializer():
+    # Its own salt: a member cookie must never verify as a `session`, or a
+    # members-only pass would become a Lenny login that can borrow.
+    return URLSafeTimedSerializer(SEED, salt="ghost-member")
+
+
+def create_member_cookie(patron_email_hash: str, ip: str = None) -> str:
+    """Signed proof of a Ghost launch. Read only for members-only books, never for loans."""
+    data = {"patron_email_hash": patron_email_hash}
+    if ip:
+        data["ip"] = ip
+    return _member_serializer().dumps(data)
+
+
+def verify_member_cookie(token: Optional[str], client_ip: str = None) -> Optional[str]:
+    """The patron hash a member cookie carries, or None."""
+    if not token:
+        return None
+    try:
+        data = _member_serializer().loads(token, max_age=COOKIE_TTL)
+    except BadSignature:
+        return None
+    if not isinstance(data, dict) or (client_ip and data.get("ip") and data["ip"] != client_ip):
+        return None
+    return data.get("patron_email_hash")
+
+
 REVOKED_SESSION_SCOPE = "revoked_session"
 
 def _session_key(session: str) -> str:
