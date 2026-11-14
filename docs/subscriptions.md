@@ -39,7 +39,9 @@ You need a Ghost site with members turned on. Lenny never asks for a Ghost Admin
    <button data-lenny-book="OL12345M">Read</button>
    ```
    Use the book's Open Library edition ID, as shown in Lenny's library.
-4. **Mark books as members-only.** Set the book's access mode to **subscription**. To make it the default for new books, set **Default access mode**.
+4. **Mark books as members-only.** Set the book's access mode to **subscription**.
+
+**Pause it.** Turning members-only reading off in **Settings → Ghost** stops new Read presses and refuses reads on existing passes. The site, tiers, secret and passes are kept, and webhooks still arrive, so turning it back on picks up where it left off.
 
 ## Webhooks: end access when a member cancels
 
@@ -74,7 +76,7 @@ Lenny records only the keyed hash, the book, the day and a device type (desktop,
 |---|---|---|
 | POST | `/v1/api/subscriptions/ghost/launch` | Form fields `token`, `book`. Called by the snippet. |
 | POST | `/v1/api/subscriptions/ghost/webhook` | Ghost member webhooks. |
-| GET / PUT | `/v1/api/admin/settings/ghost` | `site_url`, `allowed_tier_ids`, `default_access_mode`. |
+| GET / PUT | `/v1/api/admin/settings/ghost` | `site_url`, `allowed_tier_ids`, `enabled`. |
 | POST | `/v1/api/admin/settings/ghost/webhook-secret` | Rotate the secret. |
 | GET | `/v1/api/admin/stats/subscriptions` | `?from=YYYY-MM-DD&to=YYYY-MM-DD` (default: last 30 days). |
 | GET | `/v1/api/admin/stats/subscriptions/books` | Adds `page`, `page_size` and `sort=opens\|patrons\|last_read`. |

@@ -14,7 +14,7 @@ from pyopds2 import Catalog, Metadata
 from pyopds2.models import Link, Navigation
 from pyopds2.provider import DataProvider
 from lenny import configs as _configs
-from lenny.core import db, s3, auth
+from lenny.core import db, s3, auth, ghost
 from lenny.core.utils import hash_email, parse_modified_since, to_iso_utc, is_valid_epub
 from lenny.core.models import Item, FormatEnum, Loan, Subscription, ACCESS_MODES, lock_editions
 from lenny.core.openlibrary import OpenLibrary
@@ -313,7 +313,8 @@ class LennyAPI:
         """
         if item.subscription:
             # Members-only: a live lease from the provider, checked locally. No loan.
-            if not email or not Subscription.is_active(email if email_hashed else hash_email(email)):
+            if not ghost.enabled() or not email or not Subscription.is_active(
+                    email if email_hashed else hash_email(email)):
                 return {
                     "error": "subscription_required",
                     "message": "This book is for members. Open it from the publisher's site.",

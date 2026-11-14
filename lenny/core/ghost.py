@@ -32,6 +32,7 @@ JWKS_TTL_S = 600
 URL_KEY = "LENNY_GHOST_URL"
 TIERS_KEY = "LENNY_GHOST_TIERS"
 SECRET_KEY = "LENNY_GHOST_WEBHOOK_SECRET"
+ENABLED_KEY = "LENNY_GHOST_ENABLED"
 
 
 class GhostError(Exception):
@@ -53,6 +54,11 @@ def site_url() -> str:
 
 def allowed_tiers() -> list:
     return [t for t in (x.strip() for x in _setting(TIERS_KEY).split(",")) if t]
+
+
+def enabled() -> bool:
+    """Admin on/off switch. Off keeps the site, tiers, secret and passes; it only stops reading."""
+    return _setting(ENABLED_KEY).lower() != "false"
 
 
 def webhook_secret() -> str:

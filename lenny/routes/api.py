@@ -402,6 +402,9 @@ def _members_only(request: Request, patron: Optional[str] = None):
     if not site:
         reason, heading = "not_configured", "This book is for members"
         explanation = "This library hasn't connected its publisher's site yet, so members-only books can't be opened."
+    elif not ghost.enabled():
+        reason, heading = "disabled", "Members-only reading is paused"
+        explanation = f"This library has paused reading for {host} members. Please try again later."
     elif patron and Subscription.had_pass(patron):
         reason, heading = "pass_ended", "Your reading pass has ended"
         explanation = (f"Passes last {ghost.LEASE_SECONDS // 3600} hours. Press Read on {host} again to keep "
@@ -855,10 +858,10 @@ async def upload(
 
 
 def _access_flags(access_mode: Optional[str], encrypted: Optional[bool]) -> tuple:
-    """(encrypted, subscription) for a new item: access_mode wins, then the legacy flag, then the node default."""
+    """(encrypted, subscription) for a new item: access_mode wins, then the legacy flag, then open."""
     if access_mode is None and encrypted is not None:
         return bool(encrypted), False
-    mode = access_mode if access_mode is not None else configs.get_default_access_mode()
+    mode = access_mode if access_mode is not None else "open"
     if mode not in ACCESS_MODES:
         raise HTTPException(status_code=422, detail="'access_mode' must be open, borrowable or subscription")
     return ACCESS_MODES[mode]

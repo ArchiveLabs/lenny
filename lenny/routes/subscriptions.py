@@ -3,7 +3,7 @@
     POST /subscriptions/ghost/launch          form: token, book   (from the Ghost snippet)
     POST /subscriptions/ghost/webhook         Ghost member.edited / member.deleted
     GET  /admin/settings/ghost
-    PUT  /admin/settings/ghost                {site_url, allowed_tier_ids, default_access_mode}
+    PUT  /admin/settings/ghost                {site_url, allowed_tier_ids, enabled}
     POST /admin/settings/ghost/webhook-secret rotate
     GET  /admin/stats/subscriptions           ?from=YYYY-MM-DD&to=YYYY-MM-DD
     GET  /admin/stats/subscriptions/books     ?from&to&page&page_size&sort=opens|patrons|last_read
@@ -23,7 +23,7 @@ from lenny.core import auth, ghost, ol_bootstrap
 from lenny.core.api import LennyAPI
 from lenny.core.briet import parse_olid
 from lenny.core.db import run_blocking, session as db
-from lenny.core.models import ACCESS_MODES, Item, Subscription, SubscriptionRead
+from lenny.core.models import Item, Subscription, SubscriptionRead
 from lenny.core.utils import hash_email
 from lenny.routes.api import _require_admin
 
@@ -37,6 +37,7 @@ _LAUNCH_PROBLEMS = {
     "membership_changed": "Your membership just changed. Go back and press Read again.",
     "not_found": "We couldn't find that book.",
     "not_configured": "This library isn't connected to a publisher yet.",
+    "ghost_disabled": "This library has paused members-only reading. Please try again later.",
 }
 
 
@@ -65,6 +66,8 @@ async def ghost_launch(request: Request, token: str = Form(""), book: str = Form
     olid = parse_olid(book)
     if olid is None or not await run_blocking(Item.exists, olid):
         return _launch_failed(request, "not_found", 404)
+    if not ghost.enabled():
+        return _launch_failed(request, "ghost_disabled")
     try:
         claims = await run_blocking(ghost.verify_entitlement, token)
     except ghost.GhostError as e:
@@ -123,7 +126,7 @@ def _settings() -> dict:
         "site_url": site,
         "allowed_tier_ids": ghost.allowed_tiers(),
         "seen_tiers": Subscription.seen_tiers(ghost.PROVIDER),
-        "default_access_mode": configs.get_default_access_mode(),
+        "enabled": ghost.enabled(),
         "lease_hours": ghost.LEASE_SECONDS // 3600,
         "snippet": ghost.snippet(LennyAPI.make_url("/v1/api/subscriptions/ghost/launch"), site) if site else None,
         "webhook_url": LennyAPI.make_url("/v1/api/subscriptions/ghost/webhook"),
@@ -144,7 +147,7 @@ async def get_ghost_settings(request: Request):
 
 @router.put("/admin/settings/ghost")
 async def put_ghost_settings(request: Request):
-    """Save the Ghost site and tiers, and/or the node's default access mode.
+    """Save the Ghost site and tiers, and/or switch members-only reading on or off.
 
     A new site URL is checked by fetching its JWKS, so a typo fails here and not
     at the first reader. An empty site_url disconnects.
@@ -156,7 +159,7 @@ async def put_ghost_settings(request: Request):
     except Exception:
         return _problem("Body must be a JSON object", "bad_request")
 
-    auth_updates, loan_updates = {}, {}
+    auth_updates = {}
     if "site_url" in body:
         raw = body["site_url"] or ""
         if not isinstance(raw, str):
@@ -182,19 +185,16 @@ async def put_ghost_settings(request: Request):
         if not isinstance(tiers, list) or not all(isinstance(t, str) and t.strip() and "," not in t for t in tiers):
             return _problem("'allowed_tier_ids' must be a list of tier ids", "invalid_tiers")
         auth_updates[ghost.TIERS_KEY] = ",".join(t.strip() for t in tiers)
-    if "default_access_mode" in body:
-        if body["default_access_mode"] not in ACCESS_MODES:
-            return _problem("'default_access_mode' must be open, borrowable or subscription", "invalid_access_mode")
-        loan_updates["LENNY_DEFAULT_ACCESS_MODE"] = body["default_access_mode"]
-    if not auth_updates and not loan_updates:
+    if "enabled" in body:
+        if not isinstance(body["enabled"], bool):
+            return _problem("'enabled' must be true or false", "invalid_enabled")
+        auth_updates[ghost.ENABLED_KEY] = "true" if body["enabled"] else "false"
+    if not auth_updates:
         return _problem("Nothing to change", "bad_request")
 
     site_changed = ghost.URL_KEY in auth_updates and auth_updates[ghost.URL_KEY] != ghost.site_url()
     try:
-        if auth_updates:
-            ol_bootstrap.update_env_file(configs.AUTH_ENV_PATH, auth_updates)
-        if loan_updates:
-            ol_bootstrap.update_env_file(configs.LOAN_ENV_PATH, loan_updates)
+        ol_bootstrap.update_env_file(configs.AUTH_ENV_PATH, auth_updates)
     except OSError:
         logger.exception("Failed to save Ghost settings")
         return _problem("Could not save the settings", "env_write_failed", 500)

@@ -520,3 +520,25 @@ def test_members_only_books_stay_out_of_opds(monkeypatch):
     assert Item.count(subscription=False) == 1
     assert client().get(f"/v1/api/opds/{EDITION}").status_code == 404
     assert client().get(f"/v1/api/opds/{EDITION + 1}").status_code == 200
+
+
+def test_switching_off_pauses_reading_and_keeps_everything(admin, monkeypatch):
+    monkeypatch.setattr("lenny.core.ol_bootstrap.update_env_file",
+                        lambda path, u: [monkeypatch.setenv(k, v) for k, v in u.items()])
+    admin = client()
+    make_item()
+    c = client()
+    c.post(LAUNCH, data={"token": token(), "book": f"OL{EDITION}M"}, follow_redirects=False)
+    json_get = dict(headers={"accept": "application/json"}, follow_redirects=False)
+    assert c.get(f"/v1/api/items/{EDITION}/read", **json_get).status_code == 307
+
+    r = admin.put("/v1/api/admin/settings/ghost", json={"enabled": False})
+    assert r.status_code == 200 and r.json()["enabled"] is False and r.json()["site_url"] == SITE
+    r = c.get(f"/v1/api/items/{EDITION}/read", **json_get)
+    assert r.status_code == 403 and r.json()["reason"] == "disabled"
+    r = c.post(LAUNCH, data={"token": token(), "book": f"OL{EDITION}M"}, follow_redirects=False)
+    assert r.status_code == 403 and "ghost_disabled" in r.text
+
+    assert admin.put("/v1/api/admin/settings/ghost", json={"enabled": True}).json()["enabled"] is True
+    assert c.get(f"/v1/api/items/{EDITION}/read", **json_get).status_code == 307
+    assert admin.put("/v1/api/admin/settings/ghost", json={"enabled": "no"}).status_code == 422
