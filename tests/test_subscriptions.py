@@ -33,7 +33,7 @@ ME = "member@example.com"
 EDITION = 920111001
 LAUNCH = "/v1/api/subscriptions/ghost/launch"
 REAL_TIER_NAMES = ghost.tier_names  # the autouse fixture stubs it
-REAL_SNIPPET_INSTALLED = ghost.snippet_installed  # stubbed too: no network in tests
+REAL_SNIPPET_CHECK = ghost.snippet_check  # stubbed too: no network in tests
 WEBHOOK = "/v1/api/subscriptions/ghost/webhook"
 SECRET = "whsec-test"
 
@@ -50,7 +50,7 @@ def env(monkeypatch):
     monkeypatch.delenv(ghost.TIERS_KEY, raising=False)
     monkeypatch.setattr(ghost, "_jwks", lambda site: JWKS)
     monkeypatch.setattr(ghost, "tier_names", lambda site: {"t-paid": "Paid"})
-    monkeypatch.setattr(ghost, "snippet_installed", lambda site, marker: None)
+    monkeypatch.setattr(ghost, "snippet_check", lambda site, launch: {"installed": None, "stale": None})
     yield
     db.remove()
     for table in ("subscription_reads", "subscriptions", "cache", "loans", "items"):

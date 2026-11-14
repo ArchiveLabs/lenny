@@ -307,27 +307,39 @@ def last_launch_at():
     return _stamped("ghost:launch")
 
 
-# shortcut: per-worker cache; another worker may still say "not installed" for up to a minute after a paste.
-_installed_cache: dict = {}
+LAUNCH_PATH = "/v1/api/subscriptions/ghost/launch"
+_MARKER = re.compile(r"lenny-snippet ([0-9a-f]{12})")
+# shortcut: per-worker cache; another worker may report the old state for up to a minute after a paste.
+_check_cache: dict = {}
 
 
-def snippet_installed(site: str, marker: str):
-    """True if the site's home page carries this exact snippet, False if not, None if unreachable.
+def snippet_check(site: str, launch_url: str) -> dict:
+    """What the site's home page carries: {"installed": this exact snippet, "stale": another copy}.
 
-    A found snippet is remembered for 10 minutes and an unreachable site for one;
-    "not found" is never cached, so a fresh paste shows up on the next look.
+    A copy is stale if it has another version marker, or if the launch path shows up
+    more often than the current marker (a paste from before markers, or another address).
+    Both are None when the page can't be read. Only a clean result is remembered (10 min),
+    an unreachable site for a minute, so a fix shows up on the next look.
     """
-    hit = _installed_cache.get((site, marker))
+    mine = snippet_marker(launch_url, site).split()[-1]
+    hit = _check_cache.get((site, mine))
     if hit and hit[0] > time.monotonic():
         return hit[1]
     try:
         r = httpx.get(f"{site}/", timeout=5.0, follow_redirects=True)
-        found = (marker in r.text) if r.status_code == 200 else None
+        page = r.text if r.status_code == 200 else None
     except httpx.HTTPError:
-        found = None
-    if found is not False:
-        _installed_cache[(site, marker)] = (time.monotonic() + (600 if found else 60), found)
-    return found
+        page = None
+    if page is None:
+        status, ttl = {"installed": None, "stale": None}, 60
+    else:
+        ids = _MARKER.findall(page)
+        status = {"installed": mine in ids,
+                  "stale": any(i != mine for i in ids) or page.count(LAUNCH_PATH) > ids.count(mine)}
+        ttl = 600 if status["installed"] and not status["stale"] else 0
+    if ttl:
+        _check_cache[(site, mine)] = (time.monotonic() + ttl, status)
+    return status
 
 
 # ── the snippet publishers paste into Ghost ─────────────────────────────────

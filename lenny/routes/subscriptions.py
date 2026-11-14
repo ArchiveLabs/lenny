@@ -129,7 +129,8 @@ async def ghost_webhook(request: Request):
 def _settings() -> dict:
     site = ghost.site_url() or None
     names = ghost.tier_names(site) if site else {}
-    launch = LennyAPI.make_url("/v1/api/subscriptions/ghost/launch")
+    launch = LennyAPI.make_url(ghost.LAUNCH_PATH)
+    check = ghost.snippet_check(site, launch) if site else {"installed": None, "stale": None}
     return {
         "site_url": site,
         "allowed_tier_ids": ghost.allowed_tiers(),
@@ -138,7 +139,8 @@ def _settings() -> dict:
         "enabled": ghost.enabled(),
         "lease_hours": ghost.LEASE_SECONDS // 3600,
         "snippet": ghost.snippet(launch, site) if site else None,
-        "snippet_installed": ghost.snippet_installed(site, ghost.snippet_marker(launch, site)) if site else None,
+        "snippet_installed": check["installed"],
+        "snippet_stale": check["stale"],
         "last_launch_at": ghost.last_launch_at(),
         "webhook_url": LennyAPI.make_url("/v1/api/subscriptions/ghost/webhook"),
         "webhook_secret": ghost.webhook_secret() or None,

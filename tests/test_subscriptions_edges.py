@@ -14,7 +14,7 @@ import pytest
 import sqlalchemy
 
 from tests.test_subscriptions import (  # noqa: F401  (env is an autouse fixture)
-    EDITION, ISS, LAUNCH, ME, SECRET, SITE, WEBHOOK, JWKS, REAL_SNIPPET_INSTALLED,
+    EDITION, ISS, LAUNCH, ME, SECRET, SITE, WEBHOOK, JWKS, REAL_SNIPPET_CHECK,
     admin, client, env, lease, make_item, signed, token,
 )
 from lenny.core import auth, ghost
@@ -804,7 +804,7 @@ def _home_pages(monkeypatch, *responses):
     real = httpx.Client
     monkeypatch.setattr(ghost.httpx, "get", lambda url, **kw: real(transport=httpx.MockTransport(handler),
                                                                     follow_redirects=True).get(url))
-    ghost._installed_cache.clear()
+    ghost._check_cache.clear()
     return fetched
 
 
@@ -815,24 +815,66 @@ def test_snippet_marker_tracks_the_snippet_and_lennys_address():
     assert m != ghost.snippet_marker(LAUNCH_URL, "https://other.example")
 
 
+def _check(**expected):
+    status = REAL_SNIPPET_CHECK(SITE, LAUNCH_URL)
+    assert status == expected, status
+
+
 def test_installed_snippet_is_found_and_remembered(monkeypatch):
     import httpx
-    marker = ghost.snippet_marker(LAUNCH_URL, SITE)
     fetched = _home_pages(monkeypatch, httpx.Response(200, text=f"<html>{ghost.snippet(LAUNCH_URL, SITE)}</html>"))
-    assert REAL_SNIPPET_INSTALLED(SITE, marker) is True
-    assert REAL_SNIPPET_INSTALLED(SITE, marker) is True and len(fetched) == 1   # cached
-    ghost._installed_cache.clear()
+    _check(installed=True, stale=False)
+    _check(installed=True, stale=False)
+    assert len(fetched) == 1   # a clean result is cached
+    ghost._check_cache.clear()
 
 
-def test_an_old_paste_counts_as_not_installed_and_is_rechecked(monkeypatch):
+def test_the_same_snippet_pasted_twice_is_not_stale(monkeypatch):
     import httpx
-    old = ghost.snippet("https://old-tunnel.example/v1/api/subscriptions/ghost/launch", SITE)
     fresh = ghost.snippet(LAUNCH_URL, SITE)
-    marker = ghost.snippet_marker(LAUNCH_URL, SITE)
-    fetched = _home_pages(monkeypatch, httpx.Response(200, text=old), httpx.Response(200, text=fresh))
-    assert REAL_SNIPPET_INSTALLED(SITE, marker) is False
-    assert REAL_SNIPPET_INSTALLED(SITE, marker) is True and len(fetched) == 2   # "not found" isn't cached
-    ghost._installed_cache.clear()
+    _home_pages(monkeypatch, httpx.Response(200, text=fresh + fresh))
+    _check(installed=True, stale=False)
+    ghost._check_cache.clear()
+
+
+def _old_snippet_without_marker(launch_url):
+    """A paste from before snippets carried a version marker."""
+    import re
+    return re.sub(r"/\* lenny-snippet [0-9a-f]{12} \*/", "", ghost.snippet(launch_url, SITE))
+
+
+OLD_TUNNEL = "https://old-tunnel.example/v1/api/subscriptions/ghost/launch"
+
+
+@pytest.mark.parametrize("page, expected", [
+    # Roni's case: new paste in the header, a copy for the old address left in the footer.
+    (lambda: ghost.snippet(LAUNCH_URL, SITE) + ghost.snippet(OLD_TUNNEL, SITE), dict(installed=True, stale=True)),
+    # Only the old address.
+    (lambda: ghost.snippet(OLD_TUNNEL, SITE), dict(installed=False, stale=True)),
+    # Same address, but a pre-marker version still pasted alongside.
+    (lambda: ghost.snippet(LAUNCH_URL, SITE) + _old_snippet_without_marker(LAUNCH_URL), dict(installed=True, stale=True)),
+    # Pre-marker version only.
+    (lambda: _old_snippet_without_marker(LAUNCH_URL), dict(installed=False, stale=True)),
+    # Nothing pasted.
+    (lambda: "<html><body>a Ghost site</body></html>", dict(installed=False, stale=False)),
+])
+def test_stale_copies_are_named(monkeypatch, page, expected):
+    import httpx
+    _home_pages(monkeypatch, httpx.Response(200, text=page()))
+    _check(**expected)
+    ghost._check_cache.clear()
+
+
+def test_a_stale_or_missing_result_is_rechecked_so_a_fix_shows_at_once(monkeypatch):
+    import httpx
+    fresh = ghost.snippet(LAUNCH_URL, SITE)
+    fetched = _home_pages(monkeypatch, httpx.Response(200, text=fresh + ghost.snippet(OLD_TUNNEL, SITE)),
+                          httpx.Response(200, text="nothing"), httpx.Response(200, text=fresh))
+    _check(installed=True, stale=True)
+    _check(installed=False, stale=False)
+    _check(installed=True, stale=False)
+    assert len(fetched) == 3
+    ghost._check_cache.clear()
 
 
 @pytest.mark.parametrize("response", ["503", "connect"])
@@ -840,13 +882,13 @@ def test_an_unreachable_site_is_unknown_not_missing(monkeypatch, response):
     import httpx
     r = httpx.Response(503, text="down") if response == "503" else httpx.ConnectError("refused")
     _home_pages(monkeypatch, r)
-    assert REAL_SNIPPET_INSTALLED(SITE, ghost.snippet_marker(LAUNCH_URL, SITE)) is None
-    ghost._installed_cache.clear()
+    _check(installed=None, stale=None)
+    ghost._check_cache.clear()
 
 
 def test_settings_report_setup_status(admin):
     body = client().get("/v1/api/admin/settings/ghost").json()
-    assert body["last_launch_at"] is None and "snippet_installed" in body
+    assert body["last_launch_at"] is None and "snippet_installed" in body and "snippet_stale" in body
     make_item()
     _launch(client(), sub="bad-token@example.com", paid=False)          # refused: proves nothing
     assert client().get("/v1/api/admin/settings/ghost").json()["last_launch_at"] is None
