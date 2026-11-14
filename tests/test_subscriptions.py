@@ -604,7 +604,8 @@ def test_tier_names_come_from_the_public_content_api(monkeypatch):
         if request.url.path == "/":
             return httpx.Response(200, text='<script src="portal.min.js" data-key="0123456789abcdef0123456789"></script>')
         assert request.url.params["key"] == "0123456789abcdef0123456789"
-        return httpx.Response(200, json={"tiers": [{"id": "t-paid", "name": "Paid"}, {"id": 5}]})
+        return httpx.Response(200, json={"tiers": [{"id": "t-paid", "name": "Paid", "type": "paid"},
+                                                  {"id": "t-free", "name": "Free", "type": "free"}, {"id": 5}]})
 
     real = httpx.Client
     monkeypatch.setattr(ghost.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(ghost_site), **kw))

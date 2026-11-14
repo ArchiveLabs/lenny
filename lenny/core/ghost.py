@@ -113,7 +113,7 @@ _tiers_cache: dict = {}
 
 
 def tier_names(site: str) -> dict:
-    """{tier id: name} from the site's public Content API, or {} when it can't be read.
+    """{paid tier id: name} from the site's public Content API, or {} when it can't be read.
 
     Display only, so redirects are followed (a custom domain sends the API to *.ghost.io)
     and only tier names are kept from the answer.
@@ -127,8 +127,10 @@ def tier_names(site: str) -> dict:
             key = _CONTENT_KEY.search(client.get(f"{site}/").text)
             if key:
                 r = client.get(f"{site}/ghost/api/content/tiers/", params={"key": key.group(1), "limit": "all"})
+                # Free tiers can't open a book (launch needs `paid`), so offering them only misleads.
                 names = {t["id"]: t["name"] for t in r.json().get("tiers", [])
-                         if isinstance(t.get("id"), str) and isinstance(t.get("name"), str)}
+                         if isinstance(t.get("id"), str) and isinstance(t.get("name"), str)
+                         and t.get("type") != "free"}
     except (httpx.HTTPError, ValueError, AttributeError, TypeError) as e:
         logger.info("Ghost tier names unavailable for %s: %s", site, e)
     _tiers_cache[site] = (time.monotonic() + TIERS_TTL_S, names)
