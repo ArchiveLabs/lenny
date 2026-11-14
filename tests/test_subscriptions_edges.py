@@ -757,3 +757,27 @@ def test_a_members_email_is_stored_nowhere(admin, monkeypatch):
         monkeypatch.setattr("lenny.core.api.LennyAPI._enrich_items", classmethod(lambda cls, *a, **k: {}))
         body = client().get(path).text
         assert ME not in body and hash_email(ME) not in body, path
+
+
+# ── Open Library being down ──────────────────────────────────────────────────
+
+def test_open_library_down_never_blocks_a_member(monkeypatch):
+    """Launch, the reader door and the manifest use only Lenny's own data: no outbound call at all."""
+    import socket
+    from lenny.core.readium import ReadiumAPI
+    monkeypatch.setattr(ReadiumAPI, "get_manifest", classmethod(lambda cls, *a: {"metadata": {}}))
+
+    def no_network(*a, **k):
+        raise OSError("network is down")
+    monkeypatch.setattr(socket.socket, "connect", no_network)
+    monkeypatch.setattr(socket, "create_connection", no_network)
+    import httpx
+    with pytest.raises(httpx.ConnectError):  # the block bites: Open Library is unreachable here
+        httpx.get("https://openlibrary.org/search.json")
+    make_item()
+    c = client()
+    r = c.post(LAUNCH, data={"token": token(), "book": f"OL{EDITION}M"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert c.get(r.headers["location"], follow_redirects=False).status_code == 307
+    assert c.get(f"/v1/api/items/{EDITION}/access").status_code == 204
+    assert c.get(f"/v1/api/items/{EDITION}/readium/manifest.json").status_code == 200
