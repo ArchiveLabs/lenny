@@ -268,19 +268,66 @@ def revoked_after_issue(keys, issued_at) -> bool:
     return not isinstance(issued_at, int) or max(stamps) >= issued_at
 
 
-def mark_webhook() -> None:
-    Cache._record("ghost:webhook", "last", 90 * 86400, value=str(int(time.time())))
+def _stamp(scope: str) -> None:
+    """Remember "now" for this scope: one row, replaced each time."""
+    from lenny.core.cache import CacheEntry
+    from lenny.core.db import session as db
+    db.query(CacheEntry).filter(CacheEntry.scope == scope).delete(synchronize_session=False)
+    Cache._record(scope, "last", 365 * 86400, value=str(int(time.time())))  # commits both
 
 
-def last_webhook_at():
+def _stamped(scope: str):
     from lenny.core.cache import CacheEntry
     from lenny.core.db import session as db
     import datetime
-    row = (db.query(CacheEntry.value).filter(CacheEntry.scope == "ghost:webhook")
+    row = (db.query(CacheEntry.value).filter(CacheEntry.scope == scope)
            .order_by(CacheEntry.expires_at.desc()).first())
     if not row or not (row[0] or "").isdigit():
         return None
     return datetime.datetime.fromtimestamp(int(row[0]), datetime.timezone.utc).isoformat()
+
+
+def mark_webhook() -> None:
+    _stamp("ghost:webhook")
+
+
+def last_webhook_at():
+    return _stamped("ghost:webhook")
+
+
+def mark_launch() -> None:
+    """A Read button worked. Setup proof only, so a failure here never blocks the reader."""
+    try:
+        _stamp("ghost:launch")
+    except Exception:
+        logger.warning("Could not record the last Ghost launch", exc_info=True)
+
+
+def last_launch_at():
+    return _stamped("ghost:launch")
+
+
+# shortcut: per-worker cache; another worker may still say "not installed" for up to a minute after a paste.
+_installed_cache: dict = {}
+
+
+def snippet_installed(site: str, marker: str):
+    """True if the site's home page carries this exact snippet, False if not, None if unreachable.
+
+    A found snippet is remembered for 10 minutes and an unreachable site for one;
+    "not found" is never cached, so a fresh paste shows up on the next look.
+    """
+    hit = _installed_cache.get((site, marker))
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    try:
+        r = httpx.get(f"{site}/", timeout=5.0, follow_redirects=True)
+        found = (marker in r.text) if r.status_code == 200 else None
+    except httpx.HTTPError:
+        found = None
+    if found is not False:
+        _installed_cache[(site, marker)] = (time.monotonic() + (600 if found else 60), found)
+    return found
 
 
 # ── the snippet publishers paste into Ghost ─────────────────────────────────
@@ -334,8 +381,19 @@ SNIPPET = """<script>
 </script>"""
 
 
-def snippet(launch_url: str, site: str) -> str:
+def _snippet_body(launch_url: str, site: str) -> str:
     import json
+
     def js(s):  # a JSON string that can't close the <script> it sits in
         return json.dumps(s).replace("</", "<\\/")
     return SNIPPET % {"launch": js(launch_url), "entitlements": js(f"{site}/members/api/entitlements/")}
+
+
+def snippet_marker(launch_url: str, site: str) -> str:
+    """Changes whenever the snippet or Lenny's address does, so an old paste is told apart."""
+    return "lenny-snippet " + hashlib.sha256(_snippet_body(launch_url, site).encode()).hexdigest()[:12]
+
+
+def snippet(launch_url: str, site: str) -> str:
+    return _snippet_body(launch_url, site).replace(
+        "<script>", f"<script>\n/* {snippet_marker(launch_url, site)} */", 1)

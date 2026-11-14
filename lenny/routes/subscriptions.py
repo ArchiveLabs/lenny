@@ -82,6 +82,7 @@ async def ghost_launch(request: Request, token: str = Form(""), book: str = Form
     await run_blocking(
         Subscription.grant, ghost.PROVIDER, patron, claims.get("member_uuid"),
         claims.get("active_tier_ids") or [], ghost.LEASE_SECONDS)
+    await run_blocking(ghost.mark_launch)
 
     client_ip = request.client.host if request.client else None
     resp = RedirectResponse(url=f"/v1/api/items/{olid}/read", status_code=303)
@@ -128,6 +129,7 @@ async def ghost_webhook(request: Request):
 def _settings() -> dict:
     site = ghost.site_url() or None
     names = ghost.tier_names(site) if site else {}
+    launch = LennyAPI.make_url("/v1/api/subscriptions/ghost/launch")
     return {
         "site_url": site,
         "allowed_tier_ids": ghost.allowed_tiers(),
@@ -135,7 +137,9 @@ def _settings() -> dict:
         "seen_tiers": [{**t, "name": names.get(t["id"])} for t in Subscription.seen_tiers(ghost.PROVIDER)],
         "enabled": ghost.enabled(),
         "lease_hours": ghost.LEASE_SECONDS // 3600,
-        "snippet": ghost.snippet(LennyAPI.make_url("/v1/api/subscriptions/ghost/launch"), site) if site else None,
+        "snippet": ghost.snippet(launch, site) if site else None,
+        "snippet_installed": ghost.snippet_installed(site, ghost.snippet_marker(launch, site)) if site else None,
+        "last_launch_at": ghost.last_launch_at(),
         "webhook_url": LennyAPI.make_url("/v1/api/subscriptions/ghost/webhook"),
         "webhook_secret": ghost.webhook_secret() or None,
         "last_webhook_at": ghost.last_webhook_at(),

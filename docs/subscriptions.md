@@ -43,6 +43,8 @@ You need a Ghost site with members turned on. Lenny never asks for a Ghost Admin
    Use the book's Open Library edition ID, as shown in Lenny's library. If you change the snippet later, paste the new one into Ghost again.
 
    **In newsletters, use the Button card.** Emails can't run scripts, so an HTML card button does nothing there. A Button card link opens your site, and the snippet then opens the book. A member who isn't signed in on that browser signs in first, and the book opens when Ghost brings them back (within 30 minutes).
+**Check your setup.** Settings → Ghost shows whether the current snippet is on your site (Lenny looks at your home page; an older paste counts as missing, so paste again after you update Lenny or its address changes), when a Read button last worked, and when the last webhook arrived.
+
 4. **Mark books as members-only.** Set the book's access mode to **subscription**. If the book was borrowable, its active loans are returned when you save.
 
 **Pause it.** Turning members-only reading off in **Settings → Ghost** stops new Read presses and refuses reads on existing passes. The site, tiers, secret and passes are kept, and webhooks still arrive, so turning it back on picks up where it left off.
@@ -80,7 +82,7 @@ Lenny records only the keyed hash, the book, the day and a device type (desktop,
 |---|---|---|
 | POST | `/v1/api/subscriptions/ghost/launch` | Form fields `token`, `book`. Called by the snippet. |
 | POST | `/v1/api/subscriptions/ghost/webhook` | Ghost member webhooks. |
-| GET / PUT | `/v1/api/admin/settings/ghost` | `site_url`, `allowed_tier_ids`, `enabled`. |
+| GET / PUT | `/v1/api/admin/settings/ghost` | `site_url`, `allowed_tier_ids`, `enabled`; GET also reports `snippet_installed` (true/false/null) and `last_launch_at`. |
 | POST | `/v1/api/admin/settings/ghost/webhook-secret` | Rotate the secret. |
 | GET | `/v1/api/admin/stats/subscriptions` | `?from=YYYY-MM-DD&to=YYYY-MM-DD` (default: last 30 days). |
 | GET | `/v1/api/admin/stats/subscriptions/books` | Adds `page`, `page_size` and `sort=opens\|patrons\|last_read`. |

@@ -14,7 +14,8 @@ import pytest
 import sqlalchemy
 
 from tests.test_subscriptions import (  # noqa: F401  (env is an autouse fixture)
-    EDITION, ISS, LAUNCH, ME, SECRET, SITE, WEBHOOK, JWKS, admin, client, env, lease, make_item, signed, token,
+    EDITION, ISS, LAUNCH, ME, SECRET, SITE, WEBHOOK, JWKS, REAL_SNIPPET_INSTALLED,
+    admin, client, env, lease, make_item, signed, token,
 )
 from lenny.core import auth, ghost
 from lenny.core.db import session as db
@@ -781,3 +782,91 @@ def test_open_library_down_never_blocks_a_member(monkeypatch):
     assert c.get(r.headers["location"], follow_redirects=False).status_code == 307
     assert c.get(f"/v1/api/items/{EDITION}/access").status_code == 204
     assert c.get(f"/v1/api/items/{EDITION}/readium/manifest.json").status_code == 200
+
+
+# ── setup status: did the snippet land, has a Read button worked (#291) ──────
+
+LAUNCH_URL = "https://lenny.example/v1/api/subscriptions/ghost/launch"
+
+
+def _home_pages(monkeypatch, *responses):
+    """Serve the site's home page from a list, one per fetch; returns the fetch log."""
+    import httpx
+    fetched, queue = [], list(responses)
+
+    def handler(request):
+        fetched.append(str(request.url))
+        nxt = queue.pop(0)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+    real = httpx.Client
+    monkeypatch.setattr(ghost.httpx, "get", lambda url, **kw: real(transport=httpx.MockTransport(handler),
+                                                                    follow_redirects=True).get(url))
+    ghost._installed_cache.clear()
+    return fetched
+
+
+def test_snippet_marker_tracks_the_snippet_and_lennys_address():
+    m = ghost.snippet_marker(LAUNCH_URL, SITE)
+    assert m in ghost.snippet(LAUNCH_URL, SITE)
+    assert m != ghost.snippet_marker("https://new-tunnel.example/v1/api/subscriptions/ghost/launch", SITE)
+    assert m != ghost.snippet_marker(LAUNCH_URL, "https://other.example")
+
+
+def test_installed_snippet_is_found_and_remembered(monkeypatch):
+    import httpx
+    marker = ghost.snippet_marker(LAUNCH_URL, SITE)
+    fetched = _home_pages(monkeypatch, httpx.Response(200, text=f"<html>{ghost.snippet(LAUNCH_URL, SITE)}</html>"))
+    assert REAL_SNIPPET_INSTALLED(SITE, marker) is True
+    assert REAL_SNIPPET_INSTALLED(SITE, marker) is True and len(fetched) == 1   # cached
+    ghost._installed_cache.clear()
+
+
+def test_an_old_paste_counts_as_not_installed_and_is_rechecked(monkeypatch):
+    import httpx
+    old = ghost.snippet("https://old-tunnel.example/v1/api/subscriptions/ghost/launch", SITE)
+    fresh = ghost.snippet(LAUNCH_URL, SITE)
+    marker = ghost.snippet_marker(LAUNCH_URL, SITE)
+    fetched = _home_pages(monkeypatch, httpx.Response(200, text=old), httpx.Response(200, text=fresh))
+    assert REAL_SNIPPET_INSTALLED(SITE, marker) is False
+    assert REAL_SNIPPET_INSTALLED(SITE, marker) is True and len(fetched) == 2   # "not found" isn't cached
+    ghost._installed_cache.clear()
+
+
+@pytest.mark.parametrize("response", ["503", "connect"])
+def test_an_unreachable_site_is_unknown_not_missing(monkeypatch, response):
+    import httpx
+    r = httpx.Response(503, text="down") if response == "503" else httpx.ConnectError("refused")
+    _home_pages(monkeypatch, r)
+    assert REAL_SNIPPET_INSTALLED(SITE, ghost.snippet_marker(LAUNCH_URL, SITE)) is None
+    ghost._installed_cache.clear()
+
+
+def test_settings_report_setup_status(admin):
+    body = client().get("/v1/api/admin/settings/ghost").json()
+    assert body["last_launch_at"] is None and "snippet_installed" in body
+    make_item()
+    _launch(client(), sub="bad-token@example.com", paid=False)          # refused: proves nothing
+    assert client().get("/v1/api/admin/settings/ghost").json()["last_launch_at"] is None
+    _launch(client())
+    assert client().get("/v1/api/admin/settings/ghost").json()["last_launch_at"] is not None
+
+
+def test_setup_stamps_keep_one_row_each():
+    from lenny.core.cache import CacheEntry
+    make_item()
+    for _ in range(3):
+        _launch(client())
+        _deliver({"member": {"current": {"uuid": "m-1", "email": ME, "status": "paid"}, "previous": {}}})
+    for scope in ("ghost:launch", "ghost:webhook"):
+        assert db.query(CacheEntry).filter(CacheEntry.scope == scope).count() == 1
+
+
+def test_a_broken_launch_stamp_never_blocks_the_reader(monkeypatch):
+    def broken(scope):
+        raise sqlalchemy.exc.OperationalError("insert", {}, Exception("locked"))
+    monkeypatch.setattr(ghost, "_stamp", broken)
+    make_item()
+    assert _launch(client()).status_code == 303
