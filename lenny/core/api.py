@@ -941,7 +941,9 @@ class LennyAPI:
                     item.encrypted = False
             if loan_duration_days is not cls.UNSET:
                 item.loan_duration_days = loan_duration_days
+            returned = item.end_loans()
             db.commit()
+            item.loans_returned = returned  # not a column; read by the PATCH route
             return item
         except Exception as e:
             db.rollback()
@@ -1039,9 +1041,9 @@ class LennyAPI:
         """Replace an existing item's file(s) in place.
 
         Opposite guard from `add`: requires the item to already exist rather
-        than rejecting if it does. Item.id and every Loan row are untouched —
-        only the S3 objects and the encrypted/formats flags change, so
-        history/loans survive a wrong-file correction.
+        than rejecting if it does. Item.id and loan history are kept — only the
+        S3 objects and the encrypted/formats flags change — so history survives a
+        wrong-file correction. Active loans are returned if the book stops being borrowable.
 
         The new file is uploaded over the old one and only leftovers (e.g. the
         `_encrypted` twin older versions wrote) are deleted afterwards, so a
@@ -1066,6 +1068,7 @@ class LennyAPI:
                 elif encrypt:
                     item.subscription = False
                 item.formats = FormatEnum(formats)
+                item.end_loans()
                 db.commit()
             except Exception as e:
                 db.rollback()

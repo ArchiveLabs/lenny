@@ -41,7 +41,7 @@ You need a Ghost site with members turned on. Lenny never asks for a Ghost Admin
      <button data-lenny-book="OL12345M">Read</button>
      ```
    Use the book's Open Library edition ID, as shown in Lenny's library. If you change the snippet later, paste the new one into Ghost again.
-4. **Mark books as members-only.** Set the book's access mode to **subscription**.
+4. **Mark books as members-only.** Set the book's access mode to **subscription**. If the book was borrowable, its active loans are returned when you save.
 
 **Pause it.** Turning members-only reading off in **Settings → Ghost** stops new Read presses and refuses reads on existing passes. The site, tiers, secret and passes are kept, and webhooks still arrive, so turning it back on picks up where it left off.
 

@@ -212,6 +212,7 @@ def _mock_updated_item(duration):
     item.encrypted = False
     item.access_mode = "open"
     item.loan_duration_days = duration
+    item.loans_returned = 0
     return item
 
 

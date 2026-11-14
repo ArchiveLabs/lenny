@@ -1094,6 +1094,7 @@ async def update_item(request: Request, book_id: str, body: dict = Body(...)):
         "encrypted": item.encrypted,
         "access_mode": item.access_mode,
         "loan_duration_days": item.loan_duration_days,
+        "loans_returned": getattr(item, "loans_returned", 0),
     }
 
 
@@ -1107,8 +1108,8 @@ async def reupload_item(
 ):
     """
     Replace an existing item's file (fixes a wrong-file import). Item id and
-    every loan on it are untouched — only the S3 object(s) and the
-    encrypted/formats flags change. Same admin gate as /upload (which is for
+    loan history are kept — only the S3 object(s) and the encrypted/formats
+    flags change, and active loans are returned if the book stops being borrowable. Same admin gate as /upload (which is for
     creating new items rather than replacing one).
 
     `book_id` accepts either a bare OLID or an OpenLibrary edition key, same
@@ -2025,6 +2026,7 @@ async def admin_list_loans(
     offset: Optional[int] = None,
     loan_status: Optional[str] = Query(None, alias="status"),
     user: Optional[str] = None,
+    item: Optional[str] = None,
     sort: Optional[str] = None,
     order: Optional[str] = None,
 ):
@@ -2038,7 +2040,7 @@ async def admin_list_loans(
     ``total`` is the count matching the filters (before limit/offset).
 
     Filters: ``status`` ∈ {all,active,returned,overdue}; ``user`` = hex prefix
-    of the patron hash; ``sort`` ∈ {borrowed_at,due_at,returned_at};
+    of the patron hash; ``item`` = OLID or OL…M edition key; ``sort`` ∈ {borrowed_at,due_at,returned_at};
     ``order`` ∈ {asc,desc}. All optional; sensible defaults applied.
     """
     _require_admin(request)
@@ -2077,6 +2079,9 @@ async def admin_list_loans(
     off = offset or 0
     if off < 0:
         raise HTTPException(status_code=400, detail="'offset' must be >= 0.")
+    edition = None
+    if item is not None and (edition := parse_olid(item)) is None:
+        raise HTTPException(status_code=400, detail="'item' must be an OLID or edition key.")
 
     # query_loans_for_admin resolves any never-before-cached edition's title
     # via a synchronous OL call (admin_loans.py's _TITLE_CACHE only helps once
@@ -2086,7 +2091,7 @@ async def admin_list_loans(
     # not just this one. Same root cause and same fix as admin_get_items.
     items, total = await run_in_threadpool(
         query_loans_for_admin,
-        status=st, user=usr, limit=limit, offset=off, sort=srt, order=ordr,
+        status=st, user=usr, edition=edition, limit=limit, offset=off, sort=srt, order=ordr,
     )
     eff_limit = max(1, min(int(limit or 500), 5000))
     return JSONResponse({"items": items, "total": total, "limit": eff_limit, "offset": off})

@@ -167,6 +167,14 @@ class Item(Base):
         """Borrow if encrypted else not."""
         return bool(self.encrypted)
 
+    def end_loans(self) -> int:
+        """Return every active loan on this book; the caller commits. Used when it stops being borrowable."""
+        if self.is_lendable:
+            return 0
+        now = datetime.datetime.now(datetime.timezone.utc)
+        return (db.query(Loan).filter(Loan.item_id == self.id, *Loan._active_filters())
+                .update({Loan.returned_at: now}, synchronize_session=False))
+
     @hybrid_property
     def is_waitlistable(self):
         """Waitlist if encrypted else not."""

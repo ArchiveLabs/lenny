@@ -24,7 +24,7 @@ from lenny.app import app  # noqa: E402
 from lenny.core import ghost  # noqa: E402
 from lenny.core.db import Base, engine  # noqa: E402
 from lenny.core.db import session as db  # noqa: E402
-from lenny.core.models import FormatEnum, Item, Subscription, SubscriptionRead  # noqa: E402
+from lenny.core.models import FormatEnum, Item, Loan, Subscription, SubscriptionRead  # noqa: E402
 from lenny.core.utils import hash_email  # noqa: E402
 
 SITE = "https://hydra.example"
@@ -543,3 +543,23 @@ def test_switching_off_pauses_reading_and_keeps_everything(admin, monkeypatch):
     assert admin.put("/v1/api/admin/settings/ghost", json={"enabled": True}).json()["enabled"] is True
     assert c.get(f"/v1/api/items/{EDITION}/read", **json_get).status_code == 307
     assert admin.put("/v1/api/admin/settings/ghost", json={"enabled": "no"}).status_code == 422
+
+
+def test_leaving_borrowable_returns_active_loans(admin, monkeypatch):
+    monkeypatch.setattr("lenny.core.admin_loans._resolve_titles", lambda editions: {})
+    item = make_item(subscription=False, encrypted=True)
+    soon = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+    db.add_all([Loan(item_id=item.id, patron_email_hash=hash_email(ME), due_date=soon),
+                Loan(item_id=item.id, patron_email_hash=hash_email("b@example.com"), due_date=soon)])
+    db.commit()
+    c = client()
+    active = f"/v1/api/admin/loans?status=active&item=OL{EDITION}M&limit=1"
+    assert c.get(active).json()["total"] == 2
+    assert c.get("/v1/api/admin/loans?item=nope").status_code == 400
+
+    r = c.patch(f"/v1/api/admin/items/{EDITION}", json={"loan_duration_days": 7})
+    assert r.json()["loans_returned"] == 0  # still borrowable: loans stay
+    r = c.patch(f"/v1/api/admin/items/{EDITION}", json={"access_mode": "subscription"})
+    assert r.status_code == 200 and r.json()["loans_returned"] == 2
+    assert c.get(active).json()["total"] == 0
+    assert c.patch(f"/v1/api/admin/items/{EDITION}", json={"access_mode": "open"}).json()["loans_returned"] == 0
