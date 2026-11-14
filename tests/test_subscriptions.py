@@ -32,6 +32,7 @@ ISS = f"{SITE}/members/api"
 ME = "member@example.com"
 EDITION = 920111001
 LAUNCH = "/v1/api/subscriptions/ghost/launch"
+REAL_TIER_NAMES = ghost.tier_names  # the autouse fixture stubs it
 WEBHOOK = "/v1/api/subscriptions/ghost/webhook"
 SECRET = "whsec-test"
 
@@ -47,6 +48,7 @@ def env(monkeypatch):
     monkeypatch.setenv(ghost.SECRET_KEY, SECRET)
     monkeypatch.delenv(ghost.TIERS_KEY, raising=False)
     monkeypatch.setattr(ghost, "_jwks", lambda site: JWKS)
+    monkeypatch.setattr(ghost, "tier_names", lambda site: {"t-paid": "Paid"})
     yield
     db.remove()
     for table in ("subscription_reads", "subscriptions", "cache", "loans", "items"):
@@ -593,3 +595,30 @@ def test_launch_only_opens_members_only_books(encrypted):
     r = client().post(LAUNCH, data={"token": token(), "book": f"OL{EDITION}M"}, follow_redirects=False)
     assert r.status_code == 404 and "set-cookie" not in r.headers
     assert db.query(Subscription).count() == 0
+
+
+def test_tier_names_come_from_the_public_content_api(monkeypatch):
+    import httpx
+
+    def ghost_site(request):
+        if request.url.path == "/":
+            return httpx.Response(200, text='<script src="portal.min.js" data-key="0123456789abcdef0123456789"></script>')
+        assert request.url.params["key"] == "0123456789abcdef0123456789"
+        return httpx.Response(200, json={"tiers": [{"id": "t-paid", "name": "Paid"}, {"id": 5}]})
+
+    real = httpx.Client
+    monkeypatch.setattr(ghost.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(ghost_site), **kw))
+    ghost._tiers_cache.clear()
+    assert REAL_TIER_NAMES("https://hydra.example") == {"t-paid": "Paid"}
+    monkeypatch.setattr(ghost.httpx, "Client", lambda **kw: real(
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, text="no portal")), **kw))
+    assert REAL_TIER_NAMES("https://plain.example") == {}
+    ghost._tiers_cache.clear()
+
+
+def test_passes_and_settings_name_their_tiers(admin):
+    lease()
+    item = client().get("/v1/api/admin/subscriptions").json()["items"][0]
+    assert item["tiers"] == [{"id": "t-paid", "name": "Paid"}]
+    body = client().get("/v1/api/admin/settings/ghost").json()
+    assert body["tier_names"] == {"t-paid": "Paid"} and body["seen_tiers"][0]["name"] == "Paid"

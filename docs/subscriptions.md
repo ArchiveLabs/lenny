@@ -20,7 +20,7 @@ Members-only books are left out of the OPDS feed and search, so the only way in 
 
 The member never signs in to Lenny. A member who isn't signed in to Ghost sees Ghost's sign-in window first. The pass opens members-only books and nothing else: it isn't a Lenny login, can't borrow, and leaves any Lenny sign-in in the same browser alone.
 
-Any member Ghost marks as paid gets in, and that includes comped and gift memberships. You can limit access to certain tiers.
+Any member Ghost marks as paid gets in, and that includes comped and gift memberships. You can limit access to certain tiers. Lenny shows each tier by its name, read from your site's public Content API (the same read-only key Ghost's sign-in window already puts in every page); if it can't read them, it shows Ghost's tier ID.
 
 ## The 24-hour lease
 

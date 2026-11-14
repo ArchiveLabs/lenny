@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -100,6 +101,38 @@ def fetch_jwks(site: str) -> dict:
     if not keys:
         raise GhostError("ghost_no_jwks", "JWKS has no RSA keys")
     return {"keys": keys}
+
+
+# ── tier names ──────────────────────────────────────────────────────────────
+
+# Ghost's Portal script carries the site's public, read-only Content API key on every page.
+_CONTENT_KEY = re.compile(r'data-key="([0-9a-f]{26})"')
+TIERS_TTL_S = 3600
+# shortcut: per-worker cache, failures cached too; a renamed tier shows its old name for up to an hour.
+_tiers_cache: dict = {}
+
+
+def tier_names(site: str) -> dict:
+    """{tier id: name} from the site's public Content API, or {} when it can't be read.
+
+    Display only, so redirects are followed (a custom domain sends the API to *.ghost.io)
+    and only tier names are kept from the answer.
+    """
+    hit = _tiers_cache.get(site)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    names = {}
+    try:
+        with httpx.Client(timeout=5.0, follow_redirects=True) as client:
+            key = _CONTENT_KEY.search(client.get(f"{site}/").text)
+            if key:
+                r = client.get(f"{site}/ghost/api/content/tiers/", params={"key": key.group(1), "limit": "all"})
+                names = {t["id"]: t["name"] for t in r.json().get("tiers", [])
+                         if isinstance(t.get("id"), str) and isinstance(t.get("name"), str)}
+    except (httpx.HTTPError, ValueError, AttributeError, TypeError) as e:
+        logger.info("Ghost tier names unavailable for %s: %s", site, e)
+    _tiers_cache[site] = (time.monotonic() + TIERS_TTL_S, names)
+    return names
 
 
 def _jwks(site: str) -> dict:

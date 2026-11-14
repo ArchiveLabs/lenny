@@ -124,10 +124,12 @@ async def ghost_webhook(request: Request):
 
 def _settings() -> dict:
     site = ghost.site_url() or None
+    names = ghost.tier_names(site) if site else {}
     return {
         "site_url": site,
         "allowed_tier_ids": ghost.allowed_tiers(),
-        "seen_tiers": Subscription.seen_tiers(ghost.PROVIDER),
+        "tier_names": names,
+        "seen_tiers": [{**t, "name": names.get(t["id"])} for t in Subscription.seen_tiers(ghost.PROVIDER)],
         "enabled": ghost.enabled(),
         "lease_hours": ghost.LEASE_SECONDS // 3600,
         "snippet": ghost.snippet(LennyAPI.make_url("/v1/api/subscriptions/ghost/launch"), site) if site else None,
@@ -303,11 +305,13 @@ def _passes(page, page_size) -> dict:
     q = db.query(S).filter(S.expires_at > S._now())
     total = q.count()
     rows = q.order_by(S.updated_at.desc(), S.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    names = ghost.tier_names(ghost.site_url()) if rows and ghost.site_url() else {}
     return {"items": [{
         "id": r.id,
         "member": r.patron_email_hash[:8],  # a display handle only; never the email or the full hash
         "provider": r.provider,
         "tier_ids": [t for t in (r.tier_ids or "").split(",") if t],
+        "tiers": [{"id": t, "name": names.get(t)} for t in (r.tier_ids or "").split(",") if t],
         "expires_at": r.expires_at.isoformat(),
         "renewed_at": r.updated_at.isoformat() if r.updated_at else None,
     } for r in rows], "total": total}
