@@ -33,16 +33,17 @@ If a member cancels, they can keep reading for up to 24 hours unless webhooks ar
 You need a Ghost site with members turned on. Lenny never asks for a Ghost Admin API key.
 
 1. **Connect your site.** In Lenny admin, open **Settings → Ghost** and enter your site's address, for example `https://example.com`. Lenny checks that it can read the site's public signing keys.
-2. **Add the script.** Copy the snippet Lenny shows. In Ghost Admin, open **Settings → Code injection** and paste it into **Site footer**.
-3. **Add Read buttons.** In a post, either:
-   - add a **Button** card whose URL is your site's address plus `#lenny-book=` and the book ID, for example `https://example.com/#lenny-book=OL12345M`, or
+2. **Add the script.** Copy the snippet Lenny shows. In Ghost Admin, open **Settings → Code injection** and paste it into **Site header**. (The footer works too, but the header lets the snippet start before the page draws, so a reader coming from an email never sees your homepage flash.)
+3. **Add Read buttons.** Every Read button is a link to your site's address plus `#lenny-book=` and the book ID, for example `https://example.com/#lenny-book=OL12345M`. In a post, either:
+   - add a **Button** card with that URL, or
    - add an **HTML** card with:
      ```html
-     <button data-lenny-book="OL12345M">Read</button>
+     <a href="https://example.com/#lenny-book=OL12345M">Read</a>
      ```
-   Use the book's Open Library edition ID, as shown in Lenny's library. If you change the snippet later, paste the new one into Ghost again.
+   Use the book's Open Library edition ID, as shown in Lenny's library. Both work on your site and in newsletters: emails can't run scripts, so the link opens your site and the snippet then opens the book. A member who isn't signed in on that browser signs in first, and the book opens when Ghost brings them back (within 30 minutes). Older `<button data-lenny-book>` HTML cards still work on the website, but not in emails.
 
-   **In newsletters, use the Button card.** Emails can't run scripts, so an HTML card button does nothing there. A Button card link opens your site, and the snippet then opens the book. A member who isn't signed in on that browser signs in first, and the book opens when Ghost brings them back (within 30 minutes).
+   If you change the snippet later, paste the new one into Ghost again.
+
 **Check your setup.** Settings → Ghost shows whether the current snippet is on your site (Lenny looks at your home page; an older paste counts as missing, so paste again after you update Lenny or its address changes), when a Read button last worked, and when the last webhook arrived.
 
 4. **Mark books as members-only.** Set the book's access mode to **subscription**. If the book was borrowable, its active loans are returned when you save.

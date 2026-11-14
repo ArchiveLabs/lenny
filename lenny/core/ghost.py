@@ -333,33 +333,41 @@ def snippet_installed(site: str, marker: str):
 # ── the snippet publishers paste into Ghost ─────────────────────────────────
 
 SNIPPET = """<script>
-/* Lenny: open members-only books. In a post, use either
-   a Button card whose URL is this site's address + #lenny-book=BOOK_ID
-   (also works in newsletters: the link opens the site, which opens the book), or
-   an HTML card: <button data-lenny-book="BOOK_ID">Read</button> (website only) */
+/* Lenny: open members-only books. Paste into Ghost: Settings > Code injection > Site header.
+   In a post, link to this site's address + #lenny-book=BOOK_ID, as either
+   a Button card, or an HTML card: <a href="https://YOUR-SITE/#lenny-book=BOOK_ID">Read</a>
+   Links work on the site and in newsletters (the link opens the site, which opens the book). */
 (function () {
+  var root = document.documentElement;
+  function show() { root.style.visibility = ""; }
   function open(book, askToSignIn) {
     fetch(%(entitlements)s, {credentials: "same-origin"}).then(function (r) {
       if (r.status !== 200) {
+        show();
         if (!askToSignIn) return;
         try { localStorage.setItem("lennyBook", JSON.stringify([book, Date.now()])); } catch (e) {}
         window.location.hash = "#/portal/signin";
         return;
       }
       return r.text().then(function (token) {
-        var f = document.createElement("form");
-        f.method = "POST";
-        f.action = %(launch)s;
-        [["token", token], ["book", book]].forEach(function (p) {
-          var i = document.createElement("input");
-          i.type = "hidden"; i.name = p[0]; i.value = p[1];
-          f.appendChild(i);
-        });
-        document.body.appendChild(f);
-        f.submit();
+        function go() {
+          var f = document.createElement("form");
+          f.method = "POST";
+          f.action = %(launch)s;
+          [["token", token], ["book", book]].forEach(function (p) {
+            var i = document.createElement("input");
+            i.type = "hidden"; i.name = p[0]; i.value = p[1];
+            f.appendChild(i);
+          });
+          document.body.appendChild(f);
+          f.submit();
+        }
+        if (document.body) go(); else document.addEventListener("DOMContentLoaded", go);
       });
-    });
+    }).catch(show);
   }
+  // Coming back with the browser's Back button must not find the page still hidden.
+  window.addEventListener("pageshow", function (e) { if (e.persisted) show(); });
   document.addEventListener("click", function (e) {
     var b = e.target.closest && e.target.closest('[data-lenny-book], a[href*="#lenny-book="]');
     if (!b) return;
@@ -367,16 +375,18 @@ SNIPPET = """<script>
     open(b.getAttribute("data-lenny-book") ||
          decodeURIComponent(b.getAttribute("href").split("#lenny-book=")[1] || ""), true);
   });
-  var m = location.hash.match(/^#lenny-book=(.+)$/);
-  if (m) {  // arrived from a newsletter link
+  var m = location.hash.match(/^#lenny-book=(.+)$/), book = null, saved = null;
+  if (m) {  // arrived from a newsletter or another page's link
+    try { book = decodeURIComponent(m[1]); } catch (e) {}
     history.replaceState(null, "", location.pathname + location.search);
-    open(decodeURIComponent(m[1]), true);
-    return;
+  } else {
+    try { saved = JSON.parse(localStorage.getItem("lennyBook")); localStorage.removeItem("lennyBook"); } catch (e) {}
+    // Back from Ghost's sign-in link within 30 minutes: open the book they asked for.
+    if (saved && /[?&]success=true/.test(location.search) && Date.now() - saved[1] < 1800000) book = saved[0];
   }
-  var saved = null;
-  try { saved = JSON.parse(localStorage.getItem("lennyBook")); localStorage.removeItem("lennyBook"); } catch (e) {}
-  // Back from Ghost's sign-in link within 30 minutes: open the book they asked for.
-  if (saved && /[?&]success=true/.test(location.search) && Date.now() - saved[1] < 1800000) open(saved[0], false);
+  if (!book) return;
+  root.style.visibility = "hidden";  // arriving to open a book: don't flash the page first
+  open(book, !!m);
 })();
 </script>"""
 

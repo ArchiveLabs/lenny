@@ -349,6 +349,8 @@ def test_snippet_follows_a_ghost_under_a_path():
     assert '"https://example.com/blog/members/api/entitlements/"' in s
     assert '[data-lenny-book], a[href*="#lenny-book="]' in s  # HTML card and Button card
     assert "location.hash.match(/^#lenny-book=(.+)$/)" in s  # newsletter links open the site, then the book
+    assert 'root.style.visibility = "hidden"' in s and "Site header" in s  # no homepage flash
+    assert 'addEventListener("pageshow"' in s and ".catch(show)" in s  # never left hidden
 
 
 def test_changing_the_ghost_site_drops_old_leases(admin, monkeypatch):
