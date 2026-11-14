@@ -34,11 +34,13 @@ You need a Ghost site with members turned on. Lenny never asks for a Ghost Admin
 
 1. **Connect your site.** In Lenny admin, open **Settings → Ghost** and enter your site's address, for example `https://example.com`. Lenny checks that it can read the site's public signing keys.
 2. **Add the script.** Copy the snippet Lenny shows. In Ghost Admin, open **Settings → Code injection** and paste it into **Site footer**.
-3. **Add Read buttons.** In a post, add an HTML card with:
-   ```html
-   <button data-lenny-book="OL12345M">Read</button>
-   ```
-   Use the book's Open Library edition ID, as shown in Lenny's library.
+3. **Add Read buttons.** In a post, either:
+   - add a **Button** card whose URL is your site's address plus `#lenny-book=` and the book ID, for example `https://example.com/#lenny-book=OL12345M`, or
+   - add an **HTML** card with:
+     ```html
+     <button data-lenny-book="OL12345M">Read</button>
+     ```
+   Use the book's Open Library edition ID, as shown in Lenny's library. If you change the snippet later, paste the new one into Ghost again.
 4. **Mark books as members-only.** Set the book's access mode to **subscription**.
 
 **Pause it.** Turning members-only reading off in **Settings → Ghost** stops new Read presses and refuses reads on existing passes. The site, tiers, secret and passes are kept, and webhooks still arrive, so turning it back on picks up where it left off.

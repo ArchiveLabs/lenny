@@ -242,11 +242,14 @@ def last_webhook_at():
 # ── the snippet publishers paste into Ghost ─────────────────────────────────
 
 SNIPPET = """<script>
-/* Lenny: open members-only books. Put Read buttons in posts as
-   <button data-lenny-book="BOOK_ID">Read</button> */
+/* Lenny: open members-only books. In a post, use either
+   an HTML card: <button data-lenny-book="BOOK_ID">Read</button>
+   or a Button card whose URL ends in #lenny-book=BOOK_ID */
 document.addEventListener("click", function (e) {
-  var b = e.target.closest && e.target.closest("[data-lenny-book]");
+  var b = e.target.closest && e.target.closest('[data-lenny-book], a[href*="#lenny-book="]');
   if (!b) return;
+  var book = b.getAttribute("data-lenny-book") ||
+    decodeURIComponent(b.getAttribute("href").split("#lenny-book=")[1] || "");
   e.preventDefault();
   fetch(%(entitlements)s, {credentials: "same-origin"}).then(function (r) {
     if (r.status !== 200) { window.location.hash = "#/portal/signin"; return; }
@@ -254,7 +257,7 @@ document.addEventListener("click", function (e) {
       var f = document.createElement("form");
       f.method = "POST";
       f.action = %(launch)s;
-      [["token", token], ["book", b.getAttribute("data-lenny-book")]].forEach(function (p) {
+      [["token", token], ["book", book]].forEach(function (p) {
         var i = document.createElement("input");
         i.type = "hidden"; i.name = p[0]; i.value = p[1];
         f.appendChild(i);

@@ -343,6 +343,7 @@ def test_members_only_is_not_publicly_readable():
 def test_snippet_follows_a_ghost_under_a_path():
     s = ghost.snippet("https://lenny.example/v1/api/subscriptions/ghost/launch", "https://example.com/blog")
     assert '"https://example.com/blog/members/api/entitlements/"' in s
+    assert '[data-lenny-book], a[href*="#lenny-book="]' in s  # HTML card and Button card
 
 
 def test_changing_the_ghost_site_drops_old_leases(admin, monkeypatch):
