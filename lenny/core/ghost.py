@@ -28,7 +28,8 @@ PROVIDER = "ghost"
 LEASE_SECONDS = 24 * 3600
 ENTITLEMENT_SCOPE = "members:entitlements:read"
 WEBHOOK_MAX_SKEW_MS = 5 * 60 * 1000
-JWKS_TTL_S = 600
+JWKS_TTL_S = 6 * 3600  # Ghost keeps its member signing key; a new one is picked up on first failure
+JWKS_REFETCH_S = 60
 
 URL_KEY = "LENNY_GHOST_URL"
 TIERS_KEY = "LENNY_GHOST_TIERS"
@@ -145,12 +146,14 @@ def tier_names(site: str) -> dict:
     return names
 
 
-def _jwks(site: str) -> dict:
+def _jwks(site: str, fresh: bool = False) -> dict:
+    """The site's signing keys, cached. `fresh` refetches, at most once a minute per site."""
     hit = _jwks_cache.get(site)
-    if hit and hit[0] > time.monotonic():
+    now = time.monotonic()
+    if hit and (hit[0] > now if not fresh else now - hit[2] < JWKS_REFETCH_S):
         return hit[1]
     jwks = fetch_jwks(site)
-    _jwks_cache[site] = (time.monotonic() + JWKS_TTL_S, jwks)
+    _jwks_cache[site] = (now + JWKS_TTL_S, jwks, now)
     return jwks
 
 
@@ -168,9 +171,10 @@ def verify_entitlement(token: str) -> dict:
         raise GhostError("invalid_token", "missing or oversized token")
 
     issuer = f"{site}/members/api"
-    try:
-        claims = JsonWebToken(["RS512"]).decode(
-            token, JsonWebKey.import_key_set(_jwks(site)),
+
+    def decode(jwks):
+        return JsonWebToken(["RS512"]).decode(
+            token, JsonWebKey.import_key_set(jwks),
             claims_options={
                 "iss": {"essential": True, "value": issuer},
                 "aud": {"essential": True, "value": issuer},
@@ -178,6 +182,11 @@ def verify_entitlement(token: str) -> dict:
                 "sub": {"essential": True},
                 "jti": {"essential": True},
             })
+    try:
+        try:
+            claims = decode(_jwks(site))
+        except (JoseError, ValueError):
+            claims = decode(_jwks(site, fresh=True))  # Ghost may have a new key since we cached
         claims.validate(leeway=30)
     except GhostError:
         raise
@@ -353,7 +362,21 @@ SNIPPET = """<script>
   if (window.lennySnippet) return;  // pasted twice: run once
   window.lennySnippet = true;
   var root = document.documentElement;
-  function show() { root.style.visibility = ""; }
+  function show() { root.removeAttribute("data-lenny-opening"); }
+  function hide() {  // the site's own background, a spinner and a line of text instead of the page
+    var css = document.createElement("style");
+    css.textContent =
+      "html[data-lenny-opening] body>*{display:none!important}" +  // body stays: its background is the site's
+      "html[data-lenny-opening]::before{content:'';position:fixed;top:calc(50%% - 44px);left:calc(50%% - 14px);" +
+      "width:28px;height:28px;border:3px solid #8888;border-top-color:#888;border-radius:50%%;" +
+      "animation:lenny-spin .8s linear infinite}" +
+      "html[data-lenny-opening]::after{content:'Opening your book\\u2026';position:fixed;top:50%%;left:0;right:0;" +
+      "text-align:center;font:15px/1.5 system-ui,-apple-system,sans-serif;color:#888}" +
+      "@keyframes lenny-spin{to{transform:rotate(360deg)}}" +
+      "@media (prefers-reduced-motion:reduce){html[data-lenny-opening]::before{animation:none}}";
+    (document.head || root).appendChild(css);
+    root.setAttribute("data-lenny-opening", "");  // not a class: themes rewrite <html> classes
+  }
   function open(book, askToSignIn) {
     fetch(%(entitlements)s, {credentials: "same-origin"}).then(function (r) {
       if (r.status !== 200) {
@@ -364,19 +387,16 @@ SNIPPET = """<script>
         return;
       }
       return r.text().then(function (token) {
-        function go() {
-          var f = document.createElement("form");
-          f.method = "POST";
-          f.action = %(launch)s;
-          [["token", token], ["book", book]].forEach(function (p) {
-            var i = document.createElement("input");
-            i.type = "hidden"; i.name = p[0]; i.value = p[1];
-            f.appendChild(i);
-          });
-          document.body.appendChild(f);
-          f.submit();
-        }
-        if (document.body) go(); else document.addEventListener("DOMContentLoaded", go);
+        var f = document.createElement("form");
+        f.method = "POST";
+        f.action = %(launch)s;
+        [["token", token], ["book", book]].forEach(function (p) {
+          var i = document.createElement("input");
+          i.type = "hidden"; i.name = p[0]; i.value = p[1];
+          f.appendChild(i);
+        });
+        root.appendChild(f);  // not <body>: from the header it may not exist yet, and waiting for it is slow
+        f.submit();
       });
     }).catch(show);
   }
@@ -400,7 +420,7 @@ SNIPPET = """<script>
     if (saved && /[?&]success=true/.test(location.search) && Date.now() - saved[1] < 1800000) book = saved[0];
   }
   if (!book) return;
-  root.style.visibility = "hidden";  // arriving to open a book: don't flash the page first
+  hide();  // arriving to open a book: don't flash the page first
   open(book, !!m);
 })();
 </script>"""

@@ -268,6 +268,10 @@ class LennyAPI:
         return quote(manifest_uri, safe='')
 
     @classmethod
+    def make_reader_url(cls, book_id):
+        return cls.make_url(f"/read/manifest/{cls.encoded_manifest_url(book_id)}")
+
+    @classmethod
     def make_url(cls, path):
         """Constructs a public Lenny URL that points to the public HOST and PORT
         """

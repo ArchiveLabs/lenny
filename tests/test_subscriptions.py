@@ -34,6 +34,7 @@ EDITION = 920111001
 LAUNCH = "/v1/api/subscriptions/ghost/launch"
 REAL_TIER_NAMES = ghost.tier_names  # the autouse fixture stubs it
 REAL_SNIPPET_CHECK = ghost.snippet_check  # stubbed too: no network in tests
+REAL_JWKS = ghost._jwks
 WEBHOOK = "/v1/api/subscriptions/ghost/webhook"
 SECRET = "whsec-test"
 
@@ -48,7 +49,7 @@ def env(monkeypatch):
     monkeypatch.setenv(ghost.URL_KEY, SITE)
     monkeypatch.setenv(ghost.SECRET_KEY, SECRET)
     monkeypatch.delenv(ghost.TIERS_KEY, raising=False)
-    monkeypatch.setattr(ghost, "_jwks", lambda site: JWKS)
+    monkeypatch.setattr(ghost, "_jwks", lambda site, fresh=False: JWKS)
     monkeypatch.setattr(ghost, "tier_names", lambda site: {"t-paid": "Paid"})
     monkeypatch.setattr(ghost, "snippet_check", lambda site, launch: {"installed": None, "stale": None})
     yield
@@ -148,12 +149,13 @@ def test_launch_leases_sets_member_cookie_and_opens_reader():
     c = client()
     r = c.post(LAUNCH, data={"token": token(), "book": f"OL{EDITION}M"}, follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == f"/v1/api/items/{EDITION}/read"
+    from lenny.core.api import LennyAPI
+    assert r.headers["location"] == LennyAPI.make_reader_url(EDITION)   # straight to the reader, no extra hop
     row = db.query(Subscription).one()
     assert row.patron_email_hash == hash_email(ME) and row.member_uuid == "m-1"
     assert ME not in json.dumps([row.provider, row.member_uuid, row.tier_ids])
 
-    read = c.get(r.headers["location"], follow_redirects=False)
+    read = c.get(f"/v1/api/items/{EDITION}/read", follow_redirects=False)
     assert read.status_code == 307 and "/read/manifest/" in read.headers["location"]
     assert read.headers["cache-control"] == "private, no-store"
 
@@ -349,7 +351,8 @@ def test_snippet_follows_a_ghost_under_a_path():
     assert '"https://example.com/blog/members/api/entitlements/"' in s
     assert '[data-lenny-book], a[href*="#lenny-book="]' in s  # HTML card and Button card
     assert "location.hash.match(/^#lenny-book=(.+)$/)" in s  # newsletter links open the site, then the book
-    assert 'root.style.visibility = "hidden"' in s and "Site header" in s  # no homepage flash
+    assert "html[data-lenny-opening]" in s and "Opening your book" in s and "Site header" in s  # a loading screen, no flash
+    assert "root.appendChild(f)" in s and "DOMContentLoaded" not in s  # submits without waiting for <body>
     assert 'addEventListener("pageshow"' in s and ".catch(show)" in s  # never left hidden
     assert "e.stopImmediatePropagation()" in s and "window.lennySnippet" in s  # a stale copy can't win the click
 

@@ -85,7 +85,8 @@ async def ghost_launch(request: Request, token: str = Form(""), book: str = Form
     await run_blocking(ghost.mark_launch)
 
     client_ip = request.client.host if request.client else None
-    resp = RedirectResponse(url=f"/v1/api/items/{olid}/read", status_code=303)
+    # Straight to the reader: the pass was just granted, and nginx checks it again there.
+    resp = RedirectResponse(url=LennyAPI.make_reader_url(olid), status_code=303)
     # Not `session`: that is the library's own patron login, which can borrow.
     resp.set_cookie(key=auth.MEMBER_COOKIE, value=auth.create_member_cookie(patron, client_ip),
                     max_age=auth.COOKIE_TTL, httponly=True, secure=True, samesite="Lax", path="/")

@@ -14,7 +14,7 @@ import pytest
 import sqlalchemy
 
 from tests.test_subscriptions import (  # noqa: F401  (env is an autouse fixture)
-    EDITION, ISS, LAUNCH, ME, SECRET, SITE, WEBHOOK, JWKS, REAL_SNIPPET_CHECK,
+    EDITION, ISS, LAUNCH, ME, SECRET, SITE, WEBHOOK, JWKS, REAL_JWKS, REAL_SNIPPET_CHECK,
     admin, client, env, lease, make_item, signed, token,
 )
 from lenny.core import auth, ghost
@@ -124,8 +124,9 @@ def test_launch_refuses_junk_book_ids(book):
 @pytest.mark.parametrize("book", [str(EDITION), f"OL{EDITION}M"])
 def test_launch_accepts_both_id_forms(book):
     make_item()
+    from lenny.core.api import LennyAPI
     r = client().post(LAUNCH, data={"token": token(), "book": book}, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == f"/v1/api/items/{EDITION}/read"
+    assert r.status_code == 303 and r.headers["location"] == LennyAPI.make_reader_url(EDITION)
 
 
 def test_launch_cookie_is_locked_down_and_never_echoes_the_token():
@@ -779,7 +780,7 @@ def test_open_library_down_never_blocks_a_member(monkeypatch):
     c = client()
     r = c.post(LAUNCH, data={"token": token(), "book": f"OL{EDITION}M"}, follow_redirects=False)
     assert r.status_code == 303
-    assert c.get(r.headers["location"], follow_redirects=False).status_code == 307
+    assert c.get(f"/v1/api/items/{EDITION}/read", follow_redirects=False).status_code == 307
     assert c.get(f"/v1/api/items/{EDITION}/access").status_code == 204
     assert c.get(f"/v1/api/items/{EDITION}/readium/manifest.json").status_code == 200
 
@@ -912,3 +913,36 @@ def test_a_broken_launch_stamp_never_blocks_the_reader(monkeypatch):
     monkeypatch.setattr(ghost, "_stamp", broken)
     make_item()
     assert _launch(client()).status_code == 303
+
+
+# ── speed: the launch path makes no avoidable round trips ────────────────────
+
+def test_signing_keys_are_cached_and_a_new_key_is_picked_up_once(monkeypatch):
+    from authlib.jose import JsonWebKey
+    from tests.test_subscriptions import KEY
+    new_key = JsonWebKey.generate_key("RSA", 2048, is_private=True, options={"kid": "k2"})
+    served = [{"keys": [KEY.as_dict(is_private=False)]}]
+    fetches = []
+
+    def fetch(site):
+        fetches.append(site)
+        return served[0]
+    monkeypatch.setattr(ghost, "fetch_jwks", fetch)
+    monkeypatch.setattr(ghost, "_jwks", REAL_JWKS)
+    ghost._jwks_cache.clear()
+    ghost.verify_entitlement(token())
+    ghost.verify_entitlement(token())
+    assert len(fetches) == 1                                  # cached between launches
+
+    served[0] = {"keys": [new_key.as_dict(is_private=False)]}  # Ghost rotates its key
+    monkeypatch.setattr(ghost, "JWKS_REFETCH_S", 0)
+    ghost.verify_entitlement(token(key=new_key))
+    assert len(fetches) == 2                                  # refetched once, then accepted
+
+    monkeypatch.setattr(ghost, "JWKS_REFETCH_S", 60)
+    from tests.test_subscriptions import OTHER_KEY
+    for _ in range(3):                                        # forged tokens can't make Lenny hammer Ghost
+        with pytest.raises(ghost.GhostError):
+            ghost.verify_entitlement(token(key=OTHER_KEY))
+    assert len(fetches) == 2
+    ghost._jwks_cache.clear()

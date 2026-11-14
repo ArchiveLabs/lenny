@@ -559,10 +559,7 @@ async def item_access(request: Request, book_id: str, session: Optional[str] = C
 @router.get("/items/{book_id}/read")
 @requires_item_auth()
 async def redirect_reader(request: Request, book_id: str, format: str = "epub", session: Optional[str] = Cookie(None), item=None, email: str=''):
-    manifest_uri = LennyAPI.make_manifest_url(book_id)
-    encoded_manifest_uri = quote(manifest_uri, safe='')
-    reader_url = LennyAPI.make_url(f"/read/manifest/{encoded_manifest_uri}")
-    return RedirectResponse(url=reader_url, status_code=307)
+    return RedirectResponse(url=LennyAPI.make_reader_url(book_id), status_code=307)
 
 @router.get("/items/{book_id}/readium/manifest.json")
 @requires_item_auth()
