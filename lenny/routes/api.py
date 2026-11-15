@@ -358,6 +358,8 @@ def requires_item_auth(scope: str = "loans:read"):
             if format not in ("epub", ".epub"):
                 return JSONResponse(status_code=400, content={"detail": "Unsupported format"})
             if item := Item.exists(book_id):
+                if item.subscription:
+                    request.scope["lenny.members_only"] = True  # app.py strips CORS from the answer
                 if scope == "borrow" and not item.is_lendable:
                     return _nothing_to_return(request, item)
                 # Identity resolution (cookie OR bearer token) lives here in the
@@ -551,6 +553,8 @@ async def item_access(request: Request, book_id: str, session: Optional[str] = C
     item = await run_blocking(Item.exists, book_id)
     if item is None or not item.is_login_required:
         return Response(status_code=204)
+    if item.subscription:  # whether a visitor holds a pass is nobody else's business
+        request.scope["lenny.members_only"] = True
     email, email_hashed = item_identity(request, extract_session(request, session), item)
     result = await run_blocking(LennyAPI.auth_check, item, email=email, email_hashed=email_hashed)
     return Response(status_code=403 if "error" in result else 204, headers={"Cache-Control": "no-store"})

@@ -192,7 +192,9 @@ async def no_cross_origin_reads_of_oauth2_authorize(request, call_next):
     response = await call_next(request)
     # A preflight (OPTIONS) is answered before the router runs, so scope["route"]
     # is unset and it is not stripped; harmless, as a preflight carries no body.
-    if _serves_consent_screen(request.scope):
+    # Members-only book content gets the same treatment: no other origin may read it with a
+    # member's cookie (a same-site page, e.g. the publisher's own subdomain, would send it).
+    if _serves_consent_screen(request.scope) or request.scope.get("lenny.members_only"):
         for header in ("Access-Control-Allow-Origin",
                        "Access-Control-Allow-Credentials"):
             if header in response.headers:

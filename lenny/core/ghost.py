@@ -30,6 +30,7 @@ ENTITLEMENT_SCOPE = "members:entitlements:read"
 WEBHOOK_MAX_SKEW_MS = 5 * 60 * 1000
 JWKS_TTL_S = 6 * 3600  # Ghost keeps its member signing key; a new one is picked up on first failure
 JWKS_REFETCH_S = 60
+JTI_TTL_S = 600  # how long a used token id is remembered; tokens must not outlive it
 
 URL_KEY = "LENNY_GHOST_URL"
 TIERS_KEY = "LENNY_GHOST_TIERS"
@@ -152,6 +153,8 @@ def _jwks(site: str, fresh: bool = False) -> dict:
     now = time.monotonic()
     if hit and (hit[0] > now if not fresh else now - hit[2] < JWKS_REFETCH_S):
         return hit[1]
+    if hit and fresh:  # count the attempt first: a failing Ghost must not be retried on every bad token
+        _jwks_cache[site] = (hit[0], hit[1], now)
     jwks = fetch_jwks(site)
     _jwks_cache[site] = (now + JWKS_TTL_S, jwks, now)
     return jwks
@@ -197,13 +200,16 @@ def verify_entitlement(token: str) -> dict:
     # only `scope` tells them apart.
     if claims.get("scope") != ENTITLEMENT_SCOPE:
         raise GhostError("invalid_token", "wrong scope")
+    # Single use only holds while the used id is remembered, so refuse anything that outlives it.
+    if not isinstance(claims.get("exp"), int) or claims["exp"] - time.time() > JTI_TTL_S - 30:
+        raise GhostError("invalid_token", "token lives too long")
     if claims.get("paid") is not True:
         raise GhostError("not_paid")
     allowed = allowed_tiers()
     if allowed and not set(allowed) & set(map(str, claims.get("active_tier_ids") or [])):
         raise GhostError("tier_not_allowed")
     # Single use: counted then recorded, keyed to outlive the token (5 min + leeway).
-    if Cache.is_throttled("ghost:jti", str(claims["jti"])[:128], 1, 600, fail_closed=True):
+    if Cache.is_throttled("ghost:jti", str(claims["jti"])[:128], 1, JTI_TTL_S, fail_closed=True):
         raise GhostError("token_reused")
     return dict(claims)
 

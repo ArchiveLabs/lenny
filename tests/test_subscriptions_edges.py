@@ -946,3 +946,63 @@ def test_signing_keys_are_cached_and_a_new_key_is_picked_up_once(monkeypatch):
             ghost.verify_entitlement(token(key=OTHER_KEY))
     assert len(fetches) == 2
     ghost._jwks_cache.clear()
+
+
+# ── security audit: Ghost ↔ Lenny ↔ reader ──────────────────────────────────
+
+EVIL = {"origin": "https://evil.flaminghydra.example"}
+
+
+def test_no_other_origin_can_read_members_only_content(monkeypatch):
+    """CORS reflects any origin for OPDS clients; a same-site page would still send a member's cookie."""
+    from lenny.core.readium import ReadiumAPI
+    monkeypatch.setattr(ReadiumAPI, "get_manifest", classmethod(lambda cls, *a: {"metadata": {}}))
+    make_item()
+    lease()
+    c = _member_client()
+    for path in (f"/v1/api/items/{EDITION}/readium/manifest.json", f"/v1/api/items/{EDITION}/access",
+                 f"/v1/api/items/{EDITION}/read"):
+        r = c.get(path, headers=EVIL, follow_redirects=False)
+        assert r.status_code in (200, 204, 307), path
+        assert "access-control-allow-origin" not in r.headers, path
+        assert "access-control-allow-credentials" not in r.headers, path
+
+
+def test_open_books_keep_their_cors_for_opds_clients():
+    db.add(Item(openlibrary_edition=EDITION + 5, formats=FormatEnum.EPUB))
+    db.commit()
+    r = client().get(f"/v1/api/items/{EDITION + 5}/read", headers=EVIL, follow_redirects=False)
+    assert r.headers.get("access-control-allow-origin") == EVIL["origin"]   # positive control
+
+
+def test_a_down_ghost_is_not_asked_again_for_every_bad_token(monkeypatch):
+    calls = []
+
+    def down(site):
+        calls.append(site)
+        raise ghost.GhostError("ghost_unreachable")
+    monkeypatch.setattr(ghost, "_jwks", REAL_JWKS)
+    monkeypatch.setattr(ghost, "fetch_jwks", down)
+    ghost._jwks_cache.clear()
+    ghost._jwks_cache[SITE] = (time.monotonic() + 3600, JWKS, time.monotonic() - 120)  # cached keys, a refetch allowed
+    from tests.test_subscriptions import OTHER_KEY
+    for _ in range(5):
+        with pytest.raises(ghost.GhostError):
+            ghost.verify_entitlement(token(key=OTHER_KEY))
+    assert len(calls) == 1
+    assert ghost.verify_entitlement(token())["sub"] == ME     # good tokens still verify on the cached keys
+    ghost._jwks_cache.clear()
+
+
+def test_a_token_that_outlives_the_replay_memory_is_refused():
+    with pytest.raises(ghost.GhostError) as e:
+        ghost.verify_entitlement(token(exp=int(time.time()) + ghost.JTI_TTL_S))
+    assert e.value.code == "invalid_token"
+    assert ghost.verify_entitlement(token(exp=int(time.time()) + 300))   # Ghost's real 5 minutes
+
+
+def test_ghost_endpoints_take_small_bodies_only():
+    import pathlib
+    conf = (pathlib.Path(__file__).resolve().parent.parent / "docker/nginx/conf.d/lenny.conf").read_text()
+    block = conf.split("location /v1/api/subscriptions/ghost/ {", 1)[1].split("}", 1)[0]
+    assert "client_max_body_size 64k;" in block and "limit_req zone=api" in block
