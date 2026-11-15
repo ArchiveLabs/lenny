@@ -558,6 +558,7 @@ class SubscriptionRead(Base):
     __table_args__ = (
         UniqueConstraint('item_id', 'patron_email_hash', 'device_class', 'day', name='uq_subscription_reads'),
         Index('idx_subscription_reads_day', 'day'),
+        Index('idx_subscription_reads_patron_day', 'patron_email_hash', 'day'),
     )
 
     id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)

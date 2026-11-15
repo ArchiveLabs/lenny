@@ -16,7 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from sqlalchemy import func
+from sqlalchemy import func, select
 
 from lenny import configs
 from lenny.core import auth, ghost, ol_bootstrap
@@ -243,21 +243,37 @@ def _range(start: Optional[str], end: Optional[str]):
     return frm, to
 
 
+def _totals(frm, to) -> dict:
+    R = SubscriptionRead
+    books, patrons, opens = db.query(
+        func.count(func.distinct(R.item_id)), func.count(func.distinct(R.patron_email_hash)),
+        func.coalesce(func.sum(R.opens), 0)).filter(R.day >= frm, R.day <= to).one()
+    return {"books_read": books, "patrons": patrons, "opens": int(opens)}
+
+
 def _stats(frm, to) -> dict:
     R = SubscriptionRead
     in_range = (R.day >= frm, R.day <= to)
-    books, patrons, opens = db.query(
-        func.count(func.distinct(R.item_id)), func.count(func.distinct(R.patron_email_hash)),
-        func.coalesce(func.sum(R.opens), 0)).filter(*in_range).one()
+    totals = _totals(frm, to)
+    days = (to - frm).days + 1
+    previous = _totals(frm - datetime.timedelta(days=days), frm - datetime.timedelta(days=1))
+    # Returning readers read at least once before the range; everyone else in it is new.
+    in_range_patrons = select(R.patron_email_hash).where(*in_range)
+    returning = db.query(func.count(func.distinct(R.patron_email_hash))).filter(
+        R.patron_email_hash.in_(in_range_patrons), R.day < frm).scalar()
     since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=15)
-    active = db.query(func.count(func.distinct(R.patron_email_hash))).filter(R.last_seen >= since).scalar()
+    # `day` bounds the scan to the day index; last_seen has none. Days are UTC, like `since`.
+    active = db.query(func.count(func.distinct(R.patron_email_hash))).filter(
+        R.day >= since.date(), R.last_seen >= since).scalar()
     by_day = db.query(R.day, func.count(func.distinct(R.item_id)), func.count(func.distinct(R.patron_email_hash)),
                       func.sum(R.opens)).filter(*in_range).group_by(R.day).order_by(R.day).all()
     devices = db.query(R.device_class, func.count(func.distinct(R.patron_email_hash)),
                        func.sum(R.opens)).filter(*in_range).group_by(R.device_class).all()
     return {
         "from": frm.isoformat(), "to": to.isoformat(),
-        "totals": {"books_read": books, "patrons": patrons, "opens": int(opens), "active_now": active},
+        "totals": {**totals, "active_now": active},
+        "previous": previous,
+        "readers": {"new": totals["patrons"] - returning, "returning": returning},
         "by_day": [{"date": d.isoformat(), "books_read": b, "patrons": p, "opens": int(o)} for d, b, p, o in by_day],
         "devices": [{"device_class": c, "patrons": p, "opens": int(o)} for c, p, o in devices],
     }
@@ -288,7 +304,9 @@ def _book_stats(frm, to, page, page_size, sort) -> dict:
     titles = {}
     try:  # titles are a nicety; Open Library being down must not break the stats page
         titles = {olid: (rec.get("title") if isinstance(rec, dict) else getattr(rec, "title", None)) for olid, rec in
-                  LennyAPI._enrich_items([Item.exists(r[0]) for r in rows], fields=["title", "edition_key"]).items()}
+                  LennyAPI._enrich_items(  # one query for the page's books, not one per row
+                      db.query(Item).filter(Item.openlibrary_edition.in_([r[0] for r in rows])).all(),
+                      fields=["title", "edition_key"]).items()} if rows else {}
     except Exception:
         logger.warning("Open Library unreachable; subscription stats without titles")
     return {"items": [{"olid": f"OL{o}M", "title": titles.get(o), "patrons": p, "opens": int(n),

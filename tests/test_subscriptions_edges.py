@@ -1006,3 +1006,65 @@ def test_ghost_endpoints_take_small_bodies_only():
     conf = (pathlib.Path(__file__).resolve().parent.parent / "docker/nginx/conf.d/lenny.conf").read_text()
     block = conf.split("location /v1/api/subscriptions/ghost/ {", 1)[1].split("}", 1)[0]
     assert "client_max_body_size 64k;" in block and "limit_req zone=api" in block
+
+
+# ── stats: period comparison, new vs returning, no per-row queries (#293) ────
+
+def _reads(item, rows):
+    now = NOW()
+    for who, day, opens in rows:
+        db.add(SubscriptionRead(item_id=item.id, patron_email_hash=hash_email(who), device_class="desktop",
+                                day=day, opens=opens, first_seen=now, last_seen=now))
+    db.commit()
+
+
+def test_previous_period_and_new_vs_returning_readers(admin):
+    D = datetime.date
+    _reads(make_item(), [
+        ("old@x.example", D(2026, 10, 31), 1),    # day before the previous period: history only
+        ("old@x.example", D(2026, 11, 10), 1),    # ...so returning
+        ("prev@x.example", D(2026, 11, 1), 2),    # first day of the previous period
+        ("prev@x.example", D(2026, 11, 7), 3),    # last day of the previous period
+        ("prev@x.example", D(2026, 11, 8), 1),    # returning, on the range's first day
+        ("new@x.example", D(2026, 11, 14), 1),    # new, on the range's last day
+        ("new2@x.example", D(2026, 11, 8), 1),    # new, on the range's first day
+        ("later@x.example", D(2026, 11, 15), 1),  # after the range: counts nowhere
+    ])
+    body = client().get("/v1/api/admin/stats/subscriptions?from=2026-11-08&to=2026-11-14").json()
+    assert body["totals"]["patrons"] == 4
+    assert body["readers"] == {"new": 2, "returning": 2}
+    assert body["readers"]["new"] + body["readers"]["returning"] == body["totals"]["patrons"]
+    # 7-day range -> previous is the 7 days before it: 2026-11-01 .. 2026-11-07, both ends included.
+    assert body["previous"] == {"books_read": 1, "patrons": 1, "opens": 5}
+
+
+def test_stats_for_an_empty_range():
+    import lenny.routes.subscriptions as sub
+    body = sub._stats(datetime.date(2020, 1, 1), datetime.date(2020, 1, 31))
+    assert body["readers"] == {"new": 0, "returning": 0}
+    assert body["previous"] == {"books_read": 0, "patrons": 0, "opens": 0}
+
+
+def test_book_stats_load_their_books_in_one_query(admin, monkeypatch):
+    from sqlalchemy import event
+    from lenny.core.api import LennyAPI
+    from lenny.core.db import engine
+    for n in range(5):
+        item = Item(openlibrary_edition=EDITION + 10 + n, subscription=True, formats=FormatEnum.EPUB)
+        db.add(item)
+        db.commit()
+        SubscriptionRead.record(item.id, hash_email(ME), "Mozilla/5.0 (Macintosh)")
+    asked = []
+    monkeypatch.setattr(LennyAPI, "_enrich_items", classmethod(lambda cls, items, **k: asked.append(len(items)) or {}))
+    statements = []
+
+    def log(conn, cursor, statement, *a):
+        statements.append(statement)
+    event.listen(engine, "before_cursor_execute", log)
+    try:
+        body = client().get("/v1/api/admin/stats/subscriptions/books").json()
+    finally:
+        event.remove(engine, "before_cursor_execute", log)
+    assert body["total"] == 5 and asked == [5]
+    per_item = [s for s in statements if "FROM items" in s and "openlibrary_edition = " in s]
+    assert per_item == []   # no Item.exists() per row
