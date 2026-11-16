@@ -21,10 +21,10 @@ Most libraries lend ebooks through a vendor's platform, on the vendor's terms. L
 
 - **Lending.** Each copy goes to one patron at a time. Loans return themselves after a set number of days. You set the per-patron loan limit and loan length in the admin UI.
 - **Reading in the browser.** Patrons read in [Thorium Web](https://github.com/edrlab/thorium-web), served by your own node. Lenny never offers a download link.
-- **Open access and lendable books side by side.** A book marked *encrypted* needs a loan; any other book can be read by anyone.
+- **Three access modes.** A book is open to anyone, borrowable with a loan, or members-only for the paying members of a [Ghost](https://ghost.org) site, who read straight from a post or newsletter without a Lenny account. See [Members-only books with Ghost](docs/subscriptions.md).
 - **OPDS 2.0 catalog** at `/v1/api/opds`, with search and incremental harvesting, for reading apps and aggregators such as Open Library.
 - **A catalog site** at `/` where patrons browse, sign in and borrow.
-- **Admin UI** at `/admin`: books, bulk import, loans, staff accounts, lending and sign-in settings.
+- **Admin UI** at `/admin`: a dashboard, books, bulk import, loans, Ghost members and reading stats, staff accounts, lending and sign-in settings.
 - **Patron sign-in** through Open Library one-time passwords, your own OIDC provider (Keycloak, Auth0, Okta and others), or Internet Archive keys.
 - **OAuth 2.0 server**, so other apps (Open Library, reader.archive.org) can borrow on a patron's behalf.
 - **Metadata from Open Library.** Every book is keyed to an Open Library edition.
@@ -75,7 +75,8 @@ make update
 |---|---|
 | [Install and operate](docs/install.md) | requirements, install, updates, backups, ARM, tunnels and HTTPS |
 | [Configuration](docs/configuration.md) | every config file, environment variable and `make` target |
-| [Admin guide](docs/admin.md) | staff accounts, adding books, lending modes, patron sign-in, the reader |
+| [Admin guide](docs/admin.md) | staff accounts, adding books, access and lending modes, patron sign-in, the reader |
+| [Members-only books with Ghost](docs/subscriptions.md) | selling reading access through a Ghost membership: setup, webhooks, stats, troubleshooting |
 | [API](docs/api.md) | REST and OPDS endpoints, harvesting, health check |
 | [Development](docs/development.md) | local builds, tests, migrations, the admin app, contributing |
 | [Troubleshooting](docs/troubleshooting.md) | common failures and how to recover |

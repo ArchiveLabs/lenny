@@ -56,7 +56,8 @@ make start
 
 - The reader only opens books from hosts in `MANIFEST_ALLOWED_DOMAINS` in `reader.env`. If you use your own domain, add it and run `make start`.
 - `LENNY_PROXY` in `.env` must be the address patrons use. A stale tunnel URL there breaks links; run `make untunnel` or correct it, then `make start`.
-- Encrypted books need an active loan; borrowing needs a lending mode other than `none` ([Lending modes](admin.md#lending-modes)).
+- Borrowable books need an active loan; borrowing needs a lending mode other than `none` ([Lending modes](admin.md#lending-modes)).
+- Members-only books need a pass from the publisher's Ghost site. See [Troubleshooting in the Ghost guide](subscriptions.md#troubleshooting).
 
 ## Patrons cannot borrow
 
@@ -73,7 +74,7 @@ After a network drop or sleep:
 make untunnel tunnel
 ```
 
-The quick-tunnel hostname changes each time. Readers and apps using the old URL need the new one (`make url`).
+The quick-tunnel hostname changes each time. Readers and apps using the old URL need the new one (`make url`). If you use members-only books, paste the Lenny snippet into Ghost again and remove the old one: an old copy sends members to the old address.
 
 ## `make tunnel` fails on arm64 Linux
 

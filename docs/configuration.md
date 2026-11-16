@@ -92,8 +92,12 @@ Postgres sizes its own buffers from the host's RAM at start (`docker/utils/pg_tu
 | `OAUTH_SCOPES` | `openid email profile` | |
 | `OAUTH_FLOW` | `pkce` | The only supported flow. |
 | `IA_AUTH_ENABLED` | `false` | Let patrons sign in with Internet Archive S3 keys. |
+| `LENNY_GHOST_URL` | empty | The Ghost site whose paying members can read members-only books. Empty means not connected. |
+| `LENNY_GHOST_TIERS` | empty | Comma-separated Ghost tier IDs allowed to read. Empty means any paid member. |
+| `LENNY_GHOST_WEBHOOK_SECRET` | empty | The secret Ghost signs member webhooks with. Created when you first save a Ghost site. |
+| `LENNY_GHOST_ENABLED` | on | `false` pauses members-only reading and keeps everything else. |
 
-The OIDC settings are explained step by step in [OAUTH.md](OAUTH.md). They can also be set in the admin UI.
+The OIDC settings are explained step by step in [OAUTH.md](OAUTH.md). They can also be set in the admin UI. The Ghost settings are set in the admin UI; see [Members-only books with Ghost](subscriptions.md).
 
 ## `ol.env`
 

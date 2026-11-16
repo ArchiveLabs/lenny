@@ -15,16 +15,18 @@ This page lists the parts most integrations need.
 | `GET /v1/api/opds` | OPDS 2.0 catalog. `offset`, `limit` (default 50), `modified_since`. |
 | `GET /v1/api/opds/search?query=` | OPDS search. |
 | `GET /v1/api/opds/{id}` | One publication, with borrow and read links for the signed-in patron. |
-| `GET /v1/api/items` | Items as JSON. `fields`, `offset`, `limit`, `encrypted=true\|false`, `modified_since`. |
+| `GET /v1/api/items` | Items as JSON. `fields`, `offset`, `limit`, `encrypted=true\|false`, `modified_since`. Members-only books are not listed. |
 | `GET\|POST /v1/api/items/{id}/borrow` | Borrow a book. Needs a signed-in patron and an active lending mode. |
 | `GET\|POST /v1/api/items/{id}/return` | Return a book. |
-| `GET /v1/api/items/{id}/read` | Open the book in the reader. Needs a loan for encrypted books. |
+| `GET /v1/api/items/{id}/read` | Open the book in the reader. Needs a loan for borrowable books and a Ghost pass for members-only ones. |
 | `GET /v1/api/shelf`, `GET /v1/api/profile` | The patron's loans and account. |
 | `GET\|POST /v1/api/logout` | End the patron session. |
 | `GET /v1/api/oauth/authentication` | The OPDS authentication document: which sign-in flows this node offers. |
 | `GET /.well-known/oauth-authorization-server` | OAuth 2.0 metadata for apps. See [OAUTH2.md](OAUTH2.md). |
 
-Book files are never served directly. Readium is reachable only through `/v1/api/items/{id}/readium/…`, which checks the loan first.
+Book files are never served directly. Readium is reachable only through `/v1/api/items/{id}/readium/…`, which checks the loan or pass first.
+
+Items carry `access_mode`: `open`, `borrowable` or `subscription` (members-only). `encrypted` is kept for older clients and means borrowable. Members-only books are left out of the OPDS feed, its search and the items list. The Ghost launch, webhook and admin endpoints are listed in [Members-only books with Ghost](subscriptions.md#api).
 
 `POST /v1/api/upload` and everything under `/v1/api/admin` need the admin internal secret and an admin token. nginx returns `403` for `/v1/api/admin` from outside; those routes are for the admin UI container.
 

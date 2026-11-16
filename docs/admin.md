@@ -5,6 +5,7 @@ The admin UI is at `/admin` on your node, e.g. http://localhost:8080/admin. It i
 - [Staff accounts](#staff-accounts)
 - [Adding books](#adding-books)
 - [Lending modes](#lending-modes)
+- [Members-only books with Ghost](#members-only-books-with-ghost)
 - [Patron sign-in](#patron-sign-in)
 - [Loans](#loans)
 - [Apps that act for patrons](#apps-that-act-for-patrons)
@@ -51,16 +52,17 @@ The file can be anywhere the shell user can read; it is copied into the containe
 
 To remove books: the admin UI, or `make delete-book olid="OL51008637M 37044623"`.
 
-### Open access and lendable books
+### Access modes
 
-The **encrypted** flag decides how a book is read:
+A book's **access mode** decides how it is read:
 
-| Flag | Patron needs | Copies |
+| Mode | Reader needs | Copies |
 |---|---|---|
-| off | nothing; anyone can read it | unlimited |
-| on | to sign in and borrow it | one loan at a time per copy |
+| open | nothing; anyone can read it | unlimited |
+| borrowable | to sign in and borrow it | one loan at a time per copy |
+| members-only (`subscription`) | a paid membership of your Ghost site | unlimited |
 
-Both kinds are read only in the browser reader. Lenny does not offer a file download in any mode. You can change the flag of a book in the admin UI later.
+Every mode is read only in the browser reader. Lenny does not offer a file download in any mode. You can change a book's mode in the admin UI later. Moving a book away from borrowable returns its active loans, and the admin UI tells you how many first. Older tools and `make addbook` still use the `encrypted` flag, which means borrowable.
 
 ## Lending modes
 
@@ -84,6 +86,12 @@ make ol-logout    # clears the keys, sets mode none, restarts the API
 ```
 
 For scripts: `OL_EMAIL=you@example.org LENNY_NONINTERACTIVE=1 make ol-login`. The password is still prompted for on a terminal. Without a terminal it must come from `OL_PASSWORD`, which then shows up in shell history and `ps`.
+
+## Members-only books with Ghost
+
+A publisher with a [Ghost](https://ghost.org) site can keep books for its paying members. A member clicks Read in a post or a newsletter and lands in the reader, with no Lenny account. Setup takes a site address, a snippet pasted into Ghost, and Read links in posts. Optional webhooks end access as soon as a member cancels. The admin UI shows which setup steps are done, lists members' reading passes, and has reading stats.
+
+The full guide is [Members-only books with Ghost](subscriptions.md).
 
 ## Patron sign-in
 
