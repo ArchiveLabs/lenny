@@ -103,6 +103,7 @@ def test_single_item_returns_post_borrow_when_authenticated_with_loan(
     mock_item = MagicMock()
     mock_item.is_login_required = True
     mock_item.id = 1
+    mock_item.subscription = False
     mock_item_exists.return_value = mock_item
     mock_loan_exists.return_value = True  # User has an active loan
     mock_get_email.return_value = "test@example.com"  # Mock authenticated user

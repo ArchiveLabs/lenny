@@ -38,6 +38,7 @@ def _item(edition_id, encrypted=False, borrowable=True):
     item = MagicMock()
     item.openlibrary_edition = edition_id
     item.encrypted = encrypted
+    item.subscription = False
     item.is_borrowable = borrowable
     return item
 
@@ -245,7 +246,7 @@ def test_opds_feed_paginates_locally_and_asks_open_library_for_page_one():
 
     # Paging is applied locally (`modified_since` rides along unset here)...
     assert mock_get_many.call_args.kwargs == {
-        "offset": 50, "limit": 50, "modified_since": None,
+        "offset": 50, "limit": 50, "modified_since": None, "subscription": False,
     }
     # ...so Open Library must be asked for page 1 of the narrowed disjunction.
     assert mock_provider.call_args.kwargs["offset"] == 0

@@ -63,6 +63,7 @@ def mock_item_exists(mock_lending):
           patch("lenny.core.models.Loan.exists") as mock_loan_exists:
          mock_item = MagicMock()
          mock_item.is_login_required = True
+         mock_item.subscription = False
          mock_item.borrow.return_value = True
          mock.return_value = mock_item
          mock_loan_exists.return_value = MagicMock()  # truthy = loan found

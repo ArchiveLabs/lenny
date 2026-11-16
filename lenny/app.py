@@ -13,6 +13,8 @@ from lenny.routes import oauth2 as oauth2_routes
 from lenny.routes import bulk_import as bulk_import_routes
 from lenny.routes import preload as preload_routes
 from lenny.routes import library_links as library_links_routes
+from lenny.routes import subscriptions as subscription_routes
+from lenny.routes import admin_dashboard as admin_dashboard_routes
 from lenny.configs import FORWARDED_ALLOW_IPS, OPTIONS
 from lenny.core.db import session as db_session
 from lenny import __version__ as VERSION
@@ -190,7 +192,9 @@ async def no_cross_origin_reads_of_oauth2_authorize(request, call_next):
     response = await call_next(request)
     # A preflight (OPTIONS) is answered before the router runs, so scope["route"]
     # is unset and it is not stripped; harmless, as a preflight carries no body.
-    if _serves_consent_screen(request.scope):
+    # Members-only book content gets the same treatment: no other origin may read it with a
+    # member's cookie (a same-site page, e.g. the publisher's own subdomain, would send it).
+    if _serves_consent_screen(request.scope) or request.scope.get("lenny.members_only"):
         for header in ("Access-Control-Allow-Origin",
                        "Access-Control-Allow-Credentials"):
             if header in response.headers:
@@ -206,6 +210,8 @@ app.include_router(oauth2_routes.router, prefix="/v1/api")
 app.include_router(bulk_import_routes.router, prefix="/v1/api")
 app.include_router(preload_routes.router, prefix="/v1/api")
 app.include_router(library_links_routes.router, prefix="/v1/api")
+app.include_router(subscription_routes.router, prefix="/v1/api")
+app.include_router(admin_dashboard_routes.router, prefix="/v1/api")
 
 
 # RFC 8414 requires this at the origin root, not under a path prefix — a client

@@ -1,0 +1,36 @@
+{% extends "_base_auth.html" %}
+
+{# One plain page for "you can't read this here, and here's where to go":
+   members-only books, ended passes, launch failures, nothing to return. #}
+
+{% block title %}{{ heading }} - Lenny{% endblock %}
+
+{% block content %}
+<div class="card card--wide" role="main" aria-labelledby="notice-title">
+  {% if badge %}<div class="notice-badge"><span class="badge badge--oauth">{{ badge }}</span></div>{% endif %}
+  <h1 id="notice-title">{{ heading }}</h1>
+  <p class="subtitle">{{ explanation }}</p>
+
+  {% if primary_href %}
+  <a class="btn btn--primary" href="{{ primary_href }}">{{ primary_text }}</a>
+  {% endif %}
+  <a class="btn btn--link" href="/">Back to the catalog</a>
+
+  {% if code %}
+  <details class="notice-details">
+    <summary>Details</summary>
+    <p>Error code: <code>{{ code }}</code></p>
+  </details>
+  {% endif %}
+</div>
+
+<style>
+  .notice-badge { text-align: center; margin-bottom: 14px; }
+  .notice-details { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 12px;
+                    font-size: 12px; color: var(--muted-foreground); text-align: left; }
+  .notice-details summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+  .notice-details summary:focus-visible, .btn:focus-visible { outline: 3px solid var(--ring); outline-offset: 2px; }
+  .notice-details code { color: var(--card-foreground); }
+  @media (max-width: 480px) { .card { padding: 28px 20px; } }
+</style>
+{% endblock %}
