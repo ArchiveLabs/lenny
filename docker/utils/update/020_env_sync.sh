@@ -419,11 +419,59 @@ migrate_loan_settings() {
     trap - EXIT
 }
 
+# ── One-time: drop the old /v1/api default of NEXT_PUBLIC_API_URL ────────────
+#
+# configure.sh defaulted NEXT_PUBLIC_API_URL to /v1/api from 7 to 29 April 2026,
+# and installs keep that value. The admin app treats it exactly like an empty
+# value (a relative URL falls back to the page's own origin), but the value is
+# folded into the admin image's content hash, so those installs can never match
+# the image CI publishes: the first update that changes the admin app stops with
+# "no prebaked image". Rewrite that exact old default to empty. Any other value
+# is left alone: a real custom URL still means a local build, by design.
+# Idempotent.
+#
+_OLD_ADMIN_API_URL_RE="^NEXT_PUBLIC_API_URL=(/v1/api/?|\"/v1/api/?\"|'/v1/api/?')[[:space:]]*\$"
+
+migrate_admin_api_url_default() {
+    local lenny_env="$LENNY_ROOT/.env"
+    local _tmp=""
+
+    [ -f "$lenny_env" ] || return 0
+    if [ ! -r "$lenny_env" ] || [ ! -w "$lenny_env" ]; then
+        echo "  .env: not readable/writable (check ownership/permissions), skipping." >&2
+        return 0
+    fi
+    grep -qE "$_OLD_ADMIN_API_URL_RE" "$lenny_env" || return 0
+
+    # From here we will write — install cleanup trap.
+    trap '[ -n "$_tmp" ] && rm -f "$_tmp"' EXIT
+
+    mkdir -p "$BACKUP_DIR"
+    local ts
+    ts=$(date +%Y%m%d_%H%M%S)
+    # Own name: sync_env_file backs up .env as .env.<ts>.bak in the same second and would overwrite it.
+    local backup="$BACKUP_DIR/.env.${ts}.admin-api-url.bak"
+    cp "$lenny_env" "$backup"
+
+    _tmp=$(mktemp "${lenny_env}.XXXXXX")
+    local perms
+    perms=$(stat -c "%a" "$lenny_env" 2>/dev/null || stat -f "%OLp" "$lenny_env" 2>/dev/null || echo "600")
+    chmod "$perms" "$_tmp" 2>/dev/null || chmod 600 "$_tmp"
+    sed -E "\#$_OLD_ADMIN_API_URL_RE#s#=.*#=#" "$lenny_env" > "$_tmp"  # `#`: the pattern has slashes
+    mv "$_tmp" "$lenny_env"
+    _tmp=""
+
+    echo "  .env: NEXT_PUBLIC_API_URL was the old default /v1/api, which the admin app treats as empty."
+    echo "    Emptied it so updates use the shared admin image. Backed up → backups/$(basename "$backup")"
+    trap - EXIT
+}
+
 # ── Sync all env files ────────────────────────────────────────────────────────
 
 echo "Syncing environment variables..."
 migrate_lending_mode
 migrate_loan_settings
+migrate_admin_api_url_default
 migrate_keys "$_ADMIN_MIGRATE_KEYS" "$LENNY_ROOT/auth.env" "admin credentials"
 migrate_keys "$_OL_MIGRATE_KEYS"    "$LENNY_ROOT/ol.env"   "OL/IA credentials"
 sync_env_file "$LENNY_ROOT/.env"         "LENNY_ENV_FILE"  ".env"
