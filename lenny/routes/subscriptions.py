@@ -93,8 +93,11 @@ async def ghost_launch(request: Request, token: str = Form(""), book: str = Form
     # Straight to the reader: the pass was just granted, and nginx checks it again there.
     resp = RedirectResponse(url=LennyAPI.make_reader_url(olid), status_code=303)
     # Not `session`: that is the library's own patron login, which can borrow.
+    # SameSite=None: the reader renders pages in a blob: iframe, and WebKit (every iPhone browser)
+    # leaves a Lax cookie off that frame's stylesheet and image requests (#297). Safe here: this cookie
+    # only reads, and members-only responses carry no CORS headers, so no other origin can read them.
     resp.set_cookie(key=auth.MEMBER_COOKIE, value=auth.create_member_cookie(patron, client_ip),
-                    max_age=auth.COOKIE_TTL, httponly=True, secure=True, samesite="Lax", path="/")
+                    max_age=auth.COOKIE_TTL, httponly=True, secure=True, samesite="none", path="/")
     return resp
 
 

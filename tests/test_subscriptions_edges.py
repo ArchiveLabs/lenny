@@ -135,7 +135,7 @@ def test_launch_cookie_is_locked_down_and_never_echoes_the_token():
     r = client().post(LAUNCH, data={"token": t, "book": str(EDITION)}, follow_redirects=False)
     cookie = r.headers["set-cookie"]
     assert cookie.startswith(f"{auth.MEMBER_COOKIE}=") and "session=" not in cookie
-    for flag in ("HttpOnly", "Secure", "SameSite=lax", "Path=/"):
+    for flag in ("HttpOnly", "Secure", "SameSite=none", "Path=/"):  # None: iPhone frames (#297)
         assert flag.lower() in cookie.lower()
     assert t not in cookie and t not in r.headers["location"] and t not in r.text
 
