@@ -85,6 +85,7 @@ Lenny records only the keyed hash, the book, the day and a device type (desktop,
 - Lenny accepts only Ghost's RS512-signed entitlement tokens for your site. Each token works once and must expire within 10 minutes; Ghost's expire after 5.
 - Reading checks a pass stored in Lenny's own database. It never waits on Ghost or Open Library, so members keep reading if either is down.
 - No other website can read members-only content through a member's browser.
+- The member's pass cookie is sent on every request to Lenny, including from other sites. iPhone browsers otherwise leave it off a book's images and styles. Another site can't read anything with it, but it could tell whether a visitor holds a pass.
 - What it can't stop: a paying member can save pages while their pass lasts. That comes with reading in a browser, without DRM. Any script running on your Ghost site can also get a signed-in member's token, which is how Ghost works, so only run scripts you trust there.
 
 ## Settings in `auth.env`
