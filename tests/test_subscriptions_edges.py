@@ -493,7 +493,9 @@ def test_a_site_that_isnt_ghost_is_refused_and_nothing_is_saved(admin, monkeypat
     assert written == {} and Subscription.is_active(hash_email(ME))
 
 
-def test_a_failed_save_keeps_every_pass(admin, monkeypatch):
+def test_a_site_change_drops_old_passes_before_saving(admin, monkeypatch):
+    """Old passes go first: a failed save then only means members click Read again,
+    while the other order could leave the old site's passes alive after a retry."""
     monkeypatch.setattr(ghost, "fetch_jwks", lambda site: JWKS)
 
     def disk_full(path, updates):
@@ -502,7 +504,62 @@ def test_a_failed_save_keeps_every_pass(admin, monkeypatch):
     lease()
     r = client().put("/v1/api/admin/settings/ghost", json={"site_url": "https://other.example"})
     assert r.status_code == 500 and r.json()["code"] == "env_write_failed"
-    assert Subscription.is_active(hash_email(ME))
+    assert not Subscription.is_active(hash_email(ME))
+
+
+def test_if_dropping_old_passes_fails_the_new_site_is_not_saved(admin, monkeypatch):
+    monkeypatch.setattr(ghost, "fetch_jwks", lambda site: JWKS)
+    written = _settings_writes_to_env(monkeypatch)
+
+    def db_down(provider):
+        raise sqlalchemy.exc.OperationalError("delete", {}, Exception("db down"))
+    monkeypatch.setattr(Subscription, "revoke_all", classmethod(lambda cls, p: db_down(p)))
+    lease()
+    with pytest.raises(sqlalchemy.exc.OperationalError):
+        client().put("/v1/api/admin/settings/ghost", json={"site_url": "https://other.example"})
+    assert written == {} and ghost.site_url() == SITE
+
+
+def test_a_new_site_gets_a_new_webhook_secret(admin, monkeypatch):
+    monkeypatch.setattr(ghost, "fetch_jwks", lambda site: JWKS)
+    written = _settings_writes_to_env(monkeypatch)
+    client().put("/v1/api/admin/settings/ghost", json={"site_url": "https://other.example"})
+    assert written[ghost.SECRET_KEY] not in ("", SECRET)   # the old site can no longer sign webhooks
+    written.clear()
+    client().put("/v1/api/admin/settings/ghost", json={"site_url": "https://other.example"})
+    assert ghost.SECRET_KEY not in written                  # same site: secret kept
+
+
+def test_a_webhook_between_check_and_grant_still_ends_access(monkeypatch):
+    """The launch checked for revocations, then Ghost's cancel webhook landed before its grant."""
+    make_item()
+    real_grant = Subscription.grant.__func__
+
+    def grant_after_a_cancel(cls, *a, **k):
+        assert _deliver({"member": {"current": {}, "previous": {"uuid": "m-1", "email": ME}}}).status_code == 200
+        return real_grant(cls, *a, **k)
+    monkeypatch.setattr(Subscription, "grant", classmethod(grant_after_a_cancel))
+    r = _launch(client(), iat=int(time.time()) - 5)
+    assert r.status_code == 403 and "membership_changed" in r.text and "set-cookie" not in r.headers
+    assert not Subscription.is_active(hash_email(ME))
+
+
+def test_borrow_rechecks_the_mode_under_the_lock(monkeypatch):
+    """An admin makes a book members-only while a borrow waits for its lock: no loan."""
+    import lenny.core.models as models
+    from lenny.core.exceptions import LoanNotRequiredError
+    item = make_item(subscription=False, encrypted=True)
+    real_lock = models._lock_patron
+
+    def lock_while_admin_switches(hashed):
+        db.execute(sqlalchemy.text("UPDATE items SET encrypted = false, subscription = true WHERE id = :i"),
+                   {"i": item.id})
+        db.commit()
+        return real_lock(hashed)
+    monkeypatch.setattr(models, "_lock_patron", lock_while_admin_switches)
+    with pytest.raises(LoanNotRequiredError):
+        item.borrow("patron@example.com")
+    assert db.query(Loan).count() == 0
 
 
 def test_rotating_the_secret_retires_the_old_one_at_once(admin, monkeypatch):
@@ -936,7 +993,7 @@ def test_signing_keys_are_cached_and_a_new_key_is_picked_up_once(monkeypatch):
 
     served[0] = {"keys": [new_key.as_dict(is_private=False)]}  # Ghost rotates its key
     monkeypatch.setattr(ghost, "JWKS_REFETCH_S", 0)
-    ghost.verify_entitlement(token(key=new_key))
+    ghost.verify_entitlement(token(key=new_key, kid="k2"))
     assert len(fetches) == 2                                  # refetched once, then accepted
 
     monkeypatch.setattr(ghost, "JWKS_REFETCH_S", 60)

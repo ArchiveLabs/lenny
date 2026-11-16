@@ -71,14 +71,14 @@ def make_item(subscription=True, encrypted=False):
     return item
 
 
-def token(key=KEY, alg="RS512", **over):
+def token(key=KEY, alg="RS512", kid="k1", **over):
     now = int(time.time())
     claims = {"sub": ME, "member_uuid": "m-1", "paid": True, "active_tier_ids": ["t-paid"],
               "scope": "members:entitlements:read", "jti": str(uuid.uuid4()),
               "iss": ISS, "aud": ISS, "iat": now, "exp": now + 300}
     claims.update(over)
     claims = {k: v for k, v in claims.items() if v is not None}
-    return JsonWebToken([alg]).encode({"alg": alg, "kid": "k1"}, claims, key).decode()
+    return JsonWebToken([alg]).encode({"alg": alg, "kid": kid}, claims, key).decode()
 
 
 def client():

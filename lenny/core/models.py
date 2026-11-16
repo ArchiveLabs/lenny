@@ -314,6 +314,9 @@ class Item(Base):
         db.query(Item).filter(
             Item.id == self.id
         ).with_for_update().populate_existing().first()
+        if not self.is_lendable:  # made open or members-only while we waited for the lock
+            db.rollback()
+            raise LoanNotRequiredError
 
         # 1. Idempotent: patron already has an active loan for this item.
         if existing := Loan.exists(self.id, hashed_email, hashed=True):

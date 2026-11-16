@@ -82,6 +82,11 @@ async def ghost_launch(request: Request, token: str = Form(""), book: str = Form
     await run_blocking(
         Subscription.grant, ghost.PROVIDER, patron, claims.get("member_uuid"),
         claims.get("active_tier_ids") or [], ghost.LEASE_SECONDS)
+    # A webhook that landed between the check above and the grant marks the revocation
+    # before it deletes passes, so looking again here catches it.
+    if await run_blocking(ghost.revoked_after_issue, [patron, claims.get("member_uuid")], claims.get("iat")):
+        await run_blocking(Subscription.revoke, ghost.PROVIDER, claims.get("member_uuid"), [patron])
+        return _launch_failed(request, "membership_changed")
     await run_blocking(ghost.mark_launch)
 
     client_ip = request.client.host if request.client else None
@@ -119,8 +124,9 @@ async def ghost_webhook(request: Request):
     if change:
         member_uuid, emails = change
         hashes = [hash_email(e) for e in emails]
-        revoked = await run_blocking(Subscription.revoke, ghost.PROVIDER, member_uuid, hashes)
+        # Mark first: a launch granting at this moment checks the mark after its grant.
         await run_blocking(ghost.mark_revoked, [member_uuid, *hashes])
+        revoked = await run_blocking(Subscription.revoke, ghost.PROVIDER, member_uuid, hashes)
     await run_blocking(ghost.mark_webhook)
     return {"ok": True, "revoked": revoked}
 
@@ -190,7 +196,7 @@ async def put_ghost_settings(request: Request):
                 }
                 return _problem(messages.get(e.code, str(e)), e.code)
             auth_updates[ghost.URL_KEY] = site
-            if not ghost.webhook_secret():
+            if not ghost.webhook_secret() or site != ghost.site_url():  # the old site must not sign for the new
                 auth_updates[ghost.SECRET_KEY] = ghost.new_secret()
         else:
             auth_updates[ghost.URL_KEY] = ""
@@ -207,13 +213,15 @@ async def put_ghost_settings(request: Request):
         return _problem("Nothing to change", "bad_request")
 
     site_changed = ghost.URL_KEY in auth_updates and auth_updates[ghost.URL_KEY] != ghost.site_url()
+    # The old site's members proved nothing to the new one. Drop their passes before the new site
+    # is saved: if this fails nothing changes, and a failed save only means members click Read again.
+    if site_changed:
+        await run_blocking(Subscription.revoke_all, ghost.PROVIDER)
     try:
         ol_bootstrap.update_env_file(configs.AUTH_ENV_PATH, auth_updates)
     except OSError:
         logger.exception("Failed to save Ghost settings")
         return _problem("Could not save the settings", "env_write_failed", 500)
-    if site_changed:  # the old site's members proved nothing to the new one
-        await run_blocking(Subscription.revoke_all, ghost.PROVIDER)
     return await run_blocking(_settings_response)
 
 
