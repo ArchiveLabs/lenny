@@ -13,7 +13,11 @@ docker logs -f lenny_api     # one service
 
 ## `make start` or `make update` stops with "no prebaked image"
 
-No published image matches your code for the reader, admin UI or catalog. Common causes: you set `NEXT_PUBLIC_API_URL` (it is compiled into the admin image), you are on an unmerged branch, or CI has not finished publishing a just-merged change. Wait for CI, or build on this host:
+No published image matches your code for the reader, admin UI or catalog. Common causes: you set `NEXT_PUBLIC_API_URL` (it is compiled into the admin image), you are on an unmerged branch, or CI has not finished publishing a just-merged change.
+
+Installs from April 2026 have `NEXT_PUBLIC_API_URL=/v1/api` in `.env`, the default back then. Since 0.10.1, `make update` empties that exact value, which the admin app treats the same way, so those installs use the published image; the original `.env` is kept in `backups/`. Any other value still needs a local build. Leave it empty unless the admin UI is served from a different address than the API.
+
+Otherwise wait for CI, or build on this host:
 
 ```sh
 LENNY_ALLOW_LOCAL_BUILD=1 make update
