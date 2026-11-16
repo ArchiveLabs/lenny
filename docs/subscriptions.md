@@ -48,6 +48,8 @@ You need a Ghost site with members turned on. Lenny never asks for a Ghost Admin
 - when a Read link last worked
 - when the last webhook arrived
 
+Connecting a different site starts these checks over. Lenny also drops the old site's passes and makes a new webhook secret, so paste the new secret into the new site's webhooks.
+
 **Paste the snippet again whenever Lenny's address changes or you update Lenny.** An old copy keeps sending members' tokens to the old address. If someone later gets that address, they could use those tokens, and each token carries a member's email.
 
 **Pause it.** Turning members-only reading off in Settings → Ghost stops new Read clicks and refuses reads on existing passes. The site, tiers, secret and passes are kept, and webhooks still arrive, so turning it back on picks up where it left off.

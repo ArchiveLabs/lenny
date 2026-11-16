@@ -217,6 +217,7 @@ async def put_ghost_settings(request: Request):
     # is saved: if this fails nothing changes, and a failed save only means members click Read again.
     if site_changed:
         await run_blocking(Subscription.revoke_all, ghost.PROVIDER)
+        await run_blocking(ghost.forget_setup_proof)
     try:
         ol_bootstrap.update_env_file(configs.AUTH_ENV_PATH, auth_updates)
     except OSError:

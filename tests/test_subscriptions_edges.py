@@ -1136,3 +1136,19 @@ def test_public_items_list_leaves_members_only_books_out(monkeypatch):
     db.commit()
     listed = client().get("/v1/api/items").json()
     assert str(EDITION + 1) in listed and str(EDITION) not in listed
+
+
+def test_a_site_change_forgets_the_old_sites_setup_proof(admin, monkeypatch):
+    """The old site's launches and webhooks prove nothing about the new one (#294)."""
+    monkeypatch.setattr(ghost, "fetch_jwks", lambda site: JWKS)
+    _settings_writes_to_env(monkeypatch)
+    make_item()
+    _launch(client())
+    _deliver({"member": {"current": {"uuid": "m-1", "email": ME, "status": "paid"}, "previous": {}}})
+    settings = lambda: client().get("/v1/api/admin/settings/ghost").json()  # noqa: E731
+    assert settings()["last_launch_at"] and settings()["last_webhook_at"]
+    client().put("/v1/api/admin/settings/ghost", json={"site_url": SITE})        # same site: kept
+    assert settings()["last_launch_at"] and settings()["last_webhook_at"]
+    client().put("/v1/api/admin/settings/ghost", json={"site_url": "https://other.example"})
+    body = settings()
+    assert body["last_launch_at"] is None and body["last_webhook_at"] is None

@@ -291,6 +291,15 @@ def _stamp(scope: str) -> None:
     Cache._record(scope, "last", 365 * 86400, value=str(int(time.time())))  # commits both
 
 
+def forget_setup_proof() -> None:
+    """A new site has proved nothing yet: drop the last launch and webhook times."""
+    from lenny.core.cache import CacheEntry
+    from lenny.core.db import session as db
+    db.query(CacheEntry).filter(CacheEntry.scope.in_(("ghost:launch", "ghost:webhook"))).delete(
+        synchronize_session=False)
+    db.commit()
+
+
 def _stamped(scope: str):
     from lenny.core.cache import CacheEntry
     from lenny.core.db import session as db
