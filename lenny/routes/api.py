@@ -467,6 +467,7 @@ async def get_items(fields: Optional[str]=None, offset: Optional[int]=None, limi
         return LennyAPI.get_enriched_items(
             fields=fields, offset=offset, limit=limit, encrypted=encrypted,
             modified_since=modified_since_dt,
+            subscription=False,  # members-only books are opened from the publisher's site, never listed
         )
     except _OL_DOWN:
         raise _ol_unavailable()

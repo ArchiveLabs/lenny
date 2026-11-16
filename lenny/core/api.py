@@ -495,7 +495,7 @@ class LennyAPI:
 
     @classmethod
     def get_enriched_items(cls, olid=None, fields=None, offset=None, limit=None, encrypted=None,
-                           modified_since=None, access_mode=None):
+                           modified_since=None, access_mode=None, subscription=None):
         """Returns a dict whose keys are int `olid` Open Library
         edition IDs and whose values are OpenLibraryRecords with an
         additional `lenny` field containing Lenny's record for this
@@ -504,7 +504,7 @@ class LennyAPI:
         limit = limit or cls.DEFAULT_LIMIT
         items = [Item.exists(olid)] if olid else Item.get_many(
             offset=offset, limit=limit, encrypted=encrypted, modified_since=modified_since,
-            access_mode=access_mode,
+            access_mode=access_mode, subscription=subscription,
         )
         return cls._enrich_items(items, fields=fields)
 

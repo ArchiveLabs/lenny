@@ -1068,3 +1068,14 @@ def test_book_stats_load_their_books_in_one_query(admin, monkeypatch):
     assert body["total"] == 5 and asked == [5]
     per_item = [s for s in statements if "FROM items" in s and "openlibrary_edition = " in s]
     assert per_item == []   # no Item.exists() per row
+
+
+def test_public_items_list_leaves_members_only_books_out(monkeypatch):
+    from lenny.core.api import LennyAPI
+    monkeypatch.setattr(LennyAPI, "_enrich_items", classmethod(
+        lambda cls, items, **k: {i.openlibrary_edition: {"lenny": None} for i in items}))
+    make_item()
+    db.add(Item(openlibrary_edition=EDITION + 1, formats=FormatEnum.EPUB))
+    db.commit()
+    listed = client().get("/v1/api/items").json()
+    assert str(EDITION + 1) in listed and str(EDITION) not in listed
