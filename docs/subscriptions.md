@@ -8,7 +8,7 @@ Lenny can lend books, give them away, or keep them for the paying members of a [
 | `borrowable` | A patron with an active loan. One copy, one reader at a time. |
 | `subscription` | A paying member of your Ghost site, while their pass is active. No loans and no limit on copies. |
 
-Every mode is read in the browser with Thorium Web. Lenny never offers a download link. Members-only books are left out of the OPDS feed and its search, so the way in is a Read link on your Ghost site or in your newsletter.
+Every mode is read in the browser with Thorium Web. Lenny never offers a download link. Members-only books are left out of the OPDS feed, its search and the public items list, so the way in is a Read link on your Ghost site or in your newsletter.
 
 ## How a member gets in
 
