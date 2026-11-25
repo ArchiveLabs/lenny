@@ -18,6 +18,13 @@ RUN python3 /tmp/lock-to-lenny.py
 RUN --mount=type=cache,target=/root/.npm npm ci
 RUN npm run build
 
+# Emit a second app shell so ONE image serves the catalog at both / and /app.
+# See the script: default installs keep /, a host that owns / (lennyforlibraries.org)
+# reaches the catalog at /app. Deterministic transform of our own build output —
+# not a per-install build arg, so the prebake content hash scheme is unchanged.
+COPY docker/opds-client/mount-at-app.py /tmp/mount-at-app.py
+RUN python3 /tmp/mount-at-app.py
+
 FROM nginx:1.29-alpine
 COPY --from=build /app/build /usr/share/nginx/html
 COPY docker/opds-client/nginx.conf /etc/nginx/conf.d/default.conf

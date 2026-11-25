@@ -82,3 +82,45 @@ swap("""    signOut() {
         // offline: the stored token is already gone; the cookie expires on its own
       }""")
 open(path, "w").write(src)
+
+# Mount-awareness. The catalog is normally served at the origin root "/", but a
+# host whose "/" is owned by another site can serve it at /app (the opds image
+# emits a second shell with SvelteKit base="/app" — see mount-at-app.py). Two
+# hand-authored ABSOLUTE refs would otherwise escape the mount and hit that other
+# site: the sign-in-failed "Go home" link and the install-page icon. Resolve both
+# against SvelteKit's base ($app/paths), which is "" at / and "/app" at /app.
+path = "src/routes/+page.svelte"
+src = open(path).read()
+swap('import { handleImplicitFlow, handlePkceFlow, handleOAuthError } from "$lib/auth.js";',
+     'import { handleImplicitFlow, handlePkceFlow, handleOAuthError } from "$lib/auth.js";\n        import { base } from "$app/paths";')
+swap('href="/"', 'href="{base}/"')
+open(path, "w").write(src)
+
+path = "src/lib/components/views/InstallPage.svelte"
+src = open(path).read()
+swap('import { pwa } from "$lib/stores/pwaStore";',
+     'import { pwa } from "$lib/stores/pwaStore";\n  import { base } from "$app/paths";')
+swap('src="/public/512.png"', 'src="{base}/public/512.png"')
+open(path, "w").write(src)
+
+# Borrowing cannot COMPLETE at a non-root mount, and must say so rather than
+# stranding the patron. All three OAuth redirect_uri sites in src/lib/auth.ts
+# send the bare `window.location.origin` (no path), and the server pins
+# lenny-opds-client's redirect list to exactly that origin by exact-string
+# membership, so sign-in returns the browser to "/" with the token in a
+# fragment. On the host this mount exists for, "/" is a different site
+# altogether. Until the redirect is made mount-aware (ArchiveLabs/lenny#272),
+# replace the sign-in control at a non-root mount with an explanation. Browsing
+# is unaffected; `base` is "" at / so a default install sees no change at all.
+path = "src/lib/components/views/Auth.svelte"
+src = open(path).read()
+swap('import { opds } from "$lib/stores/opdsStore.js";',
+     'import { opds } from "$lib/stores/opdsStore.js";\n\timport { base } from "$app/paths";')
+swap("""\t\t{#if pkceEntry}""",
+     """\t\t{#if base}
+\t\t\t<p role="alert" class="error-text">
+\t\t\t\tSigning in isn't available at this address yet, so books can't be
+\t\t\t\tborrowed here. You can still browse the whole catalog.
+\t\t\t</p>
+\t\t{:else if pkceEntry}""")
+open(path, "w").write(src)

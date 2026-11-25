@@ -40,8 +40,11 @@ set -euo pipefail
 #          build time, and configure.sh writes it per install — so it is folded
 #          into the hash. An install with a custom value gets a cache miss and a
 #          local build, never a silently-wrong shared image.
-#   opds   COPYs lock-to-lenny.py and nginx.conf; clones a pinned OPDS_CLIENT_REF
-#          (in-file ARG). Hash = Dockerfile + those two files.
+#   opds   COPYs lock-to-lenny.py, mount-at-app.py and nginx.conf; clones a pinned
+#          OPDS_CLIENT_REF (in-file ARG). Hash = Dockerfile + those three files.
+#          Any file COPY'd from the context must be listed here, or editing it
+#          alone would not move the tag and `make update` would pull a stale
+#          image — tests/test_image_hash.py guards this for every COPY'd file.
 
 REGISTRY="${LENNY_REGISTRY:-ghcr.io}"
 ORG="${LENNY_IMAGE_ORG:-archivelabs}"
@@ -91,6 +94,7 @@ inputs_for() {
         opds)
             echo "docker/opds-client/Dockerfile"
             echo "docker/opds-client/lock-to-lenny.py"
+            echo "docker/opds-client/mount-at-app.py"
             echo "docker/opds-client/nginx.conf"
             ;;
         *)
