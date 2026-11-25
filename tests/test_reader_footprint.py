@@ -8,7 +8,9 @@ container: 357 MiB as shipped, 48.8 MiB with both of these in place.
 import pathlib
 import re
 
-DOCKERFILE = pathlib.Path(__file__).resolve().parent.parent / "docker/reader/Dockerfile"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+DOCKERFILE = ROOT / "docker/reader/Dockerfile"
+COMPOSE = ROOT / "compose.yaml"
 
 
 def _text():
@@ -38,4 +40,21 @@ def test_cloudflare_dev_init_is_guarded():
     )
     assert "NODE_ENV !== " in text, (
         "initOpenNextCloudflareForDev is patched but no longer guarded on NODE_ENV"
+    )
+
+
+def test_compose_defaults_reader_to_production_at_runtime():
+    """The guard above is read at RUNTIME, so the reader service needs NODE_ENV in
+    `environment:`, not only in the build args -- otherwise `make
+    reader-cloudflare` would set a variable that never reaches the container.
+    The default must be production, so an operator who sets nothing gets the
+    cheap reader."""
+    text = COMPOSE.read_text()
+    reader = re.search(r"^  reader:\n(.*?)(?=^  \S|^\S|\Z)", text, re.M | re.S)
+    assert reader, "reader service not found in compose.yaml"
+    body = reader.group(1)
+    env = re.search(r"^    environment:\n(.*?)(?=^    \S|\Z)", body, re.M | re.S)
+    assert env, "reader has no runtime environment: block, so NODE_ENV cannot be overridden"
+    assert "NODE_ENV: ${NODE_ENV:-production}" in env.group(1), (
+        f"reader runtime NODE_ENV must default to production; got: {env.group(1)!r}"
     )
