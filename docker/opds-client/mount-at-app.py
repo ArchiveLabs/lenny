@@ -102,21 +102,30 @@ if "/v1/" in html:
 # the ORIGINAL hash from the ORIGINAL script and confirm it is the one in the
 # CSP header — if we cannot, SvelteKit's CSP format changed and we fail loudly
 # rather than ship a shell that silently won't boot.
-_script = re.compile(r"<script>(.*?)</script>", re.S)
+# Spelled the way HTML actually allows the tag to be written -- any case, and
+# whitespace plus attributes on either end -- so a valid shell is never missed.
+# `(?:\s[^>]*)?` requires whitespace before any attributes, so a different tag
+# whose name merely starts with "script" is not mistaken for this one.
+_script = re.compile(r"<script(?:\s[^>]*)?>(.*?)</script(?:\s[^>]*)?>", re.S | re.I)
 
 
 def _csp_hash(script_inner):
     return base64.b64encode(hashlib.sha256(script_inner.encode()).digest()).decode()
 
 
-_orig = _script.search(open(src_path).read())
-if not _orig:
-    sys.exit("mount-at-app: no inline <script> found in the source shell")
-_orig_hash = _csp_hash(_orig.group(1))
-_new = _script.search(html)
-if not _new:
-    sys.exit("mount-at-app: no inline <script> found in the /app shell")
-_new_hash = _csp_hash(_new.group(1))
+def _only_script(text, which):
+    """The shell carries exactly one inline script: the bootstrap whose hash the
+    CSP pins. Taking the first match would silently hash the wrong one if a
+    second were ever added, so require exactly one."""
+    found = _script.findall(text)
+    if len(found) != 1:
+        sys.exit(f"mount-at-app: expected exactly 1 inline <script> in the "
+                 f"{which} shell, found {len(found)}")
+    return found[0]
+
+
+_orig_hash = _csp_hash(_only_script(open(src_path).read(), "source"))
+_new_hash = _csp_hash(_only_script(html, "/app"))
 html = swap(html, f"'sha256-{_orig_hash}'", f"'sha256-{_new_hash}'", count=1)
 
 os.makedirs(out_dir, exist_ok=True)
