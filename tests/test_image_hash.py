@@ -148,3 +148,47 @@ def test_update_path_folds_env_next_public_api_url(raw_value, logical_value):
     empty = tag("admin", env=dict(os.environ, NEXT_PUBLIC_API_URL=""))
     assert resolved == expected, "update path must resolve the same admin tag make start does"
     assert resolved != empty, "custom-value install must not resolve to the shared empty-URL image"
+
+
+def _copied_context_files(dockerfile_rel):
+    """Build-context sources COPY'd by a Dockerfile (excludes `COPY --from=<stage>`,
+    which copies from an earlier build stage, not the context)."""
+    import re
+    text = (ROOT / dockerfile_rel).read_text()
+    sources = []
+    for line in text.splitlines():
+        m = re.match(r"\s*COPY\s+(.*)$", line)
+        if not m or "--from=" in line:
+            continue
+        parts = m.group(1).split()
+        # COPY <src>... <dest>; every token but the last is a source.
+        sources.extend(parts[:-1])
+    return sources
+
+
+def test_opds_hash_covers_every_copied_context_file():
+    """Every file the opds Dockerfile COPYs from the build context must be a
+    declared hash input — otherwise someone edits it alone, the tag does not
+    move, CI skips the build, and `make update` pulls a stale image with no error
+    anywhere (the exact failure #144's hash scheme exists to prevent).
+
+    Behavioral, not declaration-parsing: appending to a COPY'd file MUST move the
+    opds tag. A file absent from inputs_for() would leave the tag unchanged.
+    """
+    copied = [s for s in _copied_context_files("docker/opds-client/Dockerfile")
+              if s.startswith("docker/opds-client/")]
+    assert copied, "expected the opds Dockerfile to COPY files from docker/opds-client/"
+    before = tag("opds")
+    for path in copied:
+        assert (ROOT / path).exists(), f"COPY source not found: {path}"
+        try:
+            append(path, "\n# image-hash coverage marker\n")
+            moved = tag("opds")
+        finally:
+            restore(path)
+        assert moved != before, (
+            f"{path} is COPY'd by the opds Dockerfile but editing it does not move "
+            f"the opds tag -> it is missing from inputs_for() in image-hash.sh "
+            f"(stale-image risk, #144)."
+        )
+        assert tag("opds") == before, f"restore of {path} did not return the tag"
