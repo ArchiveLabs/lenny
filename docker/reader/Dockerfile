@@ -39,6 +39,17 @@ o="return url.hostname === domainUrl.hostname;";\
 if(s.split(o).length!==2)throw new Error("verifyManifest anchor not found");\
 fs.writeFileSync(f,s.replace(o,"return url.hostname === domainUrl.hostname || (domainUrl.hostname.startsWith(\"*.\") \&\& url.hostname.endsWith(domainUrl.hostname.slice(1)));"))'
 
+# thorium-web's next.config.mjs calls initOpenNextCloudflareForDev() at module
+# load. Despite the name, `next start` loads next.config too, so a production
+# container also boots a Cloudflare Workers runtime (workerd) to serve dev
+# bindings that do not exist here -- measured at 83MB RSS, and it inflates
+# next-server besides. Guard it so only a development container pays for it.
+RUN node -e '\
+const f="thorium-web/next.config.mjs",fs=require("fs"),s=fs.readFileSync(f,"utf8"),\
+o="initOpenNextCloudflareForDev();";\
+if(s.split(o).length!==2)throw new Error("next.config initOpenNextCloudflareForDev anchor not found");\
+fs.writeFileSync(f,s.replace(o,"if (process.env.NODE_ENV !== \"production\") initOpenNextCloudflareForDev();"))'
+
 RUN corepack enable
 
 WORKDIR /app/thorium-web
@@ -57,4 +68,8 @@ RUN pnpm build
 
 EXPOSE 3000
 
-CMD ["pnpm", "start"]
+# Run Next directly. `pnpm start` spawns a Node process (~110MB) whose only job
+# is to spawn an `sh` that spawns this, and leaves pnpm as PID 1 fielding the
+# signals Next wants for a graceful shutdown. `.bin/next` is a shell wrapper,
+# not a symlink, so name the real entry point.
+CMD ["node", "node_modules/next/dist/bin/next", "start"]

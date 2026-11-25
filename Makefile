@@ -108,6 +108,22 @@ rebuild:
 redeploy:
 	@bash docker/utils/lenny.sh --redeploy
 
+# ── Reader runtime mode ─────────────────────────────────────────────
+# Production is the default and needs no flag. thorium-web's next.config starts
+# a Cloudflare Workers runtime (workerd) in every other mode: ~300MB for dev
+# bindings a self-hosted node does not have. Only reach for the first target if
+# you are actually developing against Cloudflare. Both re-up the reader alone --
+# no rebuild, no other container touched, no data at risk.
+.PHONY: reader-cloudflare
+reader-cloudflare:
+	@bash -c '. docker/utils/images.sh && lenny_export_image_tags && \
+	  NODE_ENV=development docker compose up -d --no-build --force-recreate reader'
+
+.PHONY: reader-production
+reader-production:
+	@bash -c '. docker/utils/images.sh && lenny_export_image_tags && \
+	  NODE_ENV=production docker compose up -d --no-build --force-recreate reader'
+
 # ── OAuth 2.0 client administration ──────────────────────────────────────────
 # Registration is open by default, so an operator needs to see who registered
 # and be able to stop one without opening a Python console.

@@ -104,6 +104,12 @@ services:
         MANIFEST_ROUTE_FORCE_ENABLE: ${MANIFEST_ROUTE_FORCE_ENABLE:-true}
         MANIFEST_ALLOWED_DOMAINS: ${MANIFEST_ALLOWED_DOMAINS:-127.0.0.1,localhost,*.trycloudflare.com}
     env_file: reader.env
+    # Runtime, not just the build arg above: thorium-web's next.config starts a
+    # Cloudflare Workers runtime in any mode but production, which costs ~300MB
+    # and serves dev bindings a self-hosted node does not have. `make
+    # reader-cloudflare` flips it without a rebuild.
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
     # Not published: nginx (lenny_api) is the only way in.
     expose:
       - "${READER_PORT:-3000}"
